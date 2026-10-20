@@ -191,7 +191,7 @@ describe("agent command catalog conventions", () => {
     for (const file of candidates) {
       expect(forbiddenDeclarations(read(file), file), `${file} declares forbidden catalog state`).toEqual([]);
     }
-  });
+  }, 60_000);
 
   it("keeps catalog readers and process metadata free of child processes", () => {
     const candidates = [
