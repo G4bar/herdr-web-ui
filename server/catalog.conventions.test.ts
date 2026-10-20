@@ -196,7 +196,7 @@ describe("agent command catalog conventions", () => {
   it("keeps catalog readers and process metadata free of child processes", () => {
     const candidates = [
       ...files("server/skills/*.ts"),
-      ...["server/session-history.ts", "server/agent-version.ts", "server/codex-daemon.ts"].filter((file) =>
+      ...["server/session-history.ts", "server/agent-version.ts", "server/codex-daemon.ts", "server/catalog-sources.ts"].filter((file) =>
         files(file).includes(file),
       ),
     ];

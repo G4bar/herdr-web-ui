@@ -5,6 +5,7 @@
  * server's own state. The dispatcher in index.ts runs the access gate first.
  */
 import type { AgentRenameRequest, PaneDirection, PaneResized, PaneSplit, PaneSwapped, PaneZoomed, ReadFormat, ReadSource } from "../shared/protocol.ts";
+import { mergeCatalogSources } from "./catalog-sources.ts";
 import { paneCommands, rememberPaneCommands } from "./commands.ts";
 import { paneFiles } from "./files.ts";
 import { badRequest, conflictResponse, errorResponse, isCount, isJsonObject, jsonResponse, readJsonObject } from "./http.ts";
@@ -70,7 +71,8 @@ export async function handlePaneRequest(request: Request, url: URL, pathname: st
           ? await paneTranscript(paneId, options.codexHome, undefined, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome).then(versionSourceOf, () => null)
           : null;
         const { version } = resolveAgent(context.pane, roots, store);
-        const commands = paneCommands(agent, context.cwd, undefined, { ...roots.omo, environ: roots.environ }, version);
+        const scanned = paneCommands(agent, context.cwd, undefined, { ...roots.omo, environ: roots.environ }, version);
+        const commands = await mergeCatalogSources(agent, context.pane, context.cwd, scanned);
         rememberPaneCommands(context.pane, agent, commands);
         return jsonResponse({ commands });
       }
