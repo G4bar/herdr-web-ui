@@ -35,6 +35,8 @@ const snapshot: Record<string, readonly [DialogReader["reread"], DialogReader["l
   "hermes-question": ["none", "none"],
   "hermes-input": ["none", "none"],
   "cmd-question": ["before-commit", "none"],
+  "opencode-question": ["before-commit", "none"],
+  "opencode-v1-question": ["none", "none"],
   "hermes-help": ["none", "none"],
   "hermes-status": ["none", "none"],
   "hermes-version": ["none", "none"],

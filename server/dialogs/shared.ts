@@ -90,6 +90,7 @@ type Responder =
   | "omp-submit"
   | "omp-handoff"
   | "opencode-question"
+  | "opencode-v1-question"
   | "fallback-menu"
   | "fallback-gjc-menu"
   | "fallback-keys"

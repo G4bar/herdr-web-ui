@@ -18,6 +18,8 @@ import { processEnviron } from "../omo.ts";
 import { CLAUDE_CLEAR_INPUT_KEYS, claudeClearableDraft, claudeInputBoxContent, claudeInputDraft, claudeInputEmpty, claudeRestoredDraft, codexQuestionsCollapsed, heldCandidate, hermesInputDraft, lastChatSubmitted, noteSubmitted, parseInteractivePrompt, prepareCommandSend, viewportShowsLive } from "../prompt.ts";
 import { registry } from "../dialogs/registry.ts";
 import { type PendingIdentity, PendingInputError } from "../pending-input.ts";
+import { startOpenCodeWatch, openCodeSkillsToType, skillsNotAttached } from "../opencode-native.ts";
+import { herdrSkillAttachIo, typeWithSkills } from "../opencode-skill-attach.ts";
 
 const CLAUDE_INPUT_DRAFT_MESSAGE = "Claude Code's input box is not empty (a draft, bash mode, or a box that could not be read); send or clear it in the terminal, then send this message";
 
@@ -378,11 +380,57 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
         }
         if (pane) command = prepareCommandSend(pane, text, beforeScreen);
         inTime();
+        // agent.prompt pastes the whole text, and OpenCode v2 leaves a pasted @skill unattached
+        let skills: string[] = [];
+        if (pane) ({ sent: command, skills } = await openCodeSkillsToType(pane, command, text, beforeScreen));
+        inTime();
+        if (pane && command && skills.length > 0) {
+          const expected = pendingIdentity(pane);
+          let current = pane;
+          // the lookup awaited the service: the pane, its session and its state are read again before every key
+          const revalidate = async (): Promise<void> => {
+            current = await paneGet(paneId);
+            inTime();
+            const now = pendingIdentity(current);
+            if (now.agent !== expected.agent || now.terminalId !== expected.terminalId || now.session !== expected.session) {
+              throw new HerdrError("pending_target_changed", "The pane's terminal or agent session changed; nothing more was typed");
+            }
+            // as agent.prompt refuses it; an unknown state is typed into, as its fallback below does
+            if (current.agent_status === "blocked") throw new HerdrError("agent_blocked", "The agent is waiting for an answer in the terminal");
+          };
+          // followed from before the first key: the send's own message can be announced before Enter returns
+          const watch = startOpenCodeWatch(pane, command);
+          await revalidate();
+          let typed = false;
+          const allowed = (): boolean => {
+            try { inTime(); typed = true; return true; } catch { return false; }
+          };
+          try {
+            const { attached, missed, prompt } = await typeWithSkills(text, skills, allowed, herdrSkillAttachIo(paneId), revalidate);
+            // fixed wait: a TUI busy with the typing takes an Enter in the same chunk for a newline (SUBMIT_DELAY_MS)
+            await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
+            await revalidate();
+            if (!allowed()) throw new HerdrError("cancelled", "The message's sender may no longer type into this pane");
+            await paneSendKeys(paneId, ["Enter"], undefined, allowed);
+            const final = skillsNotAttached(command, missed);
+            noteSubmitted(paneId, text, final);
+            watch?.commit(final, prompt, attached);
+            return;
+          } catch (error) {
+            watch?.cancel();
+            if (!typed) throw error;
+            throw new HerdrError("submit_partial", "Part of the message was typed into OpenCode's input, but sending was not confirmed. Your chat text stayed here. Check the terminal before sending again.");
+          }
+        }
+        const watch = pane ? startOpenCodeWatch(pane, command) : null;
         try {
+          inTime();
           await agentPrompt(paneId, closeMention(sent));
           noteSubmitted(paneId, sent, command);
+          if (command) watch?.commit(command, [{ pasted: closeMention(sent) }], []);
           return;
         } catch (error) {
+          watch?.cancel();
           if (!(error instanceof HerdrError)) throw error;
           if (clearDraft !== undefined || sendAnyway) throw error;
           const queuedOnly = error.code === "agent_blocked" && await blockedOnlyByCodexQueue(paneId);

@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { HerdrPane, InteractivePrompt, InteractivePromptOption, PanePromptResponse, PromptAnswer, SessionSnapshot } from "../shared/protocol.ts";
+import type { HerdrPane, InteractivePrompt, InteractivePromptOption, PanePromptResponse, PromptAnswer, SessionSnapshot, SlashCommand } from "../shared/protocol.ts";
 import { builtinCommands, cachedPaneCommands } from "./commands.ts";
 import { readCommandTranscript } from "./conversation.ts";
 import { resolveAgent } from "./pane-context.ts";
@@ -10,11 +10,12 @@ import { omoTranscriptForPane } from "./omo.ts";
 import { OmoAskReader, omoAsksAfter, type OmoAskCall, type OmoAsks } from "./omo-ask.ts";
 import { badRequest, errorResponse, jsonResponse } from "./http.ts";
 import { claudePlanFile } from "./claude-plan.ts";
-import { listPendingQuestionForms, readOpenCodeService, replyOpenCodeForm } from "./opencode-service.ts";
+import { listPendingQuestionForms, openCodeService, replyOpenCodeForm } from "./opencode-service.ts";
 import { opencodeSessionId } from "./opencode.ts";
 import { registry } from "./dialogs/registry.ts";
 import { ANSI_RE, type AnswerStep, KEY, type OmoAsk, type OpenCodePromptEntry, PI_MODEL_HINT_RE, type ParsedPrompt, SOLID_RULE_RE, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, parsedByPublicPrompt, publicPrompt, wrapped } from "./dialogs/shared.ts";
 import { executeInteractionPlan } from "./dialogs/interaction-plan.ts";
+import { openCodeV1QuestionActive } from "./dialogs/opencode.ts";
 import { CODEX_ASK_HINT_RE, CODEX_ASYNC_ASK_HINT_RE, CODEX_CONTINUE_HINT_RE, CODEX_QUEUE_HEADER_RE, codexModelListWaits } from "./dialogs/codex.ts";
 import { OMO_FOOTER_LINES, OMO_HINT_LINES, OMO_NOT_FOOTER_RE, OMO_OPTIONS_HINT_RE, OMO_PENDING_HINT_RE, OMO_REVIEW_HINT_RE, OMO_TYPING_HINT_RE, omoModelListWaits, sameText } from "./dialogs/omo.ts";
 import { CLAUDE_ASK_HINT_RE, CLAUDE_CONFIRM_HINT_RE, CLAUDE_EFFORT_GUARD_RE, CLAUDE_EFFORT_HINT_RE, INVISIBLE_CHAR_RE, claudeModelListWaits, withoutClaudeTasks } from "./dialogs/claude.ts";
@@ -146,7 +147,11 @@ export function prepareCommandSend(pane: HerdrPane, text: string, screen = ""): 
   const cached = cachedPaneCommands(pane);
   const agent = cached?.agent ?? resolveAgent(pane).agent;
   if (!agent) return undefined;
-  const commands = cached?.commands ?? builtinCommands(agent);
+  return commandSendFrom(pane, agent, cached?.commands ?? builtinCommands(agent), text, screen);
+}
+
+/** The send record for `text` against a given catalog: the remembered one above, or one the delivery already waited for. */
+export function commandSendFrom(pane: HerdrPane, agent: string, commands: SlashCommand[], text: string, screen = ""): (CommandSend & { store: string | null }) | undefined {
   const invocations = commandInvocations(agent, text, commands);
   if (invocations.length === 0) return undefined;
   return { id: randomBytes(12).toString("hex"), text, at: Date.now(), agent, identity: outcomeIdentity(pane),
@@ -355,6 +360,8 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   // Command Code's permission footer names its keys at the dialog's end and wraps on a narrow
   // pane: `↑/↓ navigate · enter select · ctrl+e explain · Run cmd --yolo to bypass all …`
   if (prompt.responder === "cmd-question") return cmdFooterEnds(shown);
+  // its footer ends the screen, wrapped or not (dialogs/opencode.ts)
+  if (prompt.responder === "opencode-v1-question") return openCodeV1QuestionActive(screen);
   return ends(/ctrl\+g to edit|shift\+tab to approve with this feedback/i);
 }
 /**
@@ -1150,11 +1157,14 @@ async function readKnownPrompt(
   openCodeState = defaultOpenCodeState,
   signal?: AbortSignal,
 ): Promise<{ prompt: InteractivePrompt | null; screen?: string; stale?: boolean }> {
-  if (agent === "opencode") {
+  // no native card (no session herdr reports, no verified v2 service, no pending form): OpenCode
+  // v1's own question prompt is read off the screen below (dialogs/opencode.ts, #1386)
+  native: if (agent === "opencode") {
     const sessionID = opencodeSessionId(pane);
-    if (!sessionID) return { prompt: null };
+    if (!sessionID) break native;
     const state = openCodeState.begin(paneId, sessionID);
-    const config = readOpenCodeService(openCodeStateDir);
+    // only the process service.json names, as /api/info proves it; never a service started here
+    const config = (await openCodeService(openCodeStateDir, signal))?.config ?? null;
     const revision = state.revision;
     const issued = ++state.issued;
     const forms = config ? await listPendingQuestionForms(config, sessionID, signal) : null;
@@ -1174,8 +1184,7 @@ async function readKnownPrompt(
     }
     // A late read renders the newer applied form and draft, never a synthetic empty card.
     const form = state.listed;
-    if (!form) return { prompt: null };
-    if (form.fields.length === 0) return { prompt: null };
+    if (!form || form.fields.length === 0) break native;
 
     // Schema changes under a reused form id are a replacement too.
     const identity = JSON.stringify({
@@ -1292,7 +1301,7 @@ async function readKnownPrompt(
     return { prompt: publicPrompt(parsed) };
   }
 
-  if (!["claude", "omp", "codex", "omo", "pi", "gjc", "hermes", "cmd", ""].includes(agent)) return { prompt: null };
+  if (!["claude", "omp", "codex", "omo", "pi", "gjc", "hermes", "cmd", "opencode", ""].includes(agent)) return { prompt: null };
   const screen = await liveScreen(paneId);
   // omo's form reads its text from the session's call, the screen showing where the form stands
   const omoAsks = ["omo", "pi", "claude", ""].includes(agent) && pane.cwd && OMO_FORM_RE.test(screen)
@@ -1620,7 +1629,7 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
           return jsonResponse({ ok: true });
         }
 
-        const config = readOpenCodeService(options.openCodeStateDir);
+        const config = (await openCodeService(options.openCodeStateDir, deadline))?.config ?? null;
         if (!config) {
           return jsonResponse({ error: { code: "service_unavailable", message: "OpenCode service is not available." } }, 502);
         }
@@ -1628,6 +1637,9 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
         if (!(await stillBound())) return promptChanged();
         const replyResult = await replyOpenCodeForm(config, openCodeForm.sessionID, openCodeForm.formId, draft.answers, deadline);
         if (replyResult.ok) {
+          const sent = chatSent.get(body.pane_id)?.commands.at(-1);
+          // OpenCode itself took the answer to the form the sent command opened
+          if (sent?.dialogId === prompt.id) noteCommandEvidence(body.pane_id, sent.id, { kind: "native", at: Date.now() });
           // An upstream acknowledgement is authoritative, even after a poll or status change.
           // Only clean up this asking: another form/session may already have replaced it.
           if (openCodeState.entries.get(body.pane_id) === state && state.revision === openCodeForm.revision) {

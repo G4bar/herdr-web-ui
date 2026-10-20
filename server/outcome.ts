@@ -23,6 +23,8 @@ export interface CommandSend {
   /** Reserved Chat echoes after this send's anchor; null means ordering information was lost. */
   resultEchoLimit?: Readonly<Record<string, number | null>>;
   outcome?: CommandOutcome;
+  /** why the bridge itself knows the send needs the terminal (a skill OpenCode did not attach) */
+  readonly note?: string;
   dialogId?: string;
   dialogObserved?: true;
   /** Any later delivery ends this send's unowned card and preview window. */
@@ -515,6 +517,7 @@ export function commandOutcome(paneId: string, sent: CommandSend, observation: O
   return {
     id: sent.id, pane_id: paneId, text: sent.text, state, evidence,
     ...(preview ? { preview } : {}), ...(resultText ? { result_text: resultText } : {}), ...(catalogChanged ? { catalog_changed: true } : {}),
+    ...(sent.note ? { note: sent.note } : {}),
     created_at: new Date(sent.at).toISOString(), updated_at: changed ? new Date(now).toISOString() : previous.updated_at,
   };
 }

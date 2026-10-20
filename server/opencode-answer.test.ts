@@ -74,6 +74,8 @@ async function fixture(run: (f: {
   const service = Bun.serve({
     hostname: "127.0.0.1", port: 0,
     async fetch(request) {
+      // the identity check: the process service.json names answers at its URL
+      if (request.method === "GET" && new URL(request.url).pathname === "/api/info") return Response.json({ version: "2.0.32", pid: process.pid, urls: [], paths: { tmp: root } });
       if (request.method === "GET") {
         const listing = f.listing;
         f.listing = undefined;
