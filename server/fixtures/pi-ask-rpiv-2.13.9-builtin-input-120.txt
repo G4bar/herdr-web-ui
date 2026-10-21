@@ -1,0 +1,44 @@
+
+ Ponytail loaded: full
+
+ Error: pi_herdsman_state_error: Error: agent session identity changed while state existed
+
+ Warning: tmux extended-keys is off. Modified Enter keys may not work. Add `set -g extended-keys on` to ~/.tmux.conf
+ and restart tmux.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ Name the release branch
+
+>
+
+ enter submit  escape/ctrl+c cancel
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ Sonnet 5.5 | think:high | ◫ 0/1.0M (0.0%) AC | TPS: -- | dir phase5-cap | LSP ✗ | sync ⇡ | ◷ 13s

@@ -1,0 +1,44 @@
+                                                                        11:44:46
+
+
+ {"questions":[{"header":"Layout","question":"Which layout should the settings
+ page use?","options":[{"label":"Sidebar","description":"Vertical nav with a
+ detail pane.","preview":"\n+------+--------+\n| nav  | detail
+ |\n+------+--------+\n"},{"label":"Tabs","description":"Horizontal tabs at the
+ top.","preview":"\n[Tab A][Tab B]\n+-------------+\n|   detail
+ |\n+-------------+\n"}]}]}
+
+
+                                                                        11:44:44
+
+
+ ask_user_question questions=[{"header":"Layout","question":"Which layout
+ should the settings page use?","options":[...
+
+
+────────────────────────────────────────────────────────────────────────────────
+
+  Layout
+
+ Which layout should the settings page use?
+
+❯ 1. Sidebar
+     Vertical nav with a detail pane.
+  2. Tabs
+     Horizontal tabs at the top.
+  3. Type something.
+
+┌──────────────────────────────────────────┐
+│   +------+--------+                      │
+│   | nav  | detail |                      │
+│   +------+--------+                      │
+└──────────────────────────────────────────┘
+
+Notes: press n to add notes
+
+────────────────────────────────────────────────────────────────────────────────
+
+ Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel · Ctrl+] to…
+
+ Sonnet 5.5 | think:high | ◫ 46k/1.0M (4.6%) AC | TPS: 27.4 tok/s​
+ dir phase5-cap | LSP ✗ | sync ⇡ | ◷ 21s

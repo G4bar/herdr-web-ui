@@ -3038,6 +3038,185 @@ describe("pi's dialogs", () => {
     // redraws around the dialog, and turns stale only when the dialog itself changes
     expect(parseInteractivePrompt("pi", select.replace("0.0%/215k (auto)", "12.3%/215k (auto)"))!.id).toBe(parseInteractivePrompt("pi", select)!.id);
   });
+
+  test("keeps an existing prompt's id", () => {
+    // a new reader must leave the ids already handed out alone: the chat answers by id
+    expect(parseInteractivePrompt("pi", select)!.id).toBe("b91f20ed7e62");
+  });
+});
+
+// Captured from pi 1.3.0 with @juicesharp/rpiv-ask-user-question 2.13.9 drawing the
+// ask_user_question questionnaire in a pane of its own, at 120 and at 80 columns. pi keeps its
+// own footer (folder, context meter) under the dialog, so the questionnaire's hint is near the
+// end of the screen without being it.
+describe("pi ask_user_question", () => {
+  const askFixture = (name: string) => readFileSync(new URL(`./fixtures/pi-ask-rpiv-2.13.9-${name}.txt`, import.meta.url), "utf8");
+
+  test("reads a single question: its header, its numbered rows and their descriptions", () => {
+    const prompt = parseInteractivePrompt("pi", askFixture("single-120"))!;
+    expect(prompt.kind).toBe("question");
+    expect(prompt.title).toBe("Library");
+    expect(prompt.question).toBe("Which date library should we use for the app?");
+    expect(prompt.options).toEqual([
+      { label: "Day.js", description: "2 KB immutable wrapper, familiar moment-style API." },
+      { label: "date-fns", description: "Tree-shakeable functional helpers." },
+      { label: "Luxon", description: "Intl-backed, heavier but full-featured." },
+      { label: "Temporal polyfill", description: "Stage-3 API, largest bundle." },
+    ]);
+    expect(prompt.multi_select).toBe(false);
+    // `Type something.` is numbered after the options and is not one of them
+    expect(prompt.custom_option_index).toBe(4);
+    expect(prompt.steps).toBeUndefined();
+    // ↓/↑ wrap in rpiv, so the card sends the direct delta and never a wrap-around
+    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
+    // an 80-column pane draws the same list: the width is not part of the answer
+    expect(parseInteractivePrompt("pi", askFixture("single-80"))!.options).toEqual(prompt.options);
+  });
+
+  test("answers the row the cursor stands on from where the cursor is", () => {
+    const prompt = parseInteractivePrompt("pi", askFixture("cursor3-120"))!;
+    expect(prompt.options.map((option) => option.label)).toEqual(["Day.js", "date-fns", "Luxon", "Temporal polyfill"]);
+    expect(answerKeys(prompt, { option_index: 0 })).toEqual([{ keys: ["up"] }, { keys: ["up"] }, { keys: ["enter"] }]);
+  });
+
+  test("types a custom answer into the free-text row without an enter in front of it", () => {
+    const prompt = parseInteractivePrompt("pi", askFixture("single-120"))!;
+    // moving onto `Type something.` hands rpiv's editor the keyboard by itself; an enter before
+    // the text would confirm the empty row and leave the answer to land in pi's own prompt
+    expect(answerKeys(prompt, { custom_text: " 2 weeks " })).toEqual([
+      { keys: ["down"] }, { keys: ["down"] }, { keys: ["down"] }, { keys: ["down"] },
+      { text: "2 weeks" },
+      { keys: ["enter"] },
+    ]);
+    // the row already focused: the capture has rpiv's editor in place of the label
+    const focused = parseInteractivePrompt("pi", askFixture("input-120"))!;
+    expect(focused.custom_option_index).toBe(4);
+    expect(answerKeys(focused, { custom_text: "2 weeks" })).toEqual([{ text: "2 weeks" }, { keys: ["enter"] }]);
+    // text already typed in the terminal reads as one more option, which is still answerable
+    const typed = parseInteractivePrompt("pi", askFixture("input-text-120"))!;
+    expect(typed.options.map((option) => option.label)).toEqual(["Day.js", "date-fns", "Luxon", "Temporal polyfill", "2 weeks please"]);
+  });
+
+  test("leaves the preview out of the card, beside the list and under it", () => {
+    for (const fixture of ["preview-120", "preview-80"]) {
+      const prompt = parseInteractivePrompt("pi", askFixture(fixture))!;
+      expect(prompt.title).toBe("Layout");
+      expect(prompt.options.map((option) => option.label)).toEqual(["Sidebar", "Tabs"]);
+      expect(prompt.body).toBeNull();
+      expect(JSON.stringify(prompt)).not.toContain("nav  | detail");
+    }
+  });
+
+  test("reads a multiple choice's checkboxes and commits it on its own row", () => {
+    const prompt = parseInteractivePrompt("pi", askFixture("multi-120"))!;
+    expect(prompt.multi_select).toBe(true);
+    expect(prompt.title).toBe("Features");
+    expect(prompt.options.map((option) => option.label)).toEqual(["Telemetry", "Beta flags", "Auto-update", "Crash reports"]);
+    expect(prompt.custom_option_index).toBe(4);
+    // measured on the capture: space ticks a row, and Enter on `Submit`, the row under the four
+    expect(answerKeys(prompt, { option_indices: [1, 3] })).toEqual([
+      { keys: ["down"] }, { keys: ["space"] },
+      { keys: ["down"] }, { keys: ["down"] }, { keys: ["space"] },
+      { keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] },
+    ]);
+    // its free-text row is typed into like a single select's, and Enter there sends the choice
+    expect(answerKeys(prompt, { custom_text: "Nightly" })).toEqual([
+      { keys: ["down"] }, { keys: ["down"] }, { keys: ["down"] }, { keys: ["down"] },
+      { text: "Nightly" },
+      { keys: ["enter"] },
+    ]);
+    expect(parseInteractivePrompt("pi", askFixture("multi-80"))!.options).toEqual(prompt.options);
+  });
+
+  test("reads a form of several questions one tab at a time", () => {
+    const first = parseInteractivePrompt("pi", askFixture("mq-tab1-120"))!;
+    expect(first.title).toBe("Runtime");
+    expect(first.question).toBe("Which runtime should the worker use?");
+    expect(first.options.map((option) => option.label)).toEqual(["Bun", "Node 22"]);
+    expect(first.steps).toEqual([
+      { label: "Runtime", answered: false, current: true },
+      { label: "Storage", answered: false, current: false },
+    ]);
+    expect(answerKeys(first, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
+    // after the first answer rpiv moves to the next question by itself: the next read is its card
+    const second = parseInteractivePrompt("pi", askFixture("mq-tab2-120"))!;
+    expect(second.title).toBe("Storage");
+    expect(second.question).toBe("Where should job results be stored?");
+    expect(second.steps).toEqual([
+      { label: "Runtime", answered: true, current: false },
+      { label: "Storage", answered: false, current: true },
+    ]);
+    expect(parseInteractivePrompt("pi", askFixture("mq-tab1-80"))!.steps).toEqual(first.steps);
+  });
+
+  test("reads the Submit tab, with what it would submit", () => {
+    const incomplete = parseInteractivePrompt("pi", askFixture("submit-incomplete-120"))!;
+    expect(incomplete.kind).toBe("question");
+    expect(incomplete.title).toBe("Review your answers");
+    expect(incomplete.question).toBe("⚠ Answer remaining questions before submitting: Storage");
+    expect(incomplete.options.map((option) => option.label)).toEqual(["Submit answers", "Cancel"]);
+    expect(incomplete.custom_option_index).toBeNull();
+    expect(incomplete.answers).toEqual([{ question: "Runtime", answer: "Bun" }]);
+    expect(answerKeys(incomplete, { option_index: 0 })).toEqual([{ keys: ["enter"] }]);
+    // Cancel leaves the questionnaire unanswered, as Escape does
+    expect(answerKeys(incomplete, { option_index: 1 })).toEqual([{ keys: ["esc"] }]);
+    const ready = parseInteractivePrompt("pi", askFixture("submit-ok-120"))!;
+    expect(ready.question).toBe("Ready to submit your answers?");
+    expect(ready.answers).toEqual([{ question: "Runtime", answer: "Bun" }, { question: "Storage", answer: "SQLite" }]);
+    expect(ready.steps).toEqual([
+      { label: "Runtime", answered: true, current: false },
+      { label: "Storage", answered: true, current: false },
+    ]);
+    expect(parseInteractivePrompt("pi", askFixture("mq-tab2-answered-80"))!.options.map((option) => option.label))
+      .toEqual(["SQLite", "Postgres"]);
+    // every question answered and the pane back on a question tab: rpiv's colour marks that tab
+    // and the text does not keep it, so the card claims none
+    const back = parseInteractivePrompt("pi", askFixture("mq-tab2-answered-80"))!;
+    expect(back.title).toBe("");
+    expect(back.steps).toEqual([
+      { label: "Runtime", answered: true, current: false },
+      { label: "Storage", answered: true, current: false },
+    ]);
+  });
+
+  test("offers the rows a tiny pane still shows", () => {
+    // a 12-row pane fits one row of the list and marks the rest with `↓`: the card offers what
+    // is on screen, because a row nobody can see cannot be walked to
+    const prompt = parseInteractivePrompt("pi", askFixture("windowed-120"))!;
+    expect(prompt.options.map((option) => option.label)).toEqual(["Day.js"]);
+    expect(prompt.custom_option_index).toBeNull();
+  });
+
+  test("leaves pi's own select, confirm and input dialogs to their readers", () => {
+    const selectDialog = parseInteractivePrompt("pi", askFixture("builtin-select-120"))!;
+    expect(selectDialog.kind).toBe("question");
+    expect(selectDialog.options.map((option) => option.label)).toEqual(["bun", "pnpm", "npm", "yarn"]);
+    expect(parseInteractivePrompt("pi", askFixture("builtin-confirm-120"))!.kind).toBe("approval");
+    expect(parseInteractivePrompt("pi", askFixture("builtin-input-120"))!.custom_option_index).toBe(0);
+  });
+
+  test("withdraws the card once the questionnaire is answered and scrolled away", () => {
+    const answered = `${askFixture("single-120")}\n\n✓ answered Day.js\n\n still working\n more\n and more\n and more\n and more\n and more`;
+    expect(parseInteractivePrompt("pi", answered)).toBeNull();
+    // the hint without the rules that frame the dialog is quoted text, not a live questionnaire
+    expect(parseInteractivePrompt("pi", "❯ 1. Day.js\n  2. date-fns\n\n Enter to select · ↑/↓ to navigate · Esc to cancel")).toBeNull();
+  });
+
+  test("HERDR_WEB_PI_ASK_PROMPT=0 leaves the questionnaire as plain terminal text", () => {
+    const module = new URL("./prompt.ts", import.meta.url).pathname;
+    const fixture = new URL("./fixtures/pi-ask-rpiv-2.13.9-single-120.txt", import.meta.url).pathname;
+    const probe = `const { parseInteractivePrompt } = await import(${JSON.stringify(module)});\n`
+      + `const screen = (await import("node:fs")).readFileSync(${JSON.stringify(fixture)}, "utf8");\n`
+      + "console.log(JSON.stringify(parseInteractivePrompt(\"pi\", screen)));";
+    const off = Bun.spawnSync({ cmd: [process.execPath, "-e", probe], env: { ...process.env, HERDR_WEB_PI_ASK_PROMPT: "0" } });
+    expect(off.success).toBe(true);
+    expect(off.stdout.toString().trim()).toBe("null");
+    // and the same screen with the reader on is the card the tests above read
+    const on = Bun.spawnSync({ cmd: [process.execPath, "-e", probe], env: { ...process.env, HERDR_WEB_PI_ASK_PROMPT: "" } });
+    expect(on.success).toBe(true);
+    expect(JSON.parse(on.stdout.toString().trim()).title).toBe("Library");
+  });
 });
 
 // Both screens captured from pi 0.87.1 running /model in a pane of its own, at 140 columns and

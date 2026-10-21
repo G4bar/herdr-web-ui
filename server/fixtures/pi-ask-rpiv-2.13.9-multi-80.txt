@@ -1,0 +1,44 @@
+ questions were both declined, so I won't reuse either one unless you tell me
+ to.
+
+                                                                        11:45:01
+
+
+ {"questions":[{"header":"Features","question":"Which features should we enable
+ in this
+ release?","multiSelect":true,"options":[{"label":"Telemetry","description":"An
+ onymous usage counters."},{"label":"Beta flags","description":"Expose
+ experimental toggles."},{"label":"Auto-update","description":"Background
+ version checks."},{"label":"Crash reports","description":"Send stack traces on
+ failure."}]}]}
+
+
+                                                                        11:45:00
+
+
+ ask_user_question questions=[{"header":"Features","question":"Which features
+ should we enable in this release?","mu...
+
+
+────────────────────────────────────────────────────────────────────────────────
+
+  Features
+
+ Which features should we enable in this release?
+
+❯ 1. [✔] Telemetry
+  Anonymous usage counters.
+  2. [ ] Beta flags
+  Expose experimental toggles.
+  3. [ ] Auto-update
+  Background version checks.
+  4. [ ] Crash reports
+  Send stack traces on failure.
+  5. [ ] Type something.
+  Submit
+
+────────────────────────────────────────────────────────────────────────────────
+
+ Enter to select · ↑/↓ to navigate · Space to toggle · n to add notes · Esc to …
+ Sonnet 5.5 | think:high | ◫ 47k/1.0M (4.7%) AC | TPS: 26.5 tok/s​
+ dir phase5-cap | LSP ✗ | sync ⇡ | ◷ 36s
