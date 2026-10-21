@@ -302,6 +302,16 @@ export function Composer({
   // shown only when chosen in Settings → Quick replies: a button beside the box was one more thing to read
   const quickOpen = settings.showQuickReplies;
   const quickReplies = quickReplyButtons(settings);
+  // A card whose numbers answer it takes the chips away: they would send "continue" or "yes"
+  // through the same path, one tap from the real choices (Composer.css keeps the gap).
+  const quickShown = quickOpen && quickReplies.length > 0 && !answerHint;
+  // and a chip that had the focus hands it to the box instead of leaving it on <body>
+  const quickFocus = useRef(false);
+  useEffect(() => {
+    if (quickShown || !quickFocus.current) return;
+    quickFocus.current = false;
+    textareaRef.current?.focus({ preventScroll: true });
+  }, [quickShown]);
   /** the box's width: its text rewraps when the lane does (Settings → Chat width, a resized pane), and the automatic height with it */
   const [boxWidth, setBoxWidth] = useState(0);
 
@@ -1050,8 +1060,8 @@ export function Composer({
         </div>
       )}
 
-      {quickOpen && quickReplies.length > 0 && (
-        <div className="composer-quick" role="group" aria-label={t("Quick replies")}>
+      {quickShown && (
+        <div className="composer-quick" role="group" aria-label={t("Quick replies")} onFocus={() => { quickFocus.current = true; }} onBlur={(event) => { quickFocus.current = event.currentTarget.contains(event.relatedTarget); }}>
           {quickReplies.map((reply, index) => (
             <button
               key={`${index}:${reply}`}
