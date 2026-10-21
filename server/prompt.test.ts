@@ -3398,6 +3398,101 @@ describe("pi ask_user_question joined with its session's call", () => {
     // a session the server cannot read must not change the card an answer names
     expect(parseInteractivePrompt("pi", screen("single-120"))!.id).toBe("9bd9fa32967d");
   });
+
+  // What a narrow pane makes of a long question: rpiv wraps it where the line ends, inside a word,
+  // and draws only what fits, so the copy on the screen is broken and cut. `split(/\n/)` is that
+  // draw; the dialog around it is the shape the captures show.
+  const wrapped = (text: string, width: number): string[] => text.match(new RegExp(`[\\s\\S]{1,${width}}`, "g"))!.map((line) => ` ${line}`);
+  const longQuestion = "Should the settings page move to the new form primitives in this release, or keep the legacy inputs for one more cycle while the team finishes the accessibility audit and the design review, so that nothing regresses for keyboard users or for screen readers across the twelve screens that still use them today?";
+  const longDialog = (drawn: string[], rows: string[]) => [
+    "─".repeat(120), "", "  Migration", "",
+    ...drawn, "",
+    ...rows, "",
+    "─".repeat(120), "",
+    " Enter to select · ↑/↓ to navigate · Esc to cancel",
+    " /tmp/app",
+    " some-model • medium",
+  ].join("\n");
+  const longRows = ["❯ 1. Now", "     Do it in one pass.", "  2. Later", "     One more release.", "  3. Type something."];
+  const longCall = JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "toolCall", id: "toolu_long", name: "ask_user_question", arguments: { questions: [{
+    header: "Migration", question: longQuestion,
+    options: [
+      { label: "Now", description: "Do it in one pass.", preview: "\n+-----+\n| now |\n+-----+\n" },
+      { label: "Later", description: "One more release.", preview: "\n+-------+\n| later |\n+-------+\n" },
+    ],
+  }] } }] } });
+
+  test("takes a long question whole from the call the wrapped, clipped screen names", () => {
+    // the defect: the pane wrapped the question inside words and cut the draw at 212 characters,
+    // so neither the card's text nor the join with the call survived
+    const drawn = wrapped(longQuestion, 96).slice(0, 5);
+    const cut = drawn.join(" ").slice(0, 212).split(/\n/);
+    const long = longDialog(cut, longRows);
+    expect(longQuestion.length).toBeGreaterThan(300);
+    expect(parseInteractivePrompt("pi", long)!.question.length).toBeLessThan(longQuestion.length);
+    const prompt = joined(long, longCall);
+    // the call's own text, unbroken and uncut, and its previews: the screen never showed them
+    expect(prompt.question).toBe(longQuestion);
+    expect(prompt.header).toBe("Migration");
+    expect(prompt.options.map((option) => option.label)).toEqual(["Now", "Later"]);
+    expect(prompt.options[0]!.preview).toContain("| now |");
+    expect(prompt.options[1]!.preview).toContain("| later |");
+    expect(prompt.custom_option_index).toBe(2);
+    // the caps still hold on what the call adds
+    expect(prompt.header!.length).toBeLessThanOrEqual(200);
+    expect(prompt.options.every((option) => option.preview!.length <= 8_000)).toBe(true);
+  });
+
+  test("draws the whole form from the call when the pane is too short for it", () => {
+    // captured in a 26-row pane (multi-clipped-92): the pane ends under `Stack traces.`, so the
+    // list's `Type something.` row and the multiple choice's `Submit` are off the screen, and the
+    // capture alone is refused — no card at all. The call has the rows the pane never drew
+    const call = JSON.parse(session("multi").trim()) as { message: { content: { arguments: { questions: { options: { preview?: string }[] }[] } }[] } };
+    const asked = call.message.content[0]!.arguments.questions[0]!;
+    asked.options[0]!.preview = "\n+---------+\n| ticks   |\n+---------+\n";
+    asked.options[3]!.preview = "\n+---------+\n| crashes |\n+---------+\n";
+    expect(parseInteractivePrompt("pi", screen("multi-clipped-92"))).toBeNull();
+    const prompt = joined(screen("multi-clipped-92"), JSON.stringify(call));
+    expect(prompt.kind).toBe("question");
+    expect(prompt.title).toBe("Features");
+    expect(prompt.header).toBe("Features");
+    expect(prompt.question).toBe("Which features should we enable in this release?");
+    expect(prompt.options.map((option) => option.label)).toEqual(["Telemetry", "Beta flags", "Auto-update", "Crash reports"]);
+    expect(prompt.options.map((option) => option.description)).toEqual(["Anonymous usage counters.", "Expose experimental toggles.", "Background version checks.", "Send stack traces on failure."]);
+    expect(prompt.options[0]!.preview).toContain("| ticks   |");
+    expect(prompt.options[3]!.preview).toContain("| crashes |");
+    expect(prompt.multi_select).toBe(true);
+    expect(prompt.custom_option_index).toBe(4);
+    // the rows under the pane's bottom are still answered: two downs under the last option is the
+    // `Submit` row the pane cut, so the choice can be sent
+    expect(answerKeys(prompt, { option_indices: [1, 3] })).toEqual([
+      { keys: ["down"] }, { keys: ["space"] },
+      { keys: ["down"] }, { keys: ["down"] }, { keys: ["space"] },
+      { keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] },
+    ]);
+    expect(answerKeys(prompt, { custom_text: "Nightly" })).toEqual([
+      { keys: ["down"] }, { keys: ["down"] }, { keys: ["down"] }, { keys: ["down"] },
+      { text: "Nightly" },
+      { keys: ["enter"] },
+    ]);
+    // a 12-row pane's windowed list comes back the same way, from the rows the call holds
+    const windowed = joined(screen("windowed-120"), session("single"));
+    expect(windowed.question).toBe("Which date library should we use for the app?");
+    expect(windowed.options.map((option) => option.label)).toEqual(["Day.js", "date-fns", "Luxon", "Temporal polyfill"]);
+    expect(answerKeys(windowed, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+  });
+
+  test("never guesses a multiple choice's ticks from rows the pane hid", () => {
+    // a pane that shows one boxed row of four, then `↓`: the call names the rows the pane hid, but
+    // not which of them rpiv has ticked (`multi-120` captures the first one ticked), and Space on
+    // the wrong one would send the opposite answer. So the screen stays terminal text
+    const lines = screen("multi-120").split("\n");
+    const row = lines.findIndex((line) => /^\s*❯ 1\./.test(line));
+    const rule = lines.findIndex((line, index) => index > row && line.trim().startsWith("─"));
+    expect(rule).toBeGreaterThan(row);
+    const windowed = [...lines.slice(0, row + 2), "↓", ...lines.slice(rule)].join("\n");
+    expect(joined(windowed, session("multi"))).toBeNull();
+  });
 });
 
 // Both screens captured from pi 0.87.1 running /model in a pane of its own, at 140 columns and
