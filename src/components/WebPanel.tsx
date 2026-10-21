@@ -1,7 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { ExternalLink, Globe, RotateCw, X } from "lucide-react";
 import { useT } from "../lib/i18n.ts";
+import { useAppWindow } from "../lib/install.ts";
 import { panelFrameSrc } from "../lib/webPanel.ts";
+import { CopyLinkButton } from "./FileViewer.tsx";
 import "./FileViewer.css";
 
 export interface WebPanelProps {
@@ -19,6 +21,7 @@ export interface WebPanelProps {
  */
 export function WebPanel({ url, refresh = 0, onClose, panelStart }: WebPanelProps) {
   const t = useT();
+  const appWindow = useAppWindow();
   const [loads, setLoads] = useState(0);
   // both counters only grow, so a reload and a push each name an address the frame has not had
   const frame = panelFrameSrc(url, loads + refresh);
@@ -33,7 +36,10 @@ export function WebPanel({ url, refresh = 0, onClose, panelStart }: WebPanelProp
           <h2 className="file-viewer-name" title={url}><span className="file-viewer-stem">{label}</span></h2>
           <div className="file-viewer-actions">
             <button type="button" className="icon-button file-viewer-action" aria-label={t("Reload page")} title={t("Reload page")} onClick={() => setLoads((count) => count + 1)}><RotateCw aria-hidden="true" /></button>
-            <a className="icon-button file-viewer-action" href={url} target="_blank" rel="noopener noreferrer" aria-label={t("Open in a new tab")} title={t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>
+            {/* in the installed app's window a new tab is another app window (and on iOS, Safari): the address is copied to paste into a browser instead */}
+            {appWindow
+              ? <CopyLinkButton href={url} />
+              : <a className="icon-button file-viewer-action" href={url} target="_blank" rel="noopener noreferrer" aria-label={t("Open in a new tab")} title={t("Open in a new tab")}><ExternalLink aria-hidden="true" /></a>}
           </div>
           <button type="button" className="icon-button file-viewer-action file-viewer-close" aria-label={t("Close page")} title={t("Close page")} onClick={onClose}><X aria-hidden="true" /></button>
         </header>

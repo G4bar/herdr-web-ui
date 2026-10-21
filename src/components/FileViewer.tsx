@@ -114,7 +114,7 @@ function CopyFileButton({ text, sourceRef, onShowSource }: { text: string; sourc
  * In the installed app's window, where a new tab of this origin would open another app window,
  * the address is copied instead, to paste into a browser. As a menu item it closes the menu.
  */
-function CopyLinkButton({ href, menuItem = false, onDone }: { href: string; menuItem?: boolean; onDone?: () => void }) {
+export function CopyLinkButton({ href, menuItem = false, onDone }: { href: string; menuItem?: boolean; onDone?: () => void }) {
   const t = useT();
   const [copied, setCopied] = useState(false);
   useEffect(() => {
