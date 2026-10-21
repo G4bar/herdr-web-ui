@@ -3051,6 +3051,24 @@ describe("pi's dialogs", () => {
 // end of the screen without being it.
 describe("pi ask_user_question", () => {
   const askFixture = (name: string) => readFileSync(new URL(`./fixtures/pi-ask-rpiv-2.13.9-${name}.txt`, import.meta.url), "utf8");
+  // the dialog's own shape, for the cases no capture shows: a rule, the heading, the question, the
+  // rows, a rule, the hint, then whatever pi wrote under it
+  const quoted = (under: string[]) => [
+    "─".repeat(60),
+    "",
+    "  Library",
+    "",
+    " Which date library should we use for the app?",
+    "",
+    "❯ 1. Day.js",
+    "  2. date-fns",
+    "  3. Type something.",
+    "",
+    "─".repeat(60),
+    "",
+    " Enter to select · ↑/↓ to navigate · Esc to cancel",
+    ...under,
+  ].join("\n");
 
   test("reads a single question: its header, its numbered rows and their descriptions", () => {
     const prompt = parseInteractivePrompt("pi", askFixture("single-120"))!;
@@ -3114,11 +3132,24 @@ describe("pi ask_user_question", () => {
     expect(prompt.title).toBe("Features");
     expect(prompt.options.map((option) => option.label)).toEqual(["Telemetry", "Beta flags", "Auto-update", "Crash reports"]);
     expect(prompt.custom_option_index).toBe(4);
-    // measured on the capture: space ticks a row, and Enter on `Submit`, the row under the four
+    // the capture has Telemetry already ticked, the cursor on it: Space un-ticks it, then Beta
+    // flags and Crash reports are ticked, then Enter on `Submit`, the row under the four
     expect(answerKeys(prompt, { option_indices: [1, 3] })).toEqual([
+      { keys: ["space"] },
       { keys: ["down"] }, { keys: ["space"] },
       { keys: ["down"] }, { keys: ["down"] }, { keys: ["space"] },
       { keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] },
+    ]);
+    // a row that already carries the wanted tick is not pressed again: pressing it would un-tick it
+    expect(answerKeys(prompt, { option_indices: [0] })).toEqual([
+      { keys: ["down"] }, { keys: ["down"] }, { keys: ["down"] }, { keys: ["down"] }, { keys: ["down"] },
+      { keys: ["enter"] },
+    ]);
+    // asking for the ticked row and one more leaves the tick alone and ticks only the other
+    expect(answerKeys(prompt, { option_indices: [0, 1] })).toEqual([
+      { keys: ["down"] }, { keys: ["space"] },
+      { keys: ["down"] }, { keys: ["down"] }, { keys: ["down"] }, { keys: ["down"] },
+      { keys: ["enter"] },
     ]);
     // its free-text row is typed into like a single select's, and Enter there sends the choice
     expect(answerKeys(prompt, { custom_text: "Nightly" })).toEqual([
@@ -3180,12 +3211,31 @@ describe("pi ask_user_question", () => {
     ]);
   });
 
-  test("offers the rows a tiny pane still shows", () => {
-    // a 12-row pane fits one row of the list and marks the rest with `↓`: the card offers what
-    // is on screen, because a row nobody can see cannot be walked to
-    const prompt = parseInteractivePrompt("pi", askFixture("windowed-120"))!;
-    expect(prompt.options).toEqual([{ label: "Day.js", description: "2 KB immutable wrapper, familiar moment-style API." }]);
-    expect(prompt.custom_option_index).toBeNull();
+  test("keeps a description that starts with a number out of the options", () => {
+    // captured with descriptions reading `3.5x smaller`, `22.x LTS` and `99. paths`: the first two
+    // have no space after the dot, and 99 does not follow row 3, so all three stay descriptions
+    const prompt = parseInteractivePrompt("pi", askFixture("digits-120"))!;
+    expect(prompt.title).toBe("Bundle");
+    expect(prompt.options).toEqual([
+      { label: "Day.js", description: "3.5x smaller than moment, same API." },
+      { label: "Node 22", description: "22.x LTS, widest support." },
+      { label: "Luxon", description: "99. paths, Intl first." },
+    ]);
+    expect(prompt.custom_option_index).toBe(3);
+    expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+  });
+
+  test("[x] in a single select's label is part of the label, not a tick", () => {
+    const prompt = parseInteractivePrompt("pi", quoted([" /tmp/app", " some-model • medium"])
+      .replace("  2. date-fns", "  2. [x] keep the vendored fork"))!;
+    expect(prompt.multi_select).toBe(false);
+    expect(prompt.options.map((option) => option.label)).toEqual(["Day.js", "[x] keep the vendored fork"]);
+  });
+
+  test("offers nothing for a list with rows off the pane", () => {
+    // a 12-row pane fits one row of the list and marks the rest with `↓`: the rows below it cannot
+    // be walked to, so a card over the visible ones would answer the wrong thing
+    expect(parseInteractivePrompt("pi", askFixture("windowed-120"))).toBeNull();
   });
 
   test("leaves a multiple choice whose Submit row is off the pane to the terminal", () => {
@@ -3207,6 +3257,19 @@ describe("pi ask_user_question", () => {
     expect(parseInteractivePrompt("pi", answered)).toBeNull();
     // the hint without the rules that frame the dialog is quoted text, not a live questionnaire
     expect(parseInteractivePrompt("pi", "❯ 1. Day.js\n  2. date-fns\n\n Enter to select · ↑/↓ to navigate · Esc to cancel")).toBeNull();
+    // the dialog ends on its own rule, so a rule under the hint is another panel's or the session
+    // echoing the questionnaire that was already answered — even with the hint right there
+    expect(parseInteractivePrompt("pi", quoted([
+      "",
+      "─".repeat(60),
+      "",
+      "› ",
+      "─".repeat(60),
+      " /tmp/app",
+      " some-model • medium",
+    ]))).toBeNull();
+    // pi's footer under the hint alone is what the live dialog looks like
+    expect(parseInteractivePrompt("pi", quoted([" /tmp/app", " some-model • medium"]))!.title).toBe("Library");
   });
 
   test("HERDR_WEB_PI_ASK_PROMPT=0 leaves the questionnaire as plain terminal text", () => {
@@ -4598,7 +4661,10 @@ ${["Linux", "macOS", "Other (type your own)"].map((label, index) => `│${cursor
       const checked = new Set<number>();
       pane.onSent = (sent) => {
         if (sent === "down") cursor = Math.min(2, cursor + 1);
-        else if (sent === "space") checked.has(cursor) ? checked.delete(cursor) : checked.add(cursor);
+        else if (sent === "space") {
+          if (checked.has(cursor)) checked.delete(cursor);
+          else checked.add(cursor);
+        }
         else if (sent === "tab") question = 1;
         else if (sent === "enter" && question === 0) { question = 1; cursor = 0; }
         else if (sent === "enter" && question === 1) question = 2;
@@ -5515,7 +5581,7 @@ Enter to select · ↑/↓ to navigate · Esc to cancel
     const originalLog = console.log;
     console.log = (...args: unknown[]) => { logged.push(args.map(String).join(" ")); };
     try {
-      await withPane("codex", "blocked", menu(RESUME), async (pane) => {
+      await withPane("codex", "blocked", menu(RESUME), async () => {
         const prompt = (await card())!;
         logged.length = 0;
         expect(await answer(prompt.id, { option_index: 0 })).toEqual({ status: 200, code: undefined });

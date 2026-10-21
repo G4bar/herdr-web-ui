@@ -2215,7 +2215,11 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   if (prompt.responder === "pi-model") return hintAtEnd(shown, PI_MODEL_HINT_AT_END_RE, PI_FOOTER_LINES);
   if (prompt.responder === "omo-model") return omoModelListWaits(screen);
   if (prompt.responder === "pi-ask" || prompt.responder === "pi-ask-submit") {
-    return hintAtEnd(shown, RPIV_ASK_HINT_AT_END_RE, RPIV_ASK_FOOTER_LINES, 3);
+    if (!hintAtEnd(shown, RPIV_ASK_HINT_AT_END_RE, RPIV_ASK_FOOTER_LINES, 3)) return false;
+    // the dialog closes on its own rule and leaves only pi's footer under the hint: a rule below it
+    // belongs to a later or quoted questionnaire, or to the one that was already answered
+    const hint = findLastIndex(cleanLines, (line) => RPIV_ASK_HINT_RE.test(line));
+    return hint < 0 || !cleanLines.slice(hint + 1).some((line) => isDivider(line));
   }
   if (prompt.responder === "pi-question" || prompt.responder === "pi-confirm" || prompt.responder === "pi-input") {
     return hintAtEnd(shown, PI_MENU_HINT_AT_END_RE, PI_FOOTER_LINES, 4)
@@ -2556,7 +2560,7 @@ const RPIV_ASK_OTHER_LABEL = "Type something.";
 /** `HERDR_WEB_PI_ASK_PROMPT=0`: the questionnaire stays plain terminal text, as before this reader */
 const RPIV_ASK_PROMPT = process.env.HERDR_WEB_PI_ASK_PROMPT !== "0";
 
-type RpivRow = { label: string; description: string | null; cursor: boolean; boxed: boolean; checked: boolean };
+type RpivRow = { number: number; label: string; description: string | null; cursor: boolean; boxed: boolean; checked: boolean };
 
 /**
  * The dialog's own lines, with the preview box taken out: from 100 columns rpiv sets it beside
@@ -2587,6 +2591,10 @@ function rpivTabs(line: string): { label: string; answered: boolean; submit: boo
  * lines after the last row (a multiple choice's `Submit`). A tick rpiv leaves on a single
  * select's confirmed row, and the checkbox in front of a multiple choice's rows, come off the
  * label.
+ *
+ * A row is `number.` and a space: an option description that starts with a number (`3.5x smaller`,
+ * `99. paths`) is not one, and neither is a number that does not continue the list, which is how a
+ * description opening with `22. ` stays a description.
  */
 function rpivRows(lines: string[]): { rows: RpivRow[]; last: { label: string; cursor: boolean } | null } {
   const kept = lines.map((line) => line.trim())
@@ -2594,16 +2602,19 @@ function rpivRows(lines: string[]): { rows: RpivRow[]; last: { label: string; cu
   const rows: RpivRow[] = [];
   let last: { label: string; cursor: boolean } | null = null;
   kept.forEach((line, index) => {
-    const row = /^(❯\s+)?(\d+)\.\s*(.*)$/.exec(line);
-    if (row) {
-      const text = row[3]!.trim();
-      const box = /^\[([^\]])\]\s*(.*)$/.exec(text);
+    const row = /^(❯\s+)?(\d+)\.(?:\s+(.*))?$/.exec(line);
+    const number = row ? Number(row[2]) : 0;
+    if (row && (rows.length === 0 || number === rows.at(-1)!.number + 1)) {
+      const text = (row[3] ?? "").trim();
+      // rpiv's own checkbox, `[ ]` or `[✔]`: `[x]` is an option's label, not a tick
+      const box = /^\[( |✔)\]\s*(.*)$/.exec(text);
       rows.push({
+        number,
         label: box ? box[2]!.trim() : text.replace(/\s*[✔✓]$/, "").trim(),
         description: null,
         cursor: Boolean(row[1]),
         boxed: box !== null,
-        checked: box ? box[1] !== " " : false,
+        checked: box ? box[1] === "✔" : false,
       });
       return;
     }
@@ -2699,11 +2710,17 @@ function parseRpivAsk(screen: string): ParsedPrompt | null {
     });
   }
 
-  const first = inside.findIndex((line) => /^\s*(?:❯\s+)?\d+\.\s/.test(line));
+  const first = inside.findIndex((line) => /^\s*(?:❯\s+)?\d+\.(?:\s|$)/.test(line));
   if (first < 0) return null;
   const headingLines = inside.slice(0, first).map((line) => line.trim()).filter(Boolean);
   const menu = rpivRows(inside.slice(first));
   if (menu.rows.length === 0) return null;
+  // rpiv scrolls a list too long for the pane: `↓`/`↑` on the left, or `(n/total)` over the rows,
+  // with the numbering starting past 1. The rows off the screen cannot be walked to, so the card
+  // would answer nothing or the wrong row — that screen stays terminal text
+  const more = [...body, ...lines.slice(bottom + 1, hintIndex)]
+    .some((line) => /^[↑↓↕]$/.test(line.trim()) || /^\(\d+\/\d+\)$/.test(line.trim()));
+  if (more || menu.rows[0]!.number !== 1) return null;
   const boxed = menu.rows.some((row) => row.boxed);
   const last = menu.rows.at(-1)!;
   // `Type something.` is always the last numbered row; focused, rpiv redraws it as the editor, so
@@ -2711,7 +2728,7 @@ function parseRpivAsk(screen: string): ParsedPrompt | null {
   const custom = last.label === RPIV_ASK_OTHER_LABEL || last.label === "" ? menu.rows.length - 1 : null;
   // a multiple choice commits on the row under its last one (`Submit`), which rpiv draws only once
   // the list ends: a pane too short for it cuts `Type something.` too, and a card that cannot send
-  // the commit would leave the question unanswered — so that screen stays terminal text
+  // the commit would leave the question unanswered
   if (boxed && custom === null) return null;
   // a list cut off above the pane's bottom keeps its last row's description in `last`
   if (!boxed && last.description === null && menu.last) last.description = menu.last.label;
@@ -2719,8 +2736,10 @@ function parseRpivAsk(screen: string): ParsedPrompt | null {
   if (options.length === 0) return null;
   const cursor = menu.rows.findIndex((row) => row.cursor);
   const selectedIndex = cursor >= 0 ? cursor : menu.last?.cursor ? menu.rows.length : 0;
-  // where Enter commits a multiple choice, one row under the ones it ticks
-  const commit = boxed ? menu.rows.length : null;
+  // where Enter commits a multiple choice: the row under the ones it ticks, counted from the
+  // numbers rpiv printed rather than from how many rows the pane happened to show
+  const commit = boxed ? last.number : null;
+  const checkedOptionIndices = menu.rows.flatMap((row, index) => (row.checked ? [index] : []));
   const title = questions.length > 0 ? questions[shownTab]?.label ?? "" : headingLines.length > 1 ? headingLines[0]! : "";
   const question = questions.length > 0 ? headingLines.join(" ") : headingLines.length > 1 ? headingLines.slice(1).join(" ") : headingLines[0] ?? "";
   return finishPrompt("pi", {
@@ -2736,7 +2755,7 @@ function parseRpivAsk(screen: string): ParsedPrompt | null {
     responder: "pi-ask",
     menuLabels: menu.rows.map((row) => row.label),
     selectedIndex,
-    checkedOptionIndices: menu.rows.flatMap((row, index) => (row.checked ? [index] : [])),
+    checkedOptionIndices,
     customMenuIndex: custom,
     rejectWithEscapeIndex: null,
     ...(custom === null ? {} : {
@@ -2745,12 +2764,15 @@ function parseRpivAsk(screen: string): ParsedPrompt | null {
       ],
     }),
     ...(commit === null ? {} : {
+      // Space toggles the row under the cursor, so a row that already carries the wanted tick is
+      // left alone: only the rows whose box differs from the request are walked to and pressed
       multiSteps: (choices: number[]): AnswerStep[] => {
         const keys: string[] = [];
         let at = selectedIndex;
-        for (const choice of choices) {
-          keys.push(...navigationKeys(choice - at), KEY.space);
-          at = choice;
+        for (const index of options.keys()) {
+          if (choices.includes(index) === checkedOptionIndices.includes(index)) continue;
+          keys.push(...navigationKeys(index - at), KEY.space);
+          at = index;
         }
         keys.push(...navigationKeys(commit - at), KEY.enter);
         return keySteps(keys);
