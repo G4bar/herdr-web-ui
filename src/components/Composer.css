@@ -47,6 +47,16 @@
   --fs-xl: var(--chat-fs-xl);
 }
 
+/* a card sits 12px above what comes next (the quick replies, or the box); with the keyboard up it
+   takes the box's own 8px */
+.prompt-dock:not(:empty) {
+  margin-bottom: var(--space-3);
+}
+
+[data-keyboard] .prompt-dock:not(:empty) {
+  margin-bottom: var(--space-2);
+}
+
 /* with no composer under it (a view-only pane) the card keeps the composer's bottom space */
 .prompt-dock:not(:empty):last-child {
   margin-bottom: var(--space-4);

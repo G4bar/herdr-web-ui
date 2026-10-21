@@ -93,7 +93,8 @@ describe("the question card", () => {
     expect(html.split('type="radio"').length - 1).toBe(2);
     expect(html).not.toContain('type="checkbox"');
     expect(html.split("prompt-card-submit").length - 1).toBe(1);
-    expect(html).toContain('<button type="button" class="btn prompt-card-submit" disabled="">Submit</button>');
+    // Submit sits in the card's sticky footer, so a long card never scrolls it out of reach
+    expect(html).toContain('<div class="prompt-card-actions"><button type="button" class="btn prompt-card-submit" disabled="">Submit</button></div>');
     expect(html).toContain('role="radiogroup"');
     expect(html).not.toContain("prompt-card-confirm");
     // nothing picked yet: the box gives way to the line that says what to do
@@ -125,6 +126,7 @@ describe("the question card", () => {
     expect(html).not.toContain('type="radio"');
     expect(html).not.toContain("prompt-card-preview");
     expect(html).not.toContain("prompt-card-submit");
+    expect(html).not.toContain("prompt-card-actions");
     // the custom row is still the only way to say something else
     expect(html).toContain("Or type your own answer");
   });
@@ -134,7 +136,7 @@ describe("the question card", () => {
     const html = render(card({ multi_select: true, options }));
     expect(html.split('type="checkbox"').length - 1).toBe(2);
     expect(html).toContain('role="group"');
-    expect(html).toContain(">Submit</button>");
+    expect(html).toContain(">Submit</button></div>");
     expect(html).toContain("Pick an option to see its preview.");
   });
 

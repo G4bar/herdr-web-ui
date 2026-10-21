@@ -251,9 +251,12 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
             {prompt.options[previewIndex]!.preview || <span className="prompt-card-preview-note">{t("No preview for this option.")}</span>}
           </pre>)}
       {(prompt.multi_select || previews) && (
-        <button type="button" className={`btn${(prompt.multi_select ? selected.size > 0 : chosen !== null) ? " btn-primary" : ""} prompt-card-submit`} disabled={pending || (prompt.multi_select ? selected.size === 0 : chosen === null)} onClick={(event) => void answer(prompt.multi_select ? { option_indices: [...selected].sort((a, b) => a - b) } : { option_index: chosen! }, event)}>
-          {prompt.multi_select && selected.size > 0 ? t("Submit ({n})", { n: selected.size }) : t("Submit")}
-        </button>
+        /* Submit stays on the card's fold when the options are many (PromptCard.css) */
+        <div className="prompt-card-actions">
+          <button type="button" className={`btn${(prompt.multi_select ? selected.size > 0 : chosen !== null) ? " btn-primary" : ""} prompt-card-submit`} disabled={pending || (prompt.multi_select ? selected.size === 0 : chosen === null)} onClick={(event) => void answer(prompt.multi_select ? { option_indices: [...selected].sort((a, b) => a - b) } : { option_index: chosen! }, event)}>
+            {prompt.multi_select && selected.size > 0 ? t("Submit ({n})", { n: selected.size }) : t("Submit")}
+          </button>
+        </div>
       )}
       {prompt.custom_option_index !== null && (
         <div className="prompt-card-custom">

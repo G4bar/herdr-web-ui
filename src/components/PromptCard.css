@@ -10,11 +10,13 @@
   flex: 0 1 auto;
   min-height: 0;
   max-height: max(calc(var(--app-height, 100dvh) * 0.6 - var(--prompt-card-strip)), calc(var(--touch-target) * 6));
-  padding: var(--space-3) var(--space-3) 0;
+  padding: var(--space-4) var(--space-4) 0;
   display: flex;
   flex-direction: column;
-  gap: var(--space-2);
+  gap: var(--space-3);
   overflow-y: auto;
+  /* a row focused under the sticky Submit is scrolled clear of it, not to it */
+  scroll-padding-bottom: calc(var(--touch-target) + var(--space-4));
   /* at its top, a drag down is still the card's: handed on to the page, Android Chrome takes it
      for pull-to-refresh and reloads the app, with a typed answer or a checked box in the card */
   overscroll-behavior: contain;
@@ -36,8 +38,8 @@
   position: sticky;
   bottom: 0;
   flex: none;
-  height: var(--space-3);
-  margin-top: calc(-1 * var(--space-2));
+  height: var(--space-4);
+  margin-top: calc(-1 * var(--space-3));
   background: linear-gradient(transparent, var(--bg-elevated));
   pointer-events: none;
 }
@@ -46,6 +48,8 @@
   display: flex;
   align-items: center;
   gap: var(--space-2);
+  /* the fold button overlaps the card's padding, so the header is its one line of text tall */
+  min-height: calc(var(--fs-sm) * var(--lh-base));
 }
 
 .prompt-card-header h2,
@@ -60,6 +64,7 @@
   color: var(--status-blocked);
   font-size: var(--fs-sm);
   font-weight: var(--fw-semibold);
+  line-height: var(--lh-base);
   overflow-wrap: anywhere;
 }
 
@@ -77,6 +82,10 @@
   width: var(--control-h);
   height: var(--control-h);
   margin-inline-start: auto;
+  /* 34px square on a 21px line: it hangs over the header's box, and its end reaches into the
+     card's padding, so the header reads as tall as the title's line */
+  margin-block: calc((var(--fs-sm) * var(--lh-base) - var(--control-h)) / 2);
+  margin-inline-end: calc(-1 * var(--space-2));
   padding: 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -110,6 +119,7 @@
   .prompt-card-fold {
     width: var(--touch-target);
     height: var(--touch-target);
+    margin-block: calc((var(--fs-sm) * var(--lh-base) - var(--touch-target)) / 2);
   }
 }
 
@@ -204,6 +214,13 @@
   color: var(--text-dim);
   font-size: var(--fs-xs);
   line-height: var(--lh-base);
+}
+
+/* title, question and hint read as one group: 4px, not the card's 12 */
+.prompt-card-header + .prompt-card-question,
+.prompt-card-header + .prompt-card-steps,
+.prompt-card-question + .prompt-card-hint {
+  margin-top: calc(-1 * var(--space-2));
 }
 
 /* The reference text (a command, a plan, a diff), in the card's one mono box. It is the part that
@@ -327,16 +344,21 @@
 .prompt-card-options {
   display: flex;
   flex-direction: column;
+  gap: 2px;
+  /* a row's hover and focus reach out to the card's edge, but its controls start on the text column
+     (8px of the row's padding, plus its transparent hairline, taken back here) */
+  margin-inline: calc(-1 * (var(--space-2) + var(--hairline)));
 }
 
 .prompt-card-option {
+  --row-line: calc(var(--fs-sm) * var(--lh-base));
   width: 100%;
   min-height: var(--control-h);
   display: flex;
-  /* the number sits on the label's first line whatever the mono font's metrics */
-  align-items: baseline;
+  /* the box and the number sit on the label's first line, whatever the mono font's metrics */
+  align-items: flex-start;
   gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
+  padding: var(--space-1) var(--space-2);
   background: transparent;
   border: var(--hairline) solid transparent;
   border-radius: var(--radius-md);
@@ -357,8 +379,20 @@
   background: var(--bg-hover);
 }
 
+/* the ring is the row's, not the box's inside it: it fits the 2px between rows and the bleed */
+.prompt-card-option:focus-visible,
+.prompt-card-option:has(> input:focus-visible) {
+  outline: var(--ring);
+  outline-offset: 0;
+}
+
+.prompt-card-option input:focus-visible {
+  outline: none;
+}
+
 .prompt-card-option:hover .prompt-card-number {
-  color: var(--accent);
+  border-color: var(--accent);
+  color: var(--text);
 }
 
 /* while an answer is on its way every option waits, the checkbox rows included (the busy state is
@@ -380,23 +414,34 @@
 }
 
 /* the number the agent's menu shows, as the key it is: typing it in the composer picks the
-   option too */
+   option too. It is as tall as its own line and centred on the label's first one */
 .prompt-card-number {
   flex: none;
-  min-width: var(--space-5);
+  box-sizing: border-box;
+  min-width: 1.8em;
+  height: 1.6em;
+  margin-top: calc((var(--row-line) - 1.6em) / 2);
+  padding-inline: 2px;
   border: var(--hairline) solid var(--border-strong);
   border-radius: var(--radius-sm);
   color: var(--text-dim);
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);
   font-weight: var(--fw-regular);
+  line-height: calc(1.6em - 2 * var(--hairline));
   text-align: center;
 }
 
 .prompt-card-option.is-checked .prompt-card-number,
 .prompt-card-option.is-typed .prompt-card-number {
   border-color: var(--accent);
-  color: var(--accent);
+  color: var(--text-strong);
+}
+
+/* the description under a picked row is read too: dim text on the tint is under 4.5:1 in some palettes */
+.prompt-card-option.is-checked .prompt-card-option-description,
+.prompt-card-option.is-typed .prompt-card-option-description {
+  color: var(--text);
 }
 
 .prompt-card-option input {
@@ -404,8 +449,8 @@
   align-self: flex-start;
   width: 16px;
   height: 16px;
-  /* centred on the label's first line */
-  margin: calc((var(--fs-sm) * var(--lh-base) - 16px) / 2) 0 0;
+  /* centred on the label's first line, on the number's centre */
+  margin: calc((var(--row-line) - 16px) / 2) 0 0;
   accent-color: var(--primary);
   cursor: inherit;
 }
@@ -448,11 +493,11 @@
    breaks, beside the question when there is room and under it when there is not */
 .prompt-card-confirm {
   position: sticky;
-  bottom: var(--space-3);
+  bottom: var(--space-4);
   z-index: 1;
   background: var(--bg-elevated);
   box-shadow:
-    0 var(--space-3) 0 var(--bg-elevated),
+    0 var(--space-4) 0 var(--bg-elevated),
     0 calc(-1 * var(--space-2)) var(--space-2) var(--bg-elevated);
   display: flex;
   flex-wrap: wrap;
@@ -482,8 +527,18 @@
   margin-left: auto;
 }
 
-.prompt-card-submit {
-  align-self: flex-start;
+/* Submit on the card's fold, as the confirm row is: right-aligned (the thumb's side, as the
+   composer's Send), solid down to the card's edge with a short fade above it */
+.prompt-card-actions {
+  position: sticky;
+  bottom: var(--space-4);
+  z-index: 1;
+  display: flex;
+  justify-content: flex-end;
+  background: var(--bg-elevated);
+  box-shadow:
+    0 var(--space-4) 0 var(--bg-elevated),
+    0 calc(-1 * var(--space-2)) var(--space-2) var(--bg-elevated);
 }
 
 .prompt-card-custom {
@@ -554,5 +609,9 @@
   /* a row with a description is already taller than a touch target */
   .prompt-card-option.has-description {
     padding-block: var(--space-1);
+  }
+
+  .prompt-card-actions .btn {
+    min-height: var(--touch-target);
   }
 }
