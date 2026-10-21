@@ -1,0 +1,26 @@
+
+ ask_user_question questions=[{"header":"Features","question":"Which features should we
+ enable?","multiSelect":true,...
+
+
+● lead · flexible
+─────────────────────────────────────────────────────────────────────────────────────────────
+
+  Features
+
+ Which features should we enable?
+
+❯ 1. [ ] Telemetry
+  Usage counters.
+  2. [ ] Beta flags
+  Experimental toggles.
+  3. [ ] Auto-update
+  Version checks.
+  4. [ ] Crash reports
+  Stack traces.
+↓
+─────────────────────────────────────────────────────────────────────────────────────────────
+
+ Enter to select · ↑/↓ to navigate · Space to toggle · n to add notes · Esc to cancel · Ctrl…
+ Sonnet 5.5 | think:high | ◫ 49k/1.0M (4.9%) AC | TPS: 18.1 tok/s | dir phase5-cap | LSP ✗
+ sync ⇡ | ◷ 2m55s
