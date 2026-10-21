@@ -66,7 +66,7 @@ import { FilesDialog } from "./components/FilesDialog.tsx";
 import { folderQueryFor } from "./lib/paletteFolders.ts";
 import { FileViewer } from "./components/FileViewer.tsx";
 import { WebPanel } from "./components/WebPanel.tsx";
-import { panelFrameUrl, panelUrl, tabUrl, WebPanelContext, wantsPanel } from "./lib/webPanel.ts";
+import { panelFrameUrl, panelUrl, pushTarget, WebPanelContext, wantsPanel } from "./lib/webPanel.ts";
 import { RepoDiffViewer } from "./components/RepoDiffViewer.tsx";
 import { OpenFileContext } from "./lib/filePaths.ts";
 import { useFileViewer } from "./lib/useFileViewer.ts";
@@ -123,7 +123,8 @@ function storedSelection(): StoredSelection | null {
 
 function storeSelection(machineId: string, paneId: string | null): void {
   for (const storage of ["sessionStorage", "localStorage"] as const) {
-    try { window[storage].setItem(SELECTION_KEY, JSON.stringify({ machine_id: machineId, pane_id: paneId })); } catch {}
+    // storage can be unavailable (private mode, a full quota): the selection is then not remembered
+    try { window[storage].setItem(SELECTION_KEY, JSON.stringify({ machine_id: machineId, pane_id: paneId })); } catch { /* best effort */ }
   }
 }
 
@@ -434,26 +435,32 @@ export function App() {
   useEffect(() => {
     if (viewing !== null && fileDocked) setFilesOpen(false);
   }, [viewing, fileDocked]);
-  // a page this PC serves, beside the pane in the file panel's place: a file docked there replaces it
-  const [webPage, setWebPage] = useState<string | null>(null);
+  // a page this PC serves, beside the pane in the file panel's place: a file docked there replaces it.
+  // `serial` counts the pushes of that same address, so pushing it again loads the frame again
+  const [webPage, setWebPage] = useState<{ url: string; serial: number } | null>(null);
   useEffect(() => {
     if (viewing !== null && fileDocked) setWebPage(null);
   }, [viewing, fileDocked]);
+  const showWebPage = useCallback((url: string) => {
+    if (viewing !== null && fileDocked) closeFile();
+    setWebPage((previous) => ({ url, serial: previous !== null && previous.url === url ? previous.serial + 1 : 0 }));
+  }, [viewing, fileDocked, closeFile]);
   const openWebPage = useCallback((uri: string, shiftKey: boolean, machineId: string) => {
     if (machineId !== LOCAL_MACHINE || !wantsPanel(settings.webLinks, shiftKey)) return false;
     const url = panelUrl(uri, window.location);
     if (url === null) return false;
-    if (viewing !== null && fileDocked) closeFile();
-    setWebPage(url);
+    showWebPage(url);
     return true;
-  }, [settings.webLinks, viewing, fileDocked, closeFile]);
-  // a page an agent asked this app to show (POST /api/web-panel/open): the panel when it can frame
-  // it, else a tab, and nothing when even a tab would show another device's page.
+  }, [settings.webLinks, showWebPage]);
+  // A page an agent asked this app to show (POST /api/web-panel/open): the request named the panel,
+  // so where a clicked link would go (the Web links setting) does not apply; a tab only when the
+  // panel cannot show the page, and nothing when even a tab would show another device's page.
   const openPanelUrl = useCallback((uri: string) => {
-    if (openWebPage(uri, false, LOCAL_MACHINE)) return;
-    const tab = tabUrl(uri, window.location);
-    if (tab !== null) window.open(tab, "_blank", "noopener");
-  }, [openWebPage]);
+    const target = pushTarget(uri, window.location, filePanelAvailable);
+    if (target === null) return;
+    if ("tab" in target) window.open(target.tab, "_blank", "noopener");
+    else showWebPage(target.panel);
+  }, [filePanelAvailable, showWebPage]);
   const openPanelUrlRef = useRef(openPanelUrl); openPanelUrlRef.current = openPanelUrl;
   // the panel is no dialog, so no trap gives the focus back when it closes: what opened the file
   // (a link in the chat, a row of Files) gets it, as it does from the popup
@@ -1794,7 +1801,7 @@ export function App() {
           <FileViewer key={viewing.path} docked panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} path={viewing.path} paneId={viewing.paneId} onClose={closeFile} onOpen={(path) => openFile({ ...viewing, path, presentation })} onKind={reportFileKind} onTogglePresentation={toggleFilePresentation} keyboardActive={!settingsOpen} />
         </MachineContext.Provider>}
         {webPage !== null && filePanelAvailable && !(viewing !== null && fileDocked) &&
-          <WebPanel key={webPage} url={webPage} onClose={() => setWebPage(null)} panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} />}
+          <WebPanel key={webPage.url} url={webPage.url} refresh={webPage.serial} onClose={() => setWebPage(null)} panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} />}
       </div>
 
       <MachineContext.Provider value={newSessionMachineId}><NewSessionDialog
