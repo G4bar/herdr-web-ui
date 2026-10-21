@@ -71,14 +71,20 @@ export function answerRefusal(prompt: InteractivePrompt): string {
     : t("Choose one of the options above: type {range}.", { range: range(prompt) });
 }
 
+/** A prompt whose card shows previews: it waits for a pick and Submit, so a typed number only picks. */
+export function hasPreviews(prompt: InteractivePrompt): boolean {
+  return prompt.options.some((option) => typeof option.preview === "string" && option.preview.length > 0);
+}
+
 /**
  * A typed message picking an approval's option (or a plan's, or a menu's: Claude's
  * "Review your answers" submits every answer at once, Codex's menus continue or stop)
  * could act on a stray "yes" or "1": the card asks for a tap on Confirm first. A tap on
- * an option in the card is explicit already, and a plan's own reply is feedback.
+ * an option in the card is explicit already, and a plan's own reply is feedback. A
+ * question with previews is the same: its card checks the option and waits for Submit.
  */
 export function needsConfirmation(prompt: InteractivePrompt, answer: TypedAnswer): boolean {
-  return (prompt.kind === "approval" || prompt.kind === "plan" || prompt.kind === "menu") && answer.option_index !== undefined;
+  return (prompt.kind === "approval" || prompt.kind === "plan" || prompt.kind === "menu" || hasPreviews(prompt)) && answer.option_index !== undefined;
 }
 
 /** What pressed an answer in the card; `unknown` when the browser's click does not say. */
