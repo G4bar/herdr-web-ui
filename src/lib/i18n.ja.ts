@@ -733,6 +733,7 @@ export const JA: Record<string, string> = {
   "Type your reply…": "返答を入力…",
   "Type {range} or your own reply…": "{range} または返答を入力…",
   "Type {range} to choose…": "{range} を入力して選択…",
+  "Type {range} to pick, then Submit": "{range} を入力して選択し、送信してください",
   "Choose with the option numbers above, e.g. 1 3.": "上の選択肢の番号で選んでください (例: 1 3)。",
   "Choose one of the options above: type {range}.": "上の選択肢から 1 つ選んでください: {range} を入力。",
   "Couldn't load suggestions. Keep typing to try again.": "候補を読み込めませんでした。入力を続けると再試行します。",

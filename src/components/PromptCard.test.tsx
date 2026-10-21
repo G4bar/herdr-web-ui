@@ -1,6 +1,7 @@
-import { describe, expect, it } from "bun:test";
+import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import TestRenderer, { act } from "react-test-renderer";
 
 import type { InteractivePrompt } from "../../shared/protocol.ts";
 import { SettingsProvider } from "../lib/settings.ts";
@@ -28,6 +29,33 @@ const render = (prompt: InteractivePrompt, typedAnswer: { option_index: number }
 }));
 
 const text = (html: string) => html.replace(/<[^>]*>/g, "");
+
+// The one stateful test below mounts the card, so SettingsProvider's effect and the answer path need
+// the browser globals they read; every other test here renders to static markup and needs none.
+const browserGlobals = ["window", "document", "localStorage", "IS_REACT_ACT_ENVIRONMENT"] as const;
+const savedGlobals = new Map<string, PropertyDescriptor | undefined>();
+
+beforeAll(() => {
+  for (const name of browserGlobals) savedGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+  const store = new Map<string, string>();
+  const media = { matches: false, media: "", addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false };
+  const localStorage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value), removeItem: (key: string) => void store.delete(key) };
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: localStorage });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { matchMedia: () => media, getSelection: () => null, addEventListener() {}, removeEventListener() {}, localStorage } });
+  Object.defineProperty(globalThis, "document", { configurable: true, value: {
+    addEventListener() {}, removeEventListener() {}, activeElement: null, body: {}, querySelector: () => null, getSelection: () => null,
+    documentElement: { dataset: {}, style: { setProperty() {}, removeProperty() {} }, lang: "", colorScheme: "" },
+  } });
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+});
+
+afterAll(() => {
+  for (const name of browserGlobals) {
+    const saved = savedGlobals.get(name);
+    if (saved) Object.defineProperty(globalThis, name, saved);
+    else Reflect.deleteProperty(globalThis, name);
+  }
+});
 
 describe("the question card", () => {
   it("heads the card with its header, and with its title where no header came", () => {
@@ -108,6 +136,35 @@ describe("the question card", () => {
     expect(html).toContain('role="group"');
     expect(html).toContain(">Submit</button>");
     expect(html).toContain("Pick an option to see its preview.");
+  });
+
+  // a choice made in the card has to survive a later typed answer, which a fresh render cannot show
+  it("checks the radio a later typed answer picks, and submits that option", async () => {
+    const bodies: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (_url: string, init?: { body?: string }) => {
+      bodies.push(String(init?.body));
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    const options = [{ label: "Sidebar", description: null, preview: "+---+" }, { label: "Tabs", description: null }];
+    const element = (typedAnswer: { option_index: number } | null) => createElement(SettingsProvider, null,
+      createElement(PromptCard, { paneId: "p1", prompt: card({ options }), typedAnswer, onPromptChanged() {}, onAnswered() {} }));
+    const radios = (tree: TestRenderer.ReactTestRenderer) => tree.root.findAll((node) => node.type === "input");
+    let tree!: TestRenderer.ReactTestRenderer;
+    try {
+      await act(async () => { tree = TestRenderer.create(element(null)); });
+      await act(async () => { radios(tree)[0]!.props.onChange(); });
+      expect(radios(tree).map((radio) => radio.props.checked)).toEqual([true, false]);
+      // the number typed in the composer is picked over the click, and is what Submit sends
+      await act(async () => { tree.update(element({ option_index: 1 })); });
+      expect(radios(tree).map((radio) => radio.props.checked)).toEqual([false, true]);
+      const submit = tree.root.findAll((node) => typeof node.type === "string" && String(node.props.className ?? "").includes("prompt-card-submit"))[0]!;
+      expect(submit.props.disabled).toBe(false);
+      await act(async () => { submit.props.onClick({ nativeEvent: { pointerType: "mouse", detail: 1 }, currentTarget: {} }); });
+      expect(JSON.parse(bodies[0]!)).toEqual({ pane_id: "p1", prompt_id: "p1", option_index: 1 });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });
 

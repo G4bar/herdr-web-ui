@@ -942,6 +942,14 @@ function recommendedIndex(value: unknown, count: number): number | null {
   return Number.isInteger(value) && (value as number) >= 0 && (value as number) < count ? value as number : null;
 }
 
+/** Argument text has no ceiling of its own: bound what the card shows, and so what its id names. */
+const PI_ASK_HEADER_CAP = 200;
+const PI_ASK_PREVIEW_CAP = 8_000;
+
+function capped(text: string, max: number): string {
+  return text.length > max ? text.slice(0, max) : text;
+}
+
 /** A call's questions, or null for arguments that are not the shape omo asks with. */
 function omoAskOf(call: OmoAskCall): OmoAsk | null {
   const questions = (call.args as { questions?: unknown } | null | undefined)?.questions;
@@ -954,12 +962,12 @@ function omoAskOf(call: OmoAskCall): OmoAsk | null {
       description: typeof option?.["description"] === "string" && option["description"] ? option["description"] : null,
       // the screen never shows an option's preview: only the call's arguments carry one, and
       // the card reads it from here (parseRpivAsk)
-      ...(typeof option?.["preview"] === "string" && option["preview"] ? { preview: option["preview"] } : {}),
+      ...(typeof option?.["preview"] === "string" && option["preview"] ? { preview: capped(option["preview"], PI_ASK_PREVIEW_CAP) } : {}),
     }));
     if (options.some((option) => !option.label)) return null;
     const recommended = recommendedIndex(question["recommended"], options.length);
     ask.questions.push({
-      header: question["header"], question: question["question"], multiSelect: question["multiSelect"] === true,
+      header: capped(question["header"], PI_ASK_HEADER_CAP), question: question["question"], multiSelect: question["multiSelect"] === true,
       ...(recommended === null ? {} : { recommended }), options,
     });
   }
@@ -2693,9 +2701,9 @@ function rpivAskOnScreen(asks: OmoAsk[], question: string, labels: string[], mul
   if (matches.length !== 1) return null;
   const [match] = matches;
   return {
-    header: match!.header,
+    header: capped(match!.header, PI_ASK_HEADER_CAP),
     recommended: match!.recommended ?? null,
-    previews: match!.options.map((option) => option.preview ?? null),
+    previews: match!.options.map((option) => option.preview === undefined ? null : capped(option.preview, PI_ASK_PREVIEW_CAP)),
   };
 }
 
@@ -3961,6 +3969,10 @@ function rpivAskHinted(screen: string): boolean {
  * header, previews and recommendation its screen never shows. Read only when the screen is rpiv's
  * questionnaire, from the session the pane's agent report names, through the same reader and file
  * cache omo's form uses. A pane that names no written session keeps its screen-only card.
+ *
+ * Cost per poll: only a screen showing rpiv's hint reaches here, and the reader caches by inode,
+ * size and mtime, so a quiet session is not parsed twice; a session line too long to parse fails
+ * closed (no join) rather than reading on.
  */
 async function piAsksFor(paneId: string): Promise<OmoAsk[]> {
   const found = await piTranscriptPath(paneId).catch(() => null);

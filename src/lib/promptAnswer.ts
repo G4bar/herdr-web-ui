@@ -57,6 +57,8 @@ function range(prompt: InteractivePrompt): string {
 /** How a typed message answers this prompt: the composer's placeholder while it waits. */
 export function answerHint(prompt: InteractivePrompt): string {
   if (prompt.multi_select) return t("Type the numbers you choose, e.g. 1 3");
+  // a previewed card checks the option a number names and waits for Submit
+  if (hasPreviews(prompt)) return t("Type {range} to pick, then Submit", { range: range(prompt) });
   // a free-form question (Codex's queue) has no options to number
   if (choices(prompt).length === 0) return t("Type your reply…");
   return prompt.custom_option_index !== null
@@ -84,6 +86,7 @@ export function hasPreviews(prompt: InteractivePrompt): boolean {
  * question with previews is the same: its card checks the option and waits for Submit.
  */
 export function needsConfirmation(prompt: InteractivePrompt, answer: TypedAnswer): boolean {
+  // a multiple choice card with previews is not the typed path: "1 3" still sends immediately
   return (prompt.kind === "approval" || prompt.kind === "plan" || prompt.kind === "menu" || hasPreviews(prompt)) && answer.option_index !== undefined;
 }
 

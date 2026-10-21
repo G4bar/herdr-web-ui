@@ -8,7 +8,8 @@
 - The card carries what the pane's screen never shows, joined from the session's
   `ask_user_question` call: the question's header in its heading, each option's `preview`
   (a single choice then picks a radio and waits for `Submit`, so a preview can be read before
-  committing), and the option the agent recommends, tagged without being pre-selected. Where
+  committing; a number typed in the message box picks the same way and the box says so), and the
+  option the agent recommends, tagged without being pre-selected. Where
   the call cannot be matched to the screen (no session, another question, other labels, two
   open questions alike), the card stays exactly what the screen says and the answer keys never
   come from the session.
