@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import { panelUrl, wantsPanel } from "./webPanel.ts";
+import { LOCAL_MACHINE } from "../../shared/machines.ts";
+import { panelFrameUrl, panelUrl, tabUrl, wantsPanel } from "./webPanel.ts";
 
 const lan = { protocol: "http:", hostname: "100.123.228.51", origin: "http://100.123.228.51:7317" };
 const local = { protocol: "http:", hostname: "localhost", origin: "http://localhost:7317" };
@@ -32,12 +33,45 @@ describe("panelUrl", () => {
     expect(panelUrl("http://", lan)).toBeNull();
   });
 
-  it("reaches a loopback page over the app's own https, and leaves another http page to a tab", () => {
+  it("reaches a loopback page over the app's own https, but never over the app itself", () => {
     const tls = { protocol: "https:", hostname: "pc.tail.ts.net", origin: "https://pc.tail.ts.net" };
+    const tlsApp = { protocol: "https:", hostname: "pc.tail.ts.net", origin: "https://pc.tail.ts.net:8443" };
+    const tlsLocal = { protocol: "https:", hostname: "localhost", origin: "https://localhost:7317" };
     expect(panelUrl("http://localhost:5173/", tls)).toBe("https://pc.tail.ts.net:5173/");
     expect(panelUrl("http://127.0.0.1:3000/docs?x=1#top", tls)).toBe("https://pc.tail.ts.net:3000/docs?x=1#top");
+    expect(panelUrl("http://127.0.0.1:7318/", tls)).toBe("https://pc.tail.ts.net:7318/");
     expect(panelUrl("https://localhost:5173/", tls)).toBe("https://pc.tail.ts.net:5173/");
+    // the app's own port under the app's host is the app, at 443 or at its own https port
+    expect(panelUrl("http://127.0.0.1:7317/", tls)).toBeNull();
+    expect(panelUrl("http://localhost:7317/", tls)).toBeNull();
+    expect(panelUrl("http://127.0.0.1:8443/", tlsApp)).toBeNull();
+    // another site is mixed content, and a loopback app has no https of its own to lean on
     expect(panelUrl("http://example.com:5173/", tls)).toBeNull();
+    expect(panelUrl("http://localhost:5173/", tlsLocal)).toBeNull();
+    expect(panelUrl("https://localhost:5173/", tlsLocal)).toBe("https://localhost:5173/");
+  });
+});
+
+describe("tabUrl", () => {
+  const tailnet = { protocol: "https:", hostname: "pc.tail.ts.net", origin: "https://pc.tail.ts.net" };
+  const local = { protocol: "http:", hostname: "localhost", origin: "http://localhost:7317" };
+
+  it("opens another site from anywhere, but this PC's loopback page only on this PC", () => {
+    expect(tabUrl("https://example.com/x", tailnet)).toBe("https://example.com/x");
+    expect(tabUrl("http://localhost:5173/", tailnet)).toBeNull();
+    expect(tabUrl("http://localhost:5173/", local)).toBe("http://localhost:5173/");
+    expect(tabUrl("javascript:alert(1)", local)).toBeNull();
+  });
+});
+
+describe("panelFrameUrl", () => {
+  const frame = (machineId: string) => ({ type: "machine-message" as const, machine_id: machineId, message: { type: "web-panel-open" as const, url: "http://localhost:7399/" } });
+
+  it("takes this PC's frame in a visible tab, and no other PC's", () => {
+    expect(panelFrameUrl(frame(LOCAL_MACHINE), true)).toBe("http://localhost:7399/");
+    expect(panelFrameUrl(frame("pc-b"), true)).toBeNull();
+    expect(panelFrameUrl(frame(LOCAL_MACHINE), false)).toBeNull();
+    expect(panelFrameUrl({ type: "machine-message", machine_id: LOCAL_MACHINE, message: { type: "error", code: "x", message: "y" } }, true)).toBeNull();
   });
 });
 

@@ -1835,12 +1835,7 @@ export function createServer(
 
       const readOnly = access.level === "full" && access.role === "watch";
       const mutating = !["GET", "HEAD", "OPTIONS"].includes(request.method);
-      // A script's Bearer request (scripts/open-panel.sh) needs no Origin: no Origin and no
-      // Sec-Fetch-Site is no browser, and a cross-site page cannot send Bearer without a CORS
-      // preflight this server never grants. One route only, and no cookie gets that path.
-      const scriptPanelOpen = pathname === "/api/web-panel/open" && bearerMatches(request, token)
-        && !request.headers.has("origin") && !request.headers.has("sec-fetch-site");
-      if (pathname.startsWith("/api/") && mutating && !scriptPanelOpen && !sameOrigin(request)) {
+      if (pathname.startsWith("/api/") && mutating && !sameOrigin(request)) {
         return jsonResponse({ error: { code: "invalid_origin", message: "Use controls from this app" } }, 403);
       }
       // An empty segment ("//") reads as another route to the checks below, while the PC proxy
@@ -1972,8 +1967,9 @@ export function createServer(
         try { target = new URL(typeof body.url === "string" ? body.url : ""); } catch { return badRequest("invalid_url", badUrl); }
         if (!/^https?:$/.test(target.protocol) || (typeof body.url === "string" && body.url.length > 2048)) return badRequest("invalid_url", badUrl);
         if (body.label !== undefined && (typeof body.label !== "string" || body.label.length > 80)) return badRequest("invalid_label", "a label of at most 80 characters");
-        broadcastAll({ type: "web-panel-open", url: body.url, ...(body.label === undefined ? {} : { label: body.label }) });
-        // 0 tells the caller no browser has this app open; nothing is kept for one that opens later
+        // this PC's page or nothing: a remote PC's panel is its own, so no pane client gets the frame
+        // either, and 0 tells the caller no page has this app open, since none is kept for a later one
+        machines?.localMessage({ type: "web-panel-open", url: body.url, ...(body.label === undefined ? {} : { label: body.label }) });
         return jsonResponse({ delivered: machines?.pageStreams() ?? 0 } satisfies WebPanelOpenResponse);
       }
 

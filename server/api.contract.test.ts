@@ -4,6 +4,7 @@ import { appendFileSync, chmodSync, copyFileSync, mkdirSync, mkdtempSync, exists
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ConversationMonitor } from "./conversation-monitor.ts";
+import { DeviceStore } from "./devices.ts";
 import { createServer } from "./index.ts";
 import type { AgentKind, AgentStatus, ApiError, HealthAuth, IntegrationsResponse, LanExposure, PortalStatus, PushKey, RemoteAccess, SessionSnapshot, TabMoved, PaneFindResponse, PaneReadResult, UsageReport, WebPanelOpenResponse, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
 import { HerdrUpdater } from "./herdr-update.ts";
@@ -3550,11 +3551,16 @@ describe("repository diff of a pane's folder", () => {
   });
 });
 
+
 describe("POST /api/web-panel/open", () => {
   const token = "web-panel-token";
   const route = "/api/web-panel/open";
   const page = "http://127.0.0.1:7399/docs";
+  const cookie = `herdr_web_token=${token}`;
   let gated: ReturnType<typeof createServer>;
+  let watched: ReturnType<typeof createServer>;
+  let watchBase = "";
+  let watchCookie = "";
   let stateDir = "";
   let controller: AbortController | undefined;
   const at = () => `http://127.0.0.1:${gated.port}`;
@@ -3563,34 +3569,53 @@ describe("POST /api/web-panel/open", () => {
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
+  const answer = async (response: Response) => [response.status, ((await response.json()) as ApiError).error.code] as const;
+  const delivered = async () => ((await (await open({ url: page })).json()) as WebPanelOpenResponse).delivered;
 
   beforeAll(() => {
     stateDir = mkdtempSync(join(tmpdir(), "herdr-web-ui-web-panel-"));
     gated = createServer({ port: 0, token, stateDir });
+    const watchState = join(stateDir, "watch");
+    const devices = new DeviceStore(watchState);
+    const paired = devices.pair(devices.startPairing().code, "Watch", "watch")!;
+    // a first pairing is dropped unless the device is seen once
+    expect(devices.match(paired.token)).not.toBeNull();
+    watchCookie = `herdr_web_device=${encodeURIComponent(paired.token)}`;
+    watched = createServer({ port: 0, stateDir: watchState });
+    watchBase = `http://127.0.0.1:${watched.port}`;
   });
 
   afterAll(() => {
     controller?.abort();
     gated?.stop();
+    watched?.stop();
     rmSync(stateDir, { recursive: true, force: true });
   });
 
-  it("needs the token, and refuses another site's Origin even with it", async () => {
+  it("needs the token, and keeps the origin guard for every request that carries a cookie", async () => {
     const anonymous = await fetch(`${at()}${route}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: page }) });
-    expect([anonymous.status, ((await anonymous.json()) as ApiError).error.code]).toEqual([401, "unauthorized"]);
-    // a script states no Origin at all; one that states another site, or a cross-site fetch, is refused
-    for (const headers of [{ origin: "https://evil.example" }, { "sec-fetch-site": "cross-site" }] as Record<string, string>[]) {
-      const refused = await open({ url: page }, headers);
-      expect([headers, refused.status, ((await refused.json()) as ApiError).error.code]).toEqual([headers, 403, "invalid_origin"]);
-    }
-    // the same from a cookie: the bare Bearer path is the only one that skips the guard
-    const cookie = `herdr_web_token=${token}`;
-    const foreign = await fetch(`${at()}${route}`, { method: "POST", headers: { cookie, origin: "https://evil.example", "content-type": "application/json" }, body: JSON.stringify({ url: page }) });
-    expect(foreign.status).toBe(403);
+    expect(await answer(anonymous)).toEqual([401, "unauthorized"]);
+    // a script states no Origin at all and carries no cookie: the guard's non-browser case, as it was
     expect((await open({ url: page })).status).toBe(200);
-    // and this app's own request still passes the guard it always did
-    const sameOrigin = await fetch(`${at()}${route}`, { method: "POST", headers: { cookie, origin: at(), "content-type": "application/json" }, body: JSON.stringify({ url: page }) });
-    expect(sameOrigin.status).toBe(200);
+    // a browser's request states where it came from, and one from another site is refused
+    for (const headers of [{ origin: "https://evil.example" }, { "sec-fetch-site": "cross-site" }] as Record<string, string>[]) {
+      expect([headers, ...(await answer(await open({ url: page }, headers)))]).toEqual([headers, 403, "invalid_origin"]);
+    }
+    // a cookie keeps the guard whatever else the request says, a Bearer header included
+    const cookieOnly = await fetch(`${at()}${route}`, { method: "POST", headers: { cookie, "content-type": "application/json" }, body: JSON.stringify({ url: page }) });
+    expect(await answer(cookieOnly)).toEqual([403, "invalid_origin"]);
+    expect(await answer(await open({ url: page }, { cookie }))).toEqual([403, "invalid_origin"]);
+    // this app's own request still passes, as it always did
+    expect((await open({ url: page }, { cookie, origin: at() })).status).toBe(200);
+  });
+
+  it("refuses a watching device, even from this app's own origin", async () => {
+    const response = await fetch(`${watchBase}${route}`, {
+      method: "POST",
+      headers: { cookie: watchCookie, origin: watchBase, "content-type": "application/json" },
+      body: JSON.stringify({ url: page }),
+    });
+    expect(await answer(response)).toEqual([403, "read_only"]);
   });
 
   it("takes only an http or https address of a sane length, and a short label", async () => {
@@ -3602,13 +3627,12 @@ describe("POST /api/web-panel/open", () => {
       [{ url: page, label: "a".repeat(81) }, "invalid_label"],
     ];
     for (const [body, code] of refused) {
-      const answer = await open(body);
-      expect([body, answer.status, ((await answer.json()) as ApiError).error.code]).toEqual([body, 400, code]);
+      expect([body, ...(await answer(await open(body)))]).toEqual([body, 400, code]);
     }
   });
 
-  it("counts the open page streams, and the page takes the frame", async () => {
-    expect(await (await open({ url: page, label: "the page" })).json()).toEqual({ delivered: 0 } satisfies WebPanelOpenResponse);
+  it("counts the pages that have this app open, and the page takes the frame", async () => {
+    expect(await delivered()).toBe(0);
     controller = new AbortController();
     const stream = await fetch(`${at()}/api/machines/events`, { headers: { authorization: `Bearer ${token}` }, signal: controller.signal });
     const reader = stream.body!.getReader();
@@ -3624,5 +3648,30 @@ describe("POST /api/web-panel/open", () => {
     expect(frames().find((frame) => frame.message?.type === "web-panel-open"))
       .toEqual({ type: "machine-message", machine_id: "local", message: { type: "web-panel-open", url: page, label: "the page" } });
     controller.abort();
+  });
+
+  it("reaches this app's pages and no pane socket: a remote PC's panel is its own", async () => {
+    for (let i = 0; i < 50 && (await delivered()) !== 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(await delivered()).toBe(0);
+    const socket = connectWithCookie(`ws://127.0.0.1:${gated.port}/ws`, cookie);
+    const frames: string[] = [];
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => reject(new Error("no snapshot frame")), 10_000);
+        socket.onerror = () => { clearTimeout(timer); reject(new Error("websocket error")); };
+        socket.onmessage = (event) => {
+          frames.push(String(event.data));
+          if ((JSON.parse(String(event.data)) as { type: string }).type !== "snapshot") return;
+          clearTimeout(timer);
+          resolve();
+        };
+      });
+      expect(await delivered()).toBe(0);
+      // fixed wait: proving that a pane socket gets no frame, which no event can confirm
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(frames.filter((frame) => frame.includes("web-panel-open"))).toEqual([]);
+    } finally {
+      socket.close();
+    }
   });
 });

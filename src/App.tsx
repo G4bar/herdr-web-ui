@@ -66,7 +66,7 @@ import { FilesDialog } from "./components/FilesDialog.tsx";
 import { folderQueryFor } from "./lib/paletteFolders.ts";
 import { FileViewer } from "./components/FileViewer.tsx";
 import { WebPanel } from "./components/WebPanel.tsx";
-import { panelUrl, WebPanelContext, wantsPanel } from "./lib/webPanel.ts";
+import { panelFrameUrl, panelUrl, tabUrl, WebPanelContext, wantsPanel } from "./lib/webPanel.ts";
 import { RepoDiffViewer } from "./components/RepoDiffViewer.tsx";
 import { OpenFileContext } from "./lib/filePaths.ts";
 import { useFileViewer } from "./lib/useFileViewer.ts";
@@ -448,11 +448,11 @@ export function App() {
     return true;
   }, [settings.webLinks, viewing, fileDocked, closeFile]);
   // a page an agent asked this app to show (POST /api/web-panel/open): the panel when it can frame
-  // it, else a tab. A hidden tab opens nothing: it would take over the page the user comes back to.
+  // it, else a tab, and nothing when even a tab would show another device's page.
   const openPanelUrl = useCallback((uri: string) => {
-    if (document.visibilityState !== "visible") return;
     if (openWebPage(uri, false, LOCAL_MACHINE)) return;
-    window.open(uri, "_blank", "noopener");
+    const tab = tabUrl(uri, window.location);
+    if (tab !== null) window.open(tab, "_blank", "noopener");
   }, [openWebPage]);
   const openPanelUrlRef = useRef(openPanelUrl); openPanelUrlRef.current = openPanelUrl;
   // the panel is no dialog, so no trap gives the focus back when it closes: what opened the file
@@ -686,8 +686,12 @@ export function App() {
         setMachineRosterLoaded(true);
         return;
       }
-      // a page an agent asked for (POST /api/web-panel/open), about no pane
-      if (payload.type === "machine-message" && payload.message.type === "web-panel-open") { openPanelUrlRef.current(payload.message.url); return; }
+      // a page an agent asked for (POST /api/web-panel/open), about no pane, and only this PC's page
+      if (payload.type === "machine-message" && payload.message.type === "web-panel-open") {
+        const uri = panelFrameUrl(payload, document.visibilityState === "visible");
+        if (uri !== null) openPanelUrlRef.current(uri);
+        return;
+      }
       const machine = machinesRef.current.find((m) => m.id === payload.machine_id);
       if (!machine) return;
       const message = payload.message;

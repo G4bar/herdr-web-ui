@@ -234,9 +234,10 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  POST   /api/push/test      { endpoint }      -> 204 | 404 subscription_not_found | 410 subscription_gone | 502 push_failed
  *  POST   /api/web-panel/open { url, label? }   -> WebPanelOpenResponse (an agent asks the browser's
  *         side panel to show `url`: http or https, at most 2048 characters, `label` at most 80.
- *         `delivered` counts the /api/machines/events streams that took it, so 0 means no browser has
- *         this app open, and nothing is kept for one that opens later. The page applies the panel's
- *         own rules: a page it cannot frame opens in a tab)
+ *         `delivered` is how many browser pages have this app open and took the frame: 0 means no
+ *         page does, and one that opens later has missed it. The page applies the panel's own rules:
+ *         a page it cannot frame opens in a new tab, and a hidden tab takes the frame and opens
+ *         nothing. A frame is only for the PC the app itself runs on)
  *  GET    /api/usage[?refresh=1]         -> UsageReport (plan limits of the AI subscriptions signed in on this PC)
  *  Errors: non-2xx with { error: { code, message } }
  *
@@ -248,9 +249,9 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  the shared token (HERDR_WEB_TOKEN) as cookie or `Authorization: Bearer <token>`. With a
  *  token configured, only the last two count, this PC and its Tailscale login included. Without one, and while no
  *  device is paired, anything that reaches the server is let in as before (the startup
- *  warning says so). POST /api/web-panel/open alone also takes a request that states no Origin
- *  and no Sec-Fetch-Site, as a script's Bearer request does: a page cannot send Bearer without
- *  a CORS preflight this server never grants, and no cookie ever gets that path.
+ *  warning says so). One that changes something states an Origin the app accepts, or none at all
+ *  together with no cookie and no Sec-Fetch-Site, as a script's Bearer request does: a browser's
+ *  request always states where it came from.
  *  Refusals answer 401 `unauthorized` (403 `other_user` for another Tailscale
  *  login, when no token is configured); the upgrade is refused. Static files are always public.
  */
@@ -449,7 +450,7 @@ export interface PushKey {
   readonly public_key: string;
 }
 
-/** POST /api/web-panel/open: a page for the browser's side panel (an agent's script; see Access). */
+/** POST /api/web-panel/open: a page for the browser's side panel (an agent's script). */
 export interface WebPanelOpenRequest {
   /** http or https, at most 2048 characters: the server does not apply the panel's own rules to it */
   url: string;
@@ -457,7 +458,10 @@ export interface WebPanelOpenRequest {
   label?: string;
 }
 
-/** POST /api/web-panel/open: `delivered` open page streams took the frame; 0 means no browser has this app open. */
+/**
+ * POST /api/web-panel/open: `delivered` browser pages took the frame. It counts the pages that have
+ * this app open, not the ones that showed it: a hidden tab takes the frame and opens nothing.
+ */
 export interface WebPanelOpenResponse {
   readonly delivered: number;
 }
@@ -1278,7 +1282,8 @@ export type ServerMessage =
   /** the answer to a `ping`, with its id; only this frame, for a ping in flight, ends the client's liveness probe */
   | { type: "pong"; id: number }
   /** a page an agent asked for (POST /api/web-panel/open): this app shows it in its side panel or a
-   * tab, and a hidden tab shows neither. About no pane; `label` is the caller's name for it */
+   * tab, and a hidden tab shows neither. Only this PC's own page, about no pane; `label` is the
+   * caller's name for it */
   | { type: "web-panel-open"; url: string; label?: string }
   /** `pane_id` names the pane an error is about, when it is about one (`attach_held`) */
   | { type: "error"; code: string; message: string; pane_id?: string };
