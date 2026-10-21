@@ -3380,6 +3380,20 @@ describe("pi ask_user_question joined with its session's call", () => {
     expect(joined(screen("preview-120"), twice).header).toBeUndefined();
   });
 
+  test("caps a huge preview and header before they name the card", () => {
+    // argument text has no ceiling of its own: the card's length and its id read the capped text
+    const call = JSON.parse(session("preview").trim()) as { message: { content: { arguments: { questions: { header: string; options: { preview?: string }[] }[] } }[] } };
+    const question = call.message.content[0]!.arguments.questions[0]!;
+    question.header = "h".repeat(500);
+    question.options[0]!.preview = "x".repeat(1_000_000);
+    const jsonl = JSON.stringify(call);
+    const first = joined(screen("preview-120"), jsonl);
+    const second = joined(screen("preview-120"), jsonl);
+    expect(first.header!.length).toBe(200);
+    expect(first.options[0]!.preview!.length).toBe(8_000);
+    expect(second.id).toBe(first.id);
+  });
+
   test("leaves the screen-only card's id as it was", () => {
     // a session the server cannot read must not change the card an answer names
     expect(parseInteractivePrompt("pi", screen("single-120"))!.id).toBe("9bd9fa32967d");

@@ -46,7 +46,8 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
   const folded = foldedByUser && typedAnswer?.option_index === undefined;
   // previews: the card picks, then submits (DESIGN §4.8); without any, it answers as before
   const previews = hasPreviews(prompt);
-  const chosen = picked ?? typedAnswer?.option_index ?? null;
+  // the typed pick leads: a later click clears it (onTypedAnswerDone), so the card follows either
+  const chosen = typedAnswer?.option_index ?? picked ?? null;
   const previewIndex = prompt.multi_select ? toggled : chosen;
   const cardRef = useRef<HTMLElement | null>(null);
   const confirmRef = useRef<HTMLDivElement | null>(null);

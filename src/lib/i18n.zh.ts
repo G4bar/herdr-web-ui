@@ -735,6 +735,7 @@ export const ZH: Record<string, string> = {
   "Type your reply…": "输入你的回复…",
   "Type {range} or your own reply…": "输入 {range} 或你自己的回复…",
   "Type {range} to choose…": "输入 {range} 进行选择…",
+  "Type {range} to pick, then Submit": "输入 {range} 选择，然后提交。",
   "Choose with the option numbers above, e.g. 1 3.": "请使用上方的选项编号进行选择，例如 1 3。",
   "Choose one of the options above: type {range}.": "请从上方选项中选择一项：输入 {range}。",
   "Couldn't load suggestions. Keep typing to try again.": "无法加载建议。继续输入即可重试。",
