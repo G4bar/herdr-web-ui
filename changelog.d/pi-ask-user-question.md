@@ -6,6 +6,6 @@
   `HERDR_WEB_PI_ASK_PROMPT=0` (plugin env file, then restart the plugin) leaves it as plain
   terminal text.
 - A questionnaire the card cannot answer stays terminal text: a list with rows off the pane
-  (`↓`/`↑` or `(n/total)`), a multiple choice whose `Submit` row is off it too, or a list whose
-  numbering starts past 1. The card does not offer the dialog's `n` note line or `Ctrl+]`
-  collapse either.
+  (`↓`/`↑` or `(n/total)`), a multiple choice whose `Submit` row is off it too, a list whose
+  numbering starts past 1, or the `n` notes box while it is open. The card does not offer that
+  note line or `Ctrl+]` collapse.
