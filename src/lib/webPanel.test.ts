@@ -45,10 +45,15 @@ describe("panelUrl", () => {
     expect(panelUrl("http://127.0.0.1:7317/", tls)).toBeNull();
     expect(panelUrl("http://localhost:7317/", tls)).toBeNull();
     expect(panelUrl("http://127.0.0.1:8443/", tlsApp)).toBeNull();
-    // another site is mixed content, and a loopback app has no https of its own to lean on
+    // another site is mixed content, a named host's own http page is not ours to upgrade, and a
+    // loopback app has no https of its own to lean on
     expect(panelUrl("http://example.com:5173/", tls)).toBeNull();
+    expect(panelUrl("http://laptop.ts.net:5173/", { protocol: "https:", hostname: "laptop.ts.net", origin: "https://laptop.ts.net" })).toBeNull();
+    expect(panelUrl("http://laptop.ts.net:7317/", { protocol: "https:", hostname: "laptop.ts.net", origin: "https://laptop.ts.net" })).toBeNull();
     expect(panelUrl("http://localhost:5173/", tlsLocal)).toBeNull();
     expect(panelUrl("https://localhost:5173/", tlsLocal)).toBe("https://localhost:5173/");
+    // a root label changes nothing
+    expect(panelUrl("http://localhost.:5173/", tls)).toBe("https://pc.tail.ts.net:5173/");
   });
 });
 
@@ -59,6 +64,7 @@ describe("tabUrl", () => {
   it("opens another site from anywhere, but this PC's loopback page only on this PC", () => {
     expect(tabUrl("https://example.com/x", tailnet)).toBe("https://example.com/x");
     expect(tabUrl("http://localhost:5173/", tailnet)).toBeNull();
+    expect(tabUrl("http://localhost.:5173/", tailnet)).toBeNull();
     expect(tabUrl("http://localhost:5173/", local)).toBe("http://localhost:5173/");
     expect(tabUrl("javascript:alert(1)", local)).toBeNull();
   });

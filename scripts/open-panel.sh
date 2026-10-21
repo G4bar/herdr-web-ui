@@ -20,22 +20,24 @@ label=${2:-}
 base=${HERDR_WEB_URL:-http://127.0.0.1:7317}
 base=${base%/}
 
-# The token the app asks for: this environment, else the plugin's own env file. That file is
-# KEY=value lines, never a script: read the one line instead of running it, so nothing it holds is
-# printed or executed.
+# The token the app asks for: this environment, else the plugin's own env files: `env` first, then
+# `.env`, which wins, as scripts/plugin.ts reads them. Those files are KEY=value lines, never a
+# script: read the one line instead of running it, so nothing they hold is printed or executed.
 token=${HERDR_WEB_TOKEN:-}
 if [ -z "$token" ]; then
-  config=${XDG_CONFIG_HOME:-$HOME/.config}
-  env_file=$config/herdr/plugins/config/devswha.herdr-web-ui/env
-  if [ -r "$env_file" ]; then
-    token=$(sed -n 's/^HERDR_WEB_TOKEN=//p' "$env_file" | head -n 1 | tr -d '\r')
-    token=${token#\"}; token=${token%\"}
-    token=${token#\'}; token=${token%\'}
-  fi
+  dir=${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/devswha.herdr-web-ui
+  for name in env .env; do
+    [ -r "$dir/$name" ] || continue
+    found=$(sed -n 's/^HERDR_WEB_TOKEN=//p' "$dir/$name" | head -n 1 | tr -d '\r')
+    if [ -n "$found" ]; then token=$found; fi
+  done
+  token=${token#\"}; token=${token%\"}
+  token=${token#\'}; token=${token%\'}
 fi
-# one line of a header file: whitespace or a quote would end the line or start another one
+# one line of a header file: whitespace ends the line, and a quote or a backslash rewrites it, so a
+# token like that is no token at all: ask nothing rather than send one that is not the app's
 case $token in
-  *[[:space:]\"\']*) token="" ;;
+  *[[:space:]\"\']* | *\\*) printf 'Panel not available. Open: %s\n' "$url"; exit 3 ;;
 esac
 
 # a URL holds no quote or backslash the server would accept, but keep the body valid JSON anyway

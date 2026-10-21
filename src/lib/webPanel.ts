@@ -13,6 +13,9 @@ export interface AppLocation {
 /** Names a pane prints for the PC it runs on: a dev server's own "Local: http://localhost:5173/". */
 const LOOPBACK = /^(?:localhost|[^.]+(?:\.[^.]+)*\.localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[::1?\])$/i;
 
+/** A name without its root label: `localhost.` and `LocalHost` both mean `localhost`. */
+const bare = (hostname: string) => hostname.replace(/\.$/, "").toLowerCase();
+
 /** The port the app listens on: shared/protocol.ts `DEFAULT_PORT`, which the client may not import. */
 const APP_PORT = 7317;
 
@@ -23,7 +26,7 @@ const APP_PORT = 7317;
  * A loopback name means that PC, so it is reached under the host the browser used for the app:
  * from another computer, `localhost:5173` would be that computer's own. An https app frames such a
  * page over its own https, when its setup serves that port under the host as well; any other http
- * page cannot be framed (mixed content) and opens in a tab.
+ * page, a named host's included, cannot be framed (mixed content) and opens in a tab.
  */
 export function panelUrl(uri: string, app: AppLocation): string | null {
   if (!/^https?:\/\//i.test(uri)) return null;
@@ -33,14 +36,14 @@ export function panelUrl(uri: string, app: AppLocation): string | null {
   } catch {
     return null;
   }
-  const loopback = LOOPBACK.test(url.hostname);
+  const loopback = LOOPBACK.test(bare(url.hostname));
   if (loopback) url.hostname = app.hostname;
-  else if (url.hostname.toLowerCase() !== app.hostname.toLowerCase()) return null;
+  else if (bare(url.hostname) !== bare(app.hostname)) return null;
   if (url.origin === app.origin) return null;
   if (app.protocol === "https:" && url.protocol === "http:") {
-    // The https is the app's, so only a named host has one, and it is not a page on the app's own port:
-    // that address is the app itself, and a loopback app has no other https to lean on.
-    if (loopback && (LOOPBACK.test(app.hostname) || url.port === String(APP_PORT))) return null;
+    // Only that PC's own page borrows the app's https: a named host served http is not ours to upgrade,
+    // the app is not a page, and a loopback app has no other https to lean on.
+    if (!loopback || LOOPBACK.test(bare(app.hostname)) || url.port === String(APP_PORT)) return null;
     url.protocol = "https:";
     if (url.origin === app.origin) return null;
   }
@@ -70,7 +73,7 @@ export function tabUrl(uri: string, app: AppLocation): string | null {
     return null;
   }
   if (!/^https?:$/.test(url.protocol)) return null;
-  return LOOPBACK.test(url.hostname) && !LOOPBACK.test(app.hostname) ? null : uri;
+  return LOOPBACK.test(bare(url.hostname)) && !LOOPBACK.test(bare(app.hostname)) ? null : uri;
 }
 
 export function wantsPanel(target: WebLinkTarget, shiftKey: boolean): boolean {
