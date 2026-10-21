@@ -3053,22 +3053,21 @@ describe("pi ask_user_question", () => {
   const askFixture = (name: string) => readFileSync(new URL(`./fixtures/pi-ask-rpiv-2.13.9-${name}.txt`, import.meta.url), "utf8");
   // the dialog's own shape, for the cases no capture shows: a rule, the heading, the question, the
   // rows, a rule, the hint, then whatever pi wrote under it
-  const quoted = (under: string[]) => [
+  const dialog = (rows: string[], under: string[] = [" /tmp/app", " some-model • medium"]) => [
     "─".repeat(60),
     "",
     "  Library",
     "",
     " Which date library should we use for the app?",
     "",
-    "❯ 1. Day.js",
-    "  2. date-fns",
-    "  3. Type something.",
+    ...rows,
     "",
     "─".repeat(60),
     "",
     " Enter to select · ↑/↓ to navigate · Esc to cancel",
     ...under,
   ].join("\n");
+  const quoted = (under: string[]) => dialog(["❯ 1. Day.js", "  2. date-fns", "  3. Type something."], under);
 
   test("reads a single question: its header, its numbered rows and their descriptions", () => {
     const prompt = parseInteractivePrompt("pi", askFixture("single-120"))!;
@@ -3223,6 +3222,40 @@ describe("pi ask_user_question", () => {
     ]);
     expect(prompt.custom_option_index).toBe(3);
     expect(answerKeys(prompt, { option_index: 2 })).toEqual([{ keys: ["down"] }, { keys: ["down"] }, { keys: ["enter"] }]);
+  });
+
+  test("keeps a description that continues the numbering out of the options", () => {
+    // a description sits in the column under its option's label, a row's number under the previous
+    // row's: `2. bar` under option 1 continues the numbering but is not a row
+    const single = parseInteractivePrompt("pi", askFixture("single-120")
+      .replace("     2 KB immutable wrapper, familiar moment-style API.", "     2. bar"))!;
+    expect(single.options.map((option) => option.label)).toEqual(["Day.js", "date-fns", "Luxon", "Temporal polyfill"]);
+    expect(single.options[0]!.description).toBe("2. bar");
+    expect(single.custom_option_index).toBe(4);
+    expect(parseInteractivePrompt("pi", askFixture("digits-120")
+      .replace("     99. paths, Intl first.", "     4. paths, Intl first."))!.options.map((option) => option.label))
+      .toEqual(["Day.js", "Node 22", "Luxon"]);
+    // ten rows and a `11. x` under the tenth: the eleventh row is the free-text one, not this
+    const longRows = Array.from({ length: 10 }, (_, index) => `${index === 0 ? "❯ " : "  "}${index + 1}. option ${index + 1}`);
+    longRows.push("     11. x", "  11. Type something.");
+    const long = parseInteractivePrompt("pi", dialog(longRows))!;
+    expect(long.options).toHaveLength(10);
+    expect(long.options.at(-1)).toEqual({ label: "option 10", description: "11. x" });
+    expect(long.custom_option_index).toBe(10);
+    // a multiple choice's rows also carry rpiv's box: `2. bar` has none, and `2. [ ] bar` under row
+    // 2 repeats a number, so neither is a row
+    const multi = parseInteractivePrompt("pi", askFixture("multi-120")
+      .replace("  Anonymous usage counters.", "  2. bar")
+      .replace("  Expose experimental toggles.", "  2. [ ] bar"))!;
+    expect(multi.options.map((option) => option.label)).toEqual(["Telemetry", "Beta flags", "Auto-update", "Crash reports"]);
+    expect(multi.options.map((option) => option.description)).toEqual(["2. bar", "2. [ ] bar", "Background version checks.", "Send stack traces on failure."]);
+    expect(multi.custom_option_index).toBe(4);
+  });
+
+  test("withdraws the card while the notes box is open", () => {
+    // `n` opens a note editor under the list, whose rules sit between the list and the hint: the
+    // dialog's own block no longer ends at the hint, so the note is typed in the terminal
+    expect(parseInteractivePrompt("pi", askFixture("notes-120"))).toBeNull();
   });
 
   test("[x] in a single select's label is part of the label, not a tick", () => {

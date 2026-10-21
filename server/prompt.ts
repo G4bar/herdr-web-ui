@@ -2592,25 +2592,39 @@ function rpivTabs(line: string): { label: string; answered: boolean; submit: boo
  * select's confirmed row, and the checkbox in front of a multiple choice's rows, come off the
  * label.
  *
- * A row is `number.` and a space: an option description that starts with a number (`3.5x smaller`,
- * `99. paths`) is not one, and neither is a number that does not continue the list, which is how a
- * description opening with `22. ` stays a description.
+ * A row is `number.` and a space, its number continuing the one above, and it starts where the
+ * first row's number starts: an option description that opens with a number (`3.5x smaller`,
+ * `4. paths`) is not one, whether it has no space after the dot, or it sits in the description
+ * column. A multiple choice's rows also carry rpiv's box, so a boxed list asks for that too — a
+ * description reading `2. [ ] bar` under the row it describes is only told apart by the number.
  */
 function rpivRows(lines: string[]): { rows: RpivRow[]; last: { label: string; cursor: boolean } | null } {
-  const kept = lines.map((line) => line.trim())
-    .filter((line) => line && !isDivider(line) && !/^[↑↓↕]$/.test(line) && !/^\(\d+\/\d+\)$/.test(line));
   const rows: RpivRow[] = [];
   let last: { label: string; cursor: boolean } | null = null;
-  kept.forEach((line, index) => {
-    const row = /^(❯\s+)?(\d+)\.(?:\s+(.*))?$/.exec(line);
+  let column = -1;
+  let boxed = false;
+  const kept: { text: string; column: number }[] = [];
+  for (const raw of lines) {
+    const text = raw.trim();
+    if (!text || isDivider(text) || /^[↑↓↕]$/.test(text) || /^\(\d+\/\d+\)$/.test(text)) continue;
+    const digits = /^[❯\s]*(\d+)\./.exec(text);
+    kept.push({ text, column: digits ? raw.indexOf(digits[1]!) : -1 });
+  }
+  kept.forEach(({ text, column: at }, index) => {
+    const row = /^(❯\s+)?(\d+)\.(?:\s+(.*))?$/.exec(text);
     const number = row ? Number(row[2]) : 0;
-    if (row && (rows.length === 0 || number === rows.at(-1)!.number + 1)) {
-      const text = (row[3] ?? "").trim();
-      // rpiv's own checkbox, `[ ]` or `[✔]`: `[x]` is an option's label, not a tick
-      const box = /^\[( |✔)\]\s*(.*)$/.exec(text);
+    const label = row ? (row[3] ?? "").trim() : "";
+    // rpiv's own checkbox, `[ ]` or `[✔]`: `[x]` is an option's label, not a tick
+    const box = row ? /^\[( |✔)\]\s*(.*)$/.exec(label) : null;
+    const continues = rows.length === 0 || number === rows.at(-1)!.number + 1;
+    if (row && continues && (rows.length === 0 || (at === column && (!boxed || box !== null)))) {
+      if (rows.length === 0) {
+        column = at;
+        boxed = box !== null;
+      }
       rows.push({
         number,
-        label: box ? box[2]!.trim() : text.replace(/\s*[✔✓]$/, "").trim(),
+        label: box ? box[2]!.trim() : label.replace(/\s*[✔✓]$/, "").trim(),
         description: null,
         cursor: Boolean(row[1]),
         boxed: box !== null,
@@ -2623,10 +2637,10 @@ function rpivRows(lines: string[]): { rows: RpivRow[]; last: { label: string; cu
     // the last line under a list is what commits a multiple choice (`Submit`), or — on a pane too
     // short for the whole list — the description of the last row shown; the caller tells them apart
     if (index === kept.length - 1) {
-      last = { label: line.replace(/^❯\s+/, "").trim(), cursor: /^❯\s/.test(line) };
+      last = { label: text.replace(/^❯\s+/, "").trim(), cursor: /^❯\s/.test(text) };
       return;
     }
-    previous.description = previous.description ? `${previous.description} ${line}` : line;
+    previous.description = previous.description ? `${previous.description} ${text}` : text;
   });
   return { rows, last };
 }
