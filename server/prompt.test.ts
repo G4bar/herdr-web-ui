@@ -3321,6 +3321,71 @@ describe("pi ask_user_question", () => {
   });
 });
 
+// The session line beside each capture: the ask_user_question call the pane drew (preview.jsonl's
+// arguments are the ones its capture prints above the dialog). rpiv names a recommendation with a
+// "(Recommended)" label suffix, so the `recommended` index is varied into a fixture below: the card
+// reads it for the ask tools that carry one by index (omp's, omo's).
+describe("pi ask_user_question joined with its session's call", () => {
+  const screen = (name: string) => readFileSync(new URL(`./fixtures/pi-ask-rpiv-2.13.9-${name}.txt`, import.meta.url), "utf8");
+  const session = (name: string) => readFileSync(new URL(`./fixtures/pi-ask-rpiv-2.13.9-${name}.jsonl`, import.meta.url), "utf8");
+  const joined = (screenText: string, jsonl: string) => parseInteractivePrompt("pi", screenText, null, true, [], null, false, openOmoAsks(jsonl))!;
+
+  test("gives the card the call's header and its options their previews", () => {
+    const prompt = joined(screen("preview-120"), session("preview"));
+    expect(prompt.header).toBe("Layout");
+    expect(prompt.options.map((option) => option.label)).toEqual(["Sidebar", "Tabs"]);
+    expect(prompt.options[0]!.preview).toContain("| nav  | detail |");
+    expect(prompt.options[1]!.preview).toContain("[Tab A][Tab B]");
+    expect(prompt.recommended_index).toBeUndefined();
+    // the call adds what the card shows, never how it is answered: the same keys as without it
+    expect(answerKeys(prompt, { option_index: 1 })).toEqual(answerKeys(joined(screen("preview-120"), ""), { option_index: 1 }));
+  });
+
+  test("tags the option the call recommends, by index, inside the options", () => {
+    const line = session("single").replace('"question":"Which date library should we use for the app?"', '"question":"Which date library should we use for the app?","recommended":1');
+    const prompt = joined(screen("single-120"), line);
+    expect(prompt.header).toBe("Library");
+    expect(prompt.recommended_index).toBe(1);
+    expect(prompt.options.every((option) => !("preview" in option))).toBe(true);
+    // an index outside the options names no recommendation
+    expect(joined(screen("single-120"), line.replace('"recommended":1', '"recommended":9')).recommended_index).toBeUndefined();
+  });
+
+  test("joins one tab of a form to its own question", () => {
+    const prompt = joined(screen("mq-tab1-120"), session("mq"));
+    expect(prompt.header).toBe("Runtime");
+    expect(prompt.question).toBe("Which runtime should the worker use?");
+    expect(prompt.steps!.map((step) => step.label)).toEqual(["Runtime", "Storage"]);
+  });
+
+  test("leaves the card screen-only without a call, for another question, or other labels", () => {
+    const only = (jsonl: string) => {
+      const prompt = joined(screen("preview-120"), jsonl);
+      expect(prompt.header).toBeUndefined();
+      expect(prompt.recommended_index).toBeUndefined();
+      expect(prompt.options.some((option) => "preview" in option)).toBe(false);
+    };
+    only("");
+    only(session("single"));
+    only(session("mq"));
+    // one label differs: never a guess at which row a preview belongs to
+    only(session("preview").replace('"label":"Tabs"', '"label":"Tabbed"'));
+    // a single select on screen against a call that asks for several
+    only(session("single").replace('"questions":[{"header"', '"questions":[{"multiSelect":true,"header"'));
+  });
+
+  test("refuses two open questions that both match", () => {
+    const twice = `${session("preview")}\n${session("preview").replace("toolu_01Gq4WmZxYb2PeK7kRJm3fT9", "toolu_other")}`;
+    expect(openOmoAsks(twice)).toHaveLength(2);
+    expect(joined(screen("preview-120"), twice).header).toBeUndefined();
+  });
+
+  test("leaves the screen-only card's id as it was", () => {
+    // a session the server cannot read must not change the card an answer names
+    expect(parseInteractivePrompt("pi", screen("single-120"))!.id).toBe("9bd9fa32967d");
+  });
+});
+
 // Both screens captured from pi 0.87.1 running /model in a pane of its own, at 140 columns and
 // at 46, with the catalogue already settled.
 describe("pi's model list", () => {

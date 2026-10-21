@@ -1065,12 +1065,18 @@ export interface InteractivePrompt {
   agent: string;
   kind: "question" | "approval" | "plan" | "menu";
   title: string;
+  /** The question's short header where the title does not already carry it (pi's
+   * ask_user_question, joined from the session): the card's heading is this, else the title */
+  header?: string;
   question: string;
   body: string | null;
   options: InteractivePromptOption[];
   multi_select: boolean;
   /** index of the "type your own answer" option, when the menu has one */
   custom_option_index: number | null;
+  /** the option its agent recommends, by index: tagged on the card, never pre-selected.
+   * Absent where the agent names none */
+  recommended_index?: number;
   /** a question in Codex's queue while Codex keeps working: only the card answers it. Collapsed,
    * a message typed in the chat still goes to Codex; open in the terminal, the queue holds the
    * input, so the chat sends nothing until it is answered or closed */
@@ -1104,6 +1110,9 @@ export interface InteractivePromptAnswer {
 export interface InteractivePromptOption {
   label: string;
   description: string | null;
+  /** what picking the option would look like, shown as written (pi's and Claude's `preview`);
+   * null or absent: this option has none */
+  preview?: string | null;
 }
 
 /** POST /api/pane/prompt/answer body. Exactly one of option_index / option_indices / custom_text. */

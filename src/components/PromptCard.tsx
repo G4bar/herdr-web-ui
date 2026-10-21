@@ -6,7 +6,7 @@ import "./PromptCard.css";
 import { ApiError } from "../lib/api.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import type { InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
-import { focusFollowsAnswer, pressOrigin, type TypedAnswer } from "../lib/promptAnswer.ts";
+import { focusFollowsAnswer, hasPreviews, pressOrigin, type TypedAnswer } from "../lib/promptAnswer.ts";
 import { dismissKeyboardOn } from "../lib/keyboard.ts";
 import { useT } from "../lib/i18n.ts";
 import { userErrorMessage, type UserError } from "../lib/userError.ts";
@@ -34,14 +34,24 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
   const { answerPanePrompt } = useMachineApi();
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [custom, setCustom] = useState("");
+  // the one option a preview card waits on: the radio's pick, else the number typed in the composer
+  const [picked, setPicked] = useState<number | null>(null);
+  // a multiple choice's preview follows the last row toggled on, not the first one checked
+  const [toggled, setToggled] = useState<number | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<UserError | null>(null);
   // folded to its header, to read the transcript under it; the question still waits, so the card
   // stays. A typed answer to confirm opens it, and the next prompt's card starts open
   const [foldedByUser, setFoldedByUser] = useState(false);
   const folded = foldedByUser && typedAnswer?.option_index === undefined;
+  // previews: the card picks, then submits (DESIGN §4.8); without any, it answers as before
+  const previews = hasPreviews(prompt);
+  const chosen = picked ?? typedAnswer?.option_index ?? null;
+  const previewIndex = prompt.multi_select ? toggled : chosen;
   const cardRef = useRef<HTMLElement | null>(null);
   const confirmRef = useRef<HTMLDivElement | null>(null);
+  const previewRef = useRef<HTMLPreElement | null>(null);
+  const radioName = useId();
   // the control Enter or Space last went down on: the click that follows on it is that key's
   const keyed = useRef<EventTarget | null>(null);
   // and the button a pointer last went down on, with what it was: a click can misname its pointer
@@ -58,6 +68,11 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
   useEffect(() => {
     confirmRef.current?.scrollIntoView({ block: "nearest" });
   }, [typedAnswer]);
+
+  // another option's preview starts at its own top-left; the card's scroll stays where it is
+  useEffect(() => {
+    previewRef.current?.scrollTo?.({ top: 0, left: 0 });
+  }, [previewIndex]);
 
   // The card stands where the transcript was on a short phone: a tap on its text, or a drag down
   // it once it is at its top, puts the keyboard away as on the transcript (lib/keyboard.ts).
@@ -134,7 +149,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
       <header className="prompt-card-header">
         {/* read, not drawn: the title is the card's one red */}
         <span className="visually-hidden">{t("input needed")}</span>
-        <h2>{prompt.title}</h2>
+        <h2>{prompt.header ?? prompt.title}</h2>
         {/* the card shows a plan in its short box; the file viewer draws the whole of it as Markdown */}
         {planFile && openFile && (
           <button type="button" className="btn btn-ghost prompt-card-plan-file" onClick={() => openFile(planFile)}>
@@ -159,7 +174,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         </ol>
       )}
       {/* a Claude approval's heading is its question too: said once */}
-      {prompt.question !== prompt.title && <p className="prompt-card-question">{prompt.question}</p>}
+      {prompt.question !== (prompt.header ?? prompt.title) && <p className="prompt-card-question">{prompt.question}</p>}
       {prompt.queued && (
         <p className="prompt-card-hint">
           {prompt.queued === "open"
@@ -189,24 +204,34 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
       {hasChoices && (
         /* busy on the options alone, never on the card: a live region inside an aria-busy subtree is not
            read (Chromium), and the status line below has to be */
-        <div className="prompt-card-options" role={prompt.multi_select ? "group" : undefined} aria-label={prompt.multi_select ? prompt.question : undefined} aria-busy={pending}>
+        <div className="prompt-card-options" role={prompt.multi_select ? "group" : previews ? "radiogroup" : undefined} aria-label={prompt.multi_select || previews ? prompt.question : undefined} aria-busy={pending}>
           {prompt.options.map((option, index) => {
             if (index === prompt.custom_option_index) return null;
             const { text, recommended } = labelOf(option.label);
             const content = (
               <span className="prompt-card-option-text">
-                <span className="prompt-card-option-label">{text}{recommended && <> <span className="prompt-card-tag">{t("Recommended")}</span></>}</span>
+                <span className="prompt-card-option-label">{text}{(recommended || index === prompt.recommended_index) && <> <span className="prompt-card-tag">{t("Recommended")}</span></>}</span>
                 {option.description !== null && <span className="prompt-card-option-description">{option.description}</span>}
               </span>
             );
             // the key the user can type, drawn as a keycap; the option's name keeps the menu's "1."
             const number = <span className="prompt-card-number"><span aria-hidden="true">{index + 1}</span><span className="visually-hidden">{index + 1}.</span></span>;
             const described = option.description !== null ? " has-description" : "";
-            if (prompt.multi_select) {
-              const checked = selected.has(index);
+            // a question with previews picks like a multiple choice does, then submits
+            if (prompt.multi_select || previews) {
+              const checked = prompt.multi_select ? selected.has(index) : chosen === index;
               return (
                 <label className={`prompt-card-option${described}${checked ? " is-checked" : ""}`} key={index}>
-                  <input type="checkbox" checked={checked} disabled={pending} onChange={() => toggle(index)} />
+                  <input type={prompt.multi_select ? "checkbox" : "radio"} name={prompt.multi_select ? undefined : radioName} checked={checked} disabled={pending} onChange={() => {
+                    if (prompt.multi_select) {
+                      toggle(index);
+                      setToggled(selected.has(index) ? (toggled === index ? [...selected].filter((other) => other !== index).at(-1) ?? null : toggled) : index);
+                      return;
+                    }
+                    setPicked(index);
+                    // a number typed in the composer is picked over: Submit sends what the card shows
+                    onTypedAnswerDone?.();
+                  }} />
                   {number} {content}
                 </label>
               );
@@ -219,9 +244,14 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
           })}
         </div>
       )}
-      {prompt.multi_select && (
-        <button type="button" className={`btn${selected.size > 0 ? " btn-primary" : ""} prompt-card-submit`} disabled={pending || selected.size === 0} onClick={(event) => void answer({ option_indices: [...selected].sort((a, b) => a - b) }, event)}>
-          {selected.size > 0 ? t("Submit ({n})", { n: selected.size }) : t("Submit")}
+      {previews && (previewIndex === null
+        ? <p className="prompt-card-hint">{t("Pick an option to see its preview.")}</p>
+        : <pre className="prompt-card-preview" ref={previewRef} tabIndex={0} role="region" aria-label={t("Preview: {label}", { label: labelOf(prompt.options[previewIndex]!.label).text })}>
+            {prompt.options[previewIndex]!.preview || <span className="prompt-card-preview-note">{t("No preview for this option.")}</span>}
+          </pre>)}
+      {(prompt.multi_select || previews) && (
+        <button type="button" className={`btn${(prompt.multi_select ? selected.size > 0 : chosen !== null) ? " btn-primary" : ""} prompt-card-submit`} disabled={pending || (prompt.multi_select ? selected.size === 0 : chosen === null)} onClick={(event) => void answer(prompt.multi_select ? { option_indices: [...selected].sort((a, b) => a - b) } : { option_index: chosen! }, event)}>
+          {prompt.multi_select && selected.size > 0 ? t("Submit ({n})", { n: selected.size }) : t("Submit")}
         </button>
       )}
       {prompt.custom_option_index !== null && (
@@ -238,7 +268,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
           </div>
         </div>
       )}
-      {typedAnswer?.option_index !== undefined && (
+      {typedAnswer?.option_index !== undefined && !previews && (
         <div className="prompt-card-confirm" role="alert" ref={confirmRef}>
           {/* an option's label can run to pages (a review to approve): the question shows two lines
               of it and scrolls in itself, and the two buttons stay whole, on one line */}

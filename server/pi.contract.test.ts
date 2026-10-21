@@ -128,6 +128,71 @@ it("serves a pi pane's native transcript over HTTP", async () => {
 
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
+it("serves the ask card's header, previews and recommendation over HTTP", async () => {
+  // a pane of its own, drawing rpiv's questionnaire at a width that fits the test pane; rpiv's
+  // preview box is drawn beside or under the list and the reader takes it out of the screen
+  const bin = join(root, "ask-bin");
+  mkdirSync(bin, { recursive: true });
+  const dialogPi = join(bin, "pi");
+  writeFileSync(dialogPi, `#!/bin/sh
+cat <<'DIALOG'
+────────────────────────────────────────
+ Layout
+
+ Which layout should the settings page use?
+
+❯ 1. Sidebar
+     Vertical nav with a detail pane.
+  2. Tabs
+     Horizontal tabs at the top.
+  3. Type something.
+
+────────────────────────────────────────
+
+ Enter to select · ↑/↓ to navigate · Esc to cancel
+
+ /tmp/app
+DIALOG
+sleep 600
+`);
+  chmodSync(dialogPi, 0o755);
+  const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-pi-ask-contract" });
+  workspaces.push(created.workspace.workspace_id);
+  const target = created.root_pane.pane_id;
+  await herdrRpc("pane.send_text", { pane_id: target, text: `${dialogPi}\n` });
+  for (const deadline = Date.now() + 10_000;;) {
+    const pane = (await sessionSnapshot()).panes.find((candidate) => candidate.pane_id === target);
+    if (pane?.agent === "pi") break;
+    if (Date.now() > deadline) throw new Error("test pi did not start");
+    await Bun.sleep(50);
+  }
+  await herdrRpc("pane.report_agent", { pane_id: target, source: "herdr:pi", agent: "pi", state: "idle", seq: nextSeq() });
+  // the call that drew it, as pi records it: previews and a recommendation are arguments only
+  const asked = join(slug, "ask.jsonl");
+  writeFileSync(asked, page([{ type: "message", id: "a2", parentId: null, timestamp: "2026-09-30T00:00:04Z", message: {
+    role: "assistant", model: "pi-contract-model", provider: "test", stopReason: "toolUse", usage: { input: 4, output: 1 },
+    content: [{ type: "toolCall", id: "call-ask", name: "ask_user_question", arguments: { questions: [{
+      header: "Layout", question: "Which layout should the settings page use?", recommended: 0,
+      options: [
+        { label: "Sidebar", description: "Vertical nav with a detail pane.", preview: "+------+--------+\n| nav  | detail |\n+------+--------+" },
+        { label: "Tabs", description: "Horizontal tabs at the top.", preview: "[Tab A][Tab B]\n+-------------+\n|   detail    |\n+-------------+" },
+      ],
+    }] } }],
+  } }]));
+  await reportSession(asked, target);
+
+  const response = await fetch(`http://127.0.0.1:${server.port}/api/pane/prompt?pane_id=${encodeURIComponent(target)}`);
+  expect(response.status).toBe(200);
+  const body = await response.json() as { prompt: { id: string; header?: string; recommended_index?: number; options: { label: string; preview?: string | null }[]; multi_select: boolean } | null };
+  expect(body.prompt).not.toBeNull();
+  expect(body.prompt!.header).toBe("Layout");
+  expect(body.prompt!.recommended_index).toBe(0);
+  expect(body.prompt!.multi_select).toBe(false);
+  expect(body.prompt!.options.map((option) => option.label)).toEqual(["Sidebar", "Tabs"]);
+  expect(body.prompt!.options[0]!.preview).toContain("| nav  | detail |");
+  expect(body.prompt!.options[1]!.preview).toContain("[Tab A][Tab B]");
+});
+
 it("offers a tool's own picture over the image endpoint", async () => {
   writeFileSync(transcript, page([
     { type: "model_change", id: "m1", parentId: null, timestamp: "2026-09-30T00:00:00Z", provider: "test", modelId: "pi-contract-model" },

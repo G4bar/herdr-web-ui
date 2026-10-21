@@ -279,6 +279,48 @@
   pointer-events: none;
 }
 
+/* the checked option's preview, as the asking agent wrote it: often an ASCII mockup or code, so it
+   keeps its own line breaks and scrolls both ways. It gives way with the reference text when the
+   card is short: four lines tall at least, twelve at most (the card's budget, PromptCard.css top) */
+.prompt-card-preview {
+  flex: 0 1 auto;
+  min-height: calc(4lh + 2 * var(--space-2));
+  max-height: calc(12lh + 2 * var(--space-2));
+  margin: 0;
+  padding: var(--space-2) var(--space-3) 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  white-space: pre;
+}
+
+.prompt-card-preview:focus-visible {
+  outline: var(--ring);
+  outline-offset: var(--ring-offset);
+}
+
+/* its bottom padding, as a strip that stays on its fold, as the reference text's */
+.prompt-card-preview::after {
+  content: "";
+  position: sticky;
+  bottom: 0;
+  display: block;
+  height: var(--space-2);
+  background: linear-gradient(transparent, var(--bg));
+  pointer-events: none;
+}
+
+/* an option with nothing to show, said in the box it would have filled */
+.prompt-card-preview-note {
+  color: var(--text-dim);
+}
+
 /* one option per row, full width: menu rows, not boxes in a box. Labels and their descriptions
    line up to scan down, the way the agent's own menu reads. All weigh the same: no row is
    filled or outlined as if it were the default */

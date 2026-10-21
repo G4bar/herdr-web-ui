@@ -6,6 +6,7 @@ import { HerdrError, paneRead, paneScrollInfo, paneSendKeys, paneSendText, sessi
 import { omoTranscriptForPane } from "./omo.ts";
 import { OmoAskReader, omoAsksAfter, type OmoAskCall, type OmoAsks } from "./omo-ask.ts";
 import { badRequest, errorResponse, jsonResponse } from "./http.ts";
+import { piTranscriptPath } from "./pi.ts";
 import { claudePlanFile } from "./claude-plan.ts";
 
 const ANSI_RE = /\u001b\[[0-?]*[ -/]*[@-~]/g;
@@ -454,6 +455,8 @@ function publicPrompt(parsed: ParsedPrompt): InteractivePrompt {
     options: parsed.options,
     multi_select: parsed.multi_select,
     custom_option_index: parsed.custom_option_index,
+    ...(parsed.header ? { header: parsed.header } : {}),
+    ...(parsed.recommended_index === undefined ? {} : { recommended_index: parsed.recommended_index }),
     ...(parsed.queued ? { queued: parsed.queued } : {}),
     ...(parsed.steps ? { steps: parsed.steps } : {}),
     ...(parsed.answers ? { answers: parsed.answers } : {}),
@@ -922,9 +925,21 @@ function omoForm(lines: string[], hintIndex: number): OmoForm | null {
 export interface OmoAsk {
   /** Session-qualified tool-call identity; absent only for screen-only legacy parsing. */
   id?: string;
-  questions: { header: string; question: string; multiSelect: boolean; options: { label: string; description: string | null }[] }[];
+  questions: {
+    header: string;
+    question: string;
+    multiSelect: boolean;
+    /** the option its agent recommends, by index, when the arguments name one (pi's card, §4.8) */
+    recommended?: number;
+    options: { label: string; description: string | null; preview?: string }[];
+  }[];
   /** false: the call does not wait for its answer, and OmO folds it into a widget over its input box */
   wait?: boolean;
+}
+
+/** The recommended option an ask's arguments name, by its index: an integer inside the options, else null. */
+function recommendedIndex(value: unknown, count: number): number | null {
+  return Number.isInteger(value) && (value as number) >= 0 && (value as number) < count ? value as number : null;
 }
 
 /** A call's questions, or null for arguments that are not the shape omo asks with. */
@@ -937,9 +952,16 @@ function omoAskOf(call: OmoAskCall): OmoAsk | null {
     const options = ((question["options"] ?? []) as Record<string, unknown>[]).map((option) => ({
       label: typeof option?.["label"] === "string" ? option["label"] : "",
       description: typeof option?.["description"] === "string" && option["description"] ? option["description"] : null,
+      // the screen never shows an option's preview: only the call's arguments carry one, and
+      // the card reads it from here (parseRpivAsk)
+      ...(typeof option?.["preview"] === "string" && option["preview"] ? { preview: option["preview"] } : {}),
     }));
     if (options.some((option) => !option.label)) return null;
-    ask.questions.push({ header: question["header"], question: question["question"], multiSelect: question["multiSelect"] === true, options });
+    const recommended = recommendedIndex(question["recommended"], options.length);
+    ask.questions.push({
+      header: question["header"], question: question["question"], multiSelect: question["multiSelect"] === true,
+      ...(recommended === null ? {} : { recommended }), options,
+    });
   }
   return ask;
 }
@@ -2658,6 +2680,26 @@ function rpivReviewAnswers(lines: string[]): InteractivePromptAnswer[] {
 }
 
 /**
+ * The question the session's open call asked that is the card on screen: matched by its question
+ * text and its option labels, never by where its tab stands, and only when it is a multiple choice
+ * exactly where the screen's rows are boxed. None or more than one (a form asked twice, not yet
+ * answered) leaves the card screen-only: a guess would tag the wrong row or preview the wrong option.
+ */
+function rpivAskOnScreen(asks: OmoAsk[], question: string, labels: string[], multi: boolean): { header: string; recommended: number | null; previews: (string | null)[] } | null {
+  const matches = asks.flatMap((ask) => ask.questions).filter((asked) => asked.multiSelect === multi
+    && sameText(question, asked.question)
+    && asked.options.length === labels.length
+    && asked.options.every((option, index) => sameText(labels[index]!, option.label)));
+  if (matches.length !== 1) return null;
+  const [match] = matches;
+  return {
+    header: match!.header,
+    recommended: match!.recommended ?? null,
+    previews: match!.options.map((option) => option.preview ?? null),
+  };
+}
+
+/**
  * The questionnaire as a card. The answer is keys into the dialog: rpiv keeps the row indexes
  * and the cursor, ↑/↓ move one row (wrapping, so only the direct delta is sent), Enter picks,
  * Space ticks a multiple choice, and the row under the cursor decides what Enter means.
@@ -2668,7 +2710,7 @@ function rpivReviewAnswers(lines: string[]): InteractivePromptAnswer[] {
  * questions is answered a tab at a time: after the keys rpiv moves on by itself, and the next
  * read is the next card.
  */
-function parseRpivAsk(screen: string): ParsedPrompt | null {
+function parseRpivAsk(screen: string, piAsks: OmoAsk[] = []): ParsedPrompt | null {
   if (!RPIV_ASK_PROMPT) return null;
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const hintIndex = findLastIndex(lines, (_, index) => RPIV_ASK_HINT_RE.test(wrapped(lines, index, 2)));
@@ -2756,14 +2798,18 @@ function parseRpivAsk(screen: string): ParsedPrompt | null {
   const checkedOptionIndices = menu.rows.flatMap((row, index) => (row.checked ? [index] : []));
   const title = questions.length > 0 ? questions[shownTab]?.label ?? "" : headingLines.length > 1 ? headingLines[0]! : "";
   const question = questions.length > 0 ? headingLines.join(" ") : headingLines.length > 1 ? headingLines.slice(1).join(" ") : headingLines[0] ?? "";
+  // what the screen never shows: the call's own header, its previews and its recommendation (§4.8)
+  const call = rpivAskOnScreen(piAsks, question, options.map((option) => option.label), boxed);
   return finishPrompt("pi", {
     kind: "question",
     title,
+    ...(call === null ? {} : { header: call.header }),
     question,
     body: null,
-    options,
+    options: options.map((option, index) => ({ ...option, ...(call?.previews[index] == null ? {} : { preview: call.previews[index] }) })),
     multi_select: boxed,
     custom_option_index: custom,
+    ...(call?.recommended == null ? {} : { recommended_index: call.recommended }),
     ...(steps ? { steps } : {}),
   }, {
     responder: "pi-ask",
@@ -2938,7 +2984,7 @@ function parseHermesClarify(screen: string): ParsedPrompt | null {
   });
 }
 
-function parsePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = [], sent: string | null = null, working = false): ParsedPrompt | null {
+function parsePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = [], sent: string | null = null, working = false, piAsks: OmoAsk[] = []): ParsedPrompt | null {
   const omo = () => {
     const forms = (ask: OmoAsk | null, trusted: boolean) => [parseOmoQuestion(screen, ask, trusted), parseOmoTyping(screen, ask, trusted), parseOmoReview(screen, ask, trusted)];
     const matched = omoOpen.flatMap((ask) => forms(ask, false)).filter((form) => form !== null);
@@ -2955,7 +3001,7 @@ function parsePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null
       : agent === "claude"
         ? [parseClaudeQuestion(screen), parseClaudeSubmit(screen), parseClaudeApproval(screen), parseClaudeConfirm(screen), parseClaudeModel(screen), parseClaudeEffort(screen), parseClaudeHeld(screen, sent, working), parseOmoModel(screen), ...omo()]
         : agent === "pi"
-          ? [parsePiModel(screen), parseOmoModel(screen), parseRpivAsk(screen), parsePiDialog(screen), ...omo()]
+          ? [parsePiModel(screen), parseOmoModel(screen), parseRpivAsk(screen, piAsks), parsePiDialog(screen), ...omo()]
         : agent === "hermes"
           ? [parseHermesClarify(screen)]
         : agent === "omo" || agent === ""
@@ -2988,10 +3034,12 @@ export function codexQueuedPrompt(screen: string, unanswered: QueuedQuestion[], 
  * `omoTrusted` false: an omo form on the screen counts only when that call matches it.
  * `omoOpen`: every question the session has open (openOmoAsks), for omo's widget of the ones
  * asked without waiting.
+ * `piAsks`: the questions a pi pane's session still has open (piAsksFor), for the header, previews
+ * and recommendation its screen never shows; none leaves the card screen-only.
+ * `sent`: what the chat last sent to the pane, and `working`: whether its agent is under a turn, for a message Claude Code holds back (parseClaudeHeld)
  */
-/** `sent`: what the chat last sent to the pane, and `working`: whether its agent is under a turn, for a message Claude Code holds back (parseClaudeHeld) */
-export function parseInteractivePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = [], sent: string | null = null, working = false): InteractivePrompt | null {
-  const parsed = parsePrompt(agent, screen, omoAsk, omoTrusted, omoOpen, sent, working);
+export function parseInteractivePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null, omoTrusted = true, omoOpen: OmoAsk[] = [], sent: string | null = null, working = false, piAsks: OmoAsk[] = []): InteractivePrompt | null {
+  const parsed = parsePrompt(agent, screen, omoAsk, omoTrusted, omoOpen, sent, working, piAsks);
   return parsed ? publicPrompt(parsed) : null;
 }
 
@@ -3899,6 +3947,28 @@ async function omoAsksFor(paneId: string, cwd: string, panes: HerdrPane[]): Prom
   catch { return []; }
 }
 
+/**
+ * Whether the screen is rpiv's questionnaire at all, as parseRpivAsk sees it (its hint, wrapped
+ * anywhere): said before the session is read, so a pi pane that is not asking costs no file read.
+ */
+function rpivAskHinted(screen: string): boolean {
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  return findLastIndex(lines, (_, index) => RPIV_ASK_HINT_RE.test(wrapped(lines, index, 2))) >= 0;
+}
+
+/**
+ * The questions pi's session still has open (its ask_user_question call), newest first, for the
+ * header, previews and recommendation its screen never shows. Read only when the screen is rpiv's
+ * questionnaire, from the session the pane's agent report names, through the same reader and file
+ * cache omo's form uses. A pane that names no written session keeps its screen-only card.
+ */
+async function piAsksFor(paneId: string): Promise<OmoAsk[]> {
+  const found = await piTranscriptPath(paneId).catch(() => null);
+  if (found === null || !("path" in found)) return [];
+  try { return omoAskReader.read(found.path).flatMap((call) => omoAskOf(call) ?? []).reverse(); }
+  catch { return []; }
+}
+
 async function readKnownPrompt(
   paneId: string,
   pane: { cwd?: string | null; agent_status?: string },
@@ -3914,7 +3984,9 @@ async function readKnownPrompt(
   // a pane herdr names claude, or not at all, is omo's only on evidence: herdr reports it waiting
   // on the user, or the session's pending call is the form on screen
   const omoTrusted = (agent !== "claude" && agent !== "") || pane.agent_status === "blocked";
-  const prompt = parseInteractivePrompt(agent, screen, omoAsks[0] ?? null, omoTrusted, omoAsks, agent === "claude" ? heldCandidate(paneId) : null, pane.agent_status === "working");
+  // rpiv's questionnaire takes its header, previews and recommendation from the session's call
+  const piAsks = agent === "pi" && RPIV_ASK_PROMPT && rpivAskHinted(screen) ? await piAsksFor(paneId) : [];
+  const prompt = parseInteractivePrompt(agent, screen, omoAsks[0] ?? null, omoTrusted, omoAsks, agent === "claude" ? heldCandidate(paneId) : null, pane.agent_status === "working", piAsks);
   if (prompt && await claudeHeldIsGrey(paneId, prompt)) return { prompt: null, screen };
   if (!prompt && agent === "gjc") {
     const fallback = parseFallbackPrompt(agent, screen);

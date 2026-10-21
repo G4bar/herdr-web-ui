@@ -45,6 +45,11 @@ describe("answering a prompt from the chat", () => {
     expect(needsConfirmation({ ...prompt(["Yes", "No", "Tell Claude what to change"], 2), kind: "plan" }, { custom_text: "shorter" })).toBe(false);
     // Claude's review submits every answer, a Codex menu continues or stops: a typed pick waits too
     expect(needsConfirmation({ ...prompt(["Submit answers", "Cancel"], null), kind: "menu" }, { option_index: 0 })).toBe(true);
+    // a question with previews waits for Submit: a typed number only checks the option it names
+    const previewed = prompt(["Sidebar", "Tabs"], 2);
+    previewed.options[0]!.preview = "+---+";
+    expect(needsConfirmation(previewed, { option_index: 0 })).toBe(true);
+    expect(needsConfirmation(previewed, { custom_text: "stacked" })).toBe(false);
   });
 
   it("skips a plan's custom row inside the options and reads several numbers for a multiple choice", () => {
