@@ -138,6 +138,8 @@ type Responder =
   | "pi-confirm"
   | "pi-input"
   | "pi-model"
+  | "pi-ask"
+  | "pi-ask-submit"
   | "omo-model"
   | "hermes-question"
   | "hermes-input"
@@ -2212,6 +2214,9 @@ function promptTailIsActive(prompt: ParsedPrompt, screen: string): boolean {
   // above whatever came after, which is what keeps this window narrow.
   if (prompt.responder === "pi-model") return hintAtEnd(shown, PI_MODEL_HINT_AT_END_RE, PI_FOOTER_LINES);
   if (prompt.responder === "omo-model") return omoModelListWaits(screen);
+  if (prompt.responder === "pi-ask" || prompt.responder === "pi-ask-submit") {
+    return hintAtEnd(shown, RPIV_ASK_HINT_AT_END_RE, RPIV_ASK_FOOTER_LINES, 3);
+  }
   if (prompt.responder === "pi-question" || prompt.responder === "pi-confirm" || prompt.responder === "pi-input") {
     return hintAtEnd(shown, PI_MENU_HINT_AT_END_RE, PI_FOOTER_LINES, 4)
       || hintAtEnd(shown, PI_INPUT_HINT_AT_END_RE, PI_FOOTER_LINES, 4);
@@ -2513,6 +2518,240 @@ function omoModelListWaits(screen: string): boolean {
   return rules === 1;
 }
 
+/**
+ * The questionnaire `@juicesharp/rpiv-ask-user-question` draws for pi's `ask_user_question`
+ * tool (2.13.9, `view/dialog-builder.ts`): a rule, the tab bar once it asks more than one
+ * question, the heading, one numbered row per option, a rule, and its own `·`-joined hint. pi
+ * draws it in its editor slot, so the hint never ends the screen: pi's folder line and context
+ * meter stay under it. Nothing else there says `Enter to select · ↑/↓ to navigate`, and pi's
+ * own dialogs and `/model` say their hints in other words.
+ *
+ *   ────────────────────────────────────────────────
+ *    ←  □ Runtime   □ Storage   ✓ Submit  →
+ *
+ *    Runtime
+ *
+ *   Which runtime should the worker use?
+ *
+ *   ❯ 1. Bun
+ *        Fast startup, built-in bundler.
+ *     2. Node 22
+ *        LTS, widest ecosystem support.
+ *     3. Type something.
+ *
+ *   ────────────────────────────────────────────────
+ *
+ *    Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel
+ */
+const RPIV_ASK_HINT_RE = /enter to select\s*·\s*↑\/↓ to navigate/i;
+const RPIV_ASK_HINT_AT_END_RE = new RegExp(`${RPIV_ASK_HINT_RE.source}.*$`, "i");
+/**
+ * pi's footer under the dialog: its folder, then its context meter, which a phone wraps onto a
+ * second line. Measured on the 120- and 80-column captures: the hint sits one to two lines above
+ * the bottom, and up to three blank lines can follow it on a multi-question tab.
+ */
+const RPIV_ASK_FOOTER_LINES = 4;
+/** the row rpiv adds under the options, numbered last: it takes text instead of a choice */
+const RPIV_ASK_OTHER_LABEL = "Type something.";
+/** `HERDR_WEB_PI_ASK_PROMPT=0`: the questionnaire stays plain terminal text, as before this reader */
+const RPIV_ASK_PROMPT = process.env.HERDR_WEB_PI_ASK_PROMPT !== "0";
+
+type RpivRow = { label: string; description: string | null; cursor: boolean; boxed: boolean; checked: boolean };
+
+/**
+ * The dialog's own lines, with the preview box taken out: from 100 columns rpiv sets it beside
+ * the list, below it under that. Its text is phase 6's, and its columns would otherwise read as
+ * option labels.
+ */
+function rpivBody(lines: string[]): string[] {
+  const column = lines.reduce((at, line) => {
+    const found = line.indexOf("┌");
+    return found > 0 && (at < 0 || found < at) ? found : at;
+  }, -1);
+  if (column > 0) return lines.map((line) => line.slice(0, column));
+  return lines.filter((line) => !/^[┌│└]/.test(line.trim()) && !/^notes:/i.test(line.trim()));
+}
+
+/** The tab bar's tabs, in order: `□` a question still to answer, `■` one already answered, `✓` the Submit tab. */
+function rpivTabs(line: string): { label: string; answered: boolean; submit: boolean }[] {
+  return line.split(/(?=[□■✓])/).flatMap((part) => {
+    const mark = part[0];
+    const label = part.slice(1).replace(/[←→]/g, "").trim();
+    if (!label || (mark !== "□" && mark !== "■" && mark !== "✓")) return [];
+    return [{ label, answered: mark === "■", submit: mark === "✓" }];
+  });
+}
+
+/**
+ * The numbered rows, each with the lines under it joined back into its description, and the bare
+ * lines after the last row (a multiple choice's `Submit`). A tick rpiv leaves on a single
+ * select's confirmed row, and the checkbox in front of a multiple choice's rows, come off the
+ * label.
+ */
+function rpivRows(lines: string[]): { rows: RpivRow[]; trailing: { label: string; cursor: boolean }[] } {
+  const kept = lines.map((line) => line.trim())
+    .filter((line) => line && !isDivider(line) && !/^[↑↓↕]$/.test(line) && !/^\(\d+\/\d+\)$/.test(line));
+  const rows: RpivRow[] = [];
+  const trailing: { label: string; cursor: boolean }[] = [];
+  kept.forEach((line, index) => {
+    const row = /^(❯\s+)?(\d+)\.\s*(.*)$/.exec(line);
+    if (row) {
+      const text = row[3]!.trim();
+      const box = /^\[([^\]])\]\s*(.*)$/.exec(text);
+      rows.push({
+        label: box ? box[2]!.trim() : text.replace(/\s*[✔✓]$/, "").trim(),
+        description: null,
+        cursor: Boolean(row[1]),
+        boxed: box !== null,
+        checked: box ? box[1] !== " " : false,
+      });
+      return;
+    }
+    const previous = rows.at(-1);
+    if (!previous) return;
+    // the last line is what commits a multiple choice (`Submit`), never a description
+    if (index === kept.length - 1) {
+      trailing.push({ label: line.replace(/^❯\s+/, "").trim(), cursor: /^❯\s/.test(line) });
+      return;
+    }
+    previous.description = previous.description ? `${previous.description} ${line}` : line;
+  });
+  return { rows, trailing };
+}
+
+/** The Submit tab's review: `● Runtime` over `→ Bun`, one pair per question. */
+function rpivReviewAnswers(lines: string[]): InteractivePromptAnswer[] {
+  const answers: InteractivePromptAnswer[] = [];
+  for (const line of lines) {
+    const question = /^●\s*(.*)$/.exec(line);
+    const answer = /^→\s*(.*)$/.exec(line);
+    if (question) answers.push({ question: question[1]!.trim(), answer: null });
+    else if (answer && answers.length > 0) answers.at(-1)!.answer = answer[1]!.trim() || null;
+  }
+  return answers;
+}
+
+/**
+ * The questionnaire as a card. The answer is keys into the dialog: rpiv keeps the row indexes
+ * and the cursor, ↑/↓ move one row (wrapping, so only the direct delta is sent), Enter picks,
+ * Space ticks a multiple choice, and the row under the cursor decides what Enter means.
+ *
+ * A multiple choice commits on its own row (`Submit`, under the ones it ticks); a single select
+ * commits on the row it picks. Both keep `Type something.` last, and moving onto it hands the
+ * keyboard to its editor, so its answer is the moves, the text, then Enter. A form of several
+ * questions is answered a tab at a time: after the keys rpiv moves on by itself, and the next
+ * read is the next card.
+ */
+function parseRpivAsk(screen: string): ParsedPrompt | null {
+  if (!RPIV_ASK_PROMPT) return null;
+  const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
+  const hintIndex = findLastIndex(lines, (_, index) => RPIV_ASK_HINT_RE.test(wrapped(lines, index, 2)));
+  if (hintIndex < 0) return null;
+  // the block is framed by two rules; the Submit tab keeps its picker between the lower one and the hint
+  let bottom = -1;
+  for (let index = hintIndex - 1; index >= Math.max(0, hintIndex - 16); index -= 1) {
+    if (isDivider(lines[index]!)) { bottom = index; break; }
+  }
+  let top = -1;
+  for (let index = bottom - 1; index >= Math.max(0, bottom - 40); index -= 1) {
+    if (isDivider(lines[index]!)) { top = index; break; }
+  }
+  if (top < 0) return null;
+  const body = rpivBody(lines.slice(top + 1, bottom));
+  const tabBar = rpivTabs(body[0] ?? "");
+  const inside = tabBar.length > 0 ? body.slice(1) : body;
+  const under = rpivRows(rpivBody(lines.slice(bottom + 1, hintIndex)));
+  // which tab rpiv is on is not written in the screen's text (it marks that tab with colour alone):
+  // rpiv moves to the next unanswered tab once one is answered, so the first of those is the one
+  // shown, and once every question is answered the card names none
+  const questions = tabBar.filter((tab) => !tab.submit);
+  const shownTab = questions.findIndex((tab) => !tab.answered);
+  const steps = questions.length > 1
+    ? questions.map((tab, index) => ({ label: tab.label, answered: tab.answered, current: index === shownTab && under.rows.length === 0 }))
+    : undefined;
+
+  if (under.rows.length > 0) {
+    // Submit: the answers laid out above the rule, then `Submit answers` over `Cancel`
+    const heading = under.rows;
+    const prompt = rpivBody(lines.slice(bottom + 1, hintIndex)).map((line) => line.trim())
+      .filter((line) => line && !/^(?:❯\s+)?\d+\.\s/.test(line)).join(" ");
+    const answers = rpivReviewAnswers(inside.map((line) => line.trim()).filter(Boolean));
+    const cancel = heading.findIndex((row) => /^cancel$/i.test(row.label));
+    return finishPrompt("pi", {
+      kind: "question",
+      title: inside.map((line) => line.trim()).find(Boolean) ?? "",
+      question: prompt,
+      body: null,
+      options: heading.map((row) => ({ label: row.label, description: null })),
+      multi_select: false,
+      custom_option_index: null,
+      ...(answers.length > 0 ? { answers } : {}),
+      ...(steps ? { steps } : {}),
+    }, {
+      responder: "pi-ask-submit",
+      menuLabels: heading.map((row) => row.label),
+      selectedIndex: Math.max(0, heading.findIndex((row) => row.cursor)),
+      checkedOptionIndices: [],
+      customMenuIndex: null,
+      // Cancel leaves the questionnaire unanswered, as Escape does
+      rejectWithEscapeIndex: cancel >= 0 ? cancel : null,
+    });
+  }
+
+  const first = inside.findIndex((line) => /^\s*(?:❯\s+)?\d+\.\s/.test(line));
+  if (first < 0) return null;
+  const headingLines = inside.slice(0, first).map((line) => line.trim()).filter(Boolean);
+  const menu = rpivRows(inside.slice(first));
+  if (menu.rows.length === 0) return null;
+  const boxed = menu.rows.some((row) => row.boxed);
+  const last = menu.rows.at(-1)!;
+  // `Type something.` is always the last numbered row; focused, rpiv redraws it as the editor, so
+  // its label is empty (or the text typed into it, which then reads as one more option)
+  const custom = last.label === RPIV_ASK_OTHER_LABEL || last.label === "" ? menu.rows.length - 1 : null;
+  const options = menu.rows.slice(0, custom ?? menu.rows.length).map((row) => ({ label: row.label, description: row.description }));
+  if (options.length === 0) return null;
+  const cursor = menu.rows.findIndex((row) => row.cursor);
+  const selectedIndex = cursor >= 0 ? cursor : menu.trailing.some((row) => row.cursor) ? menu.rows.length : 0;
+  // where Enter commits a multiple choice, one row under the ones it ticks
+  const commit = boxed && menu.trailing.length === 1 ? menu.rows.length : null;
+  const title = questions.length > 0 ? questions[shownTab]?.label ?? "" : headingLines.length > 1 ? headingLines[0]! : "";
+  const question = questions.length > 0 ? headingLines.join(" ") : headingLines.length > 1 ? headingLines.slice(1).join(" ") : headingLines[0] ?? "";
+  return finishPrompt("pi", {
+    kind: "question",
+    title,
+    question,
+    body: null,
+    options,
+    multi_select: boxed,
+    custom_option_index: custom,
+    ...(steps ? { steps } : {}),
+  }, {
+    responder: "pi-ask",
+    menuLabels: menu.rows.map((row) => row.label),
+    selectedIndex,
+    checkedOptionIndices: menu.rows.flatMap((row, index) => (row.checked ? [index] : [])),
+    customMenuIndex: custom,
+    rejectWithEscapeIndex: null,
+    ...(custom === null ? {} : {
+      customSteps: (text: string): AnswerStep[] => [
+        ...keySteps(navigationKeys(custom - selectedIndex)), { text }, { keys: [KEY.enter] },
+      ],
+    }),
+    ...(commit === null ? {} : {
+      multiSteps: (choices: number[]): AnswerStep[] => {
+        const keys: string[] = [];
+        let at = selectedIndex;
+        for (const choice of choices) {
+          keys.push(...navigationKeys(choice - at), KEY.space);
+          at = choice;
+        }
+        keys.push(...navigationKeys(commit - at), KEY.enter);
+        return keySteps(keys);
+      },
+    }),
+  });
+}
+
 function parsePiDialog(screen: string, moved = false): ParsedPrompt | null {
   const lines = screen.replace(ANSI_RE, "").split(/\r?\n/);
   const hintIndex = findLastIndex(lines, (_, index) => PI_MENU_HINT_RE.test(wrapped(lines, index)) || PI_INPUT_HINT_RE.test(wrapped(lines, index)));
@@ -2673,7 +2912,7 @@ function parsePrompt(agent: string, screen: string, omoAsk: OmoAsk | null = null
       : agent === "claude"
         ? [parseClaudeQuestion(screen), parseClaudeSubmit(screen), parseClaudeApproval(screen), parseClaudeConfirm(screen), parseClaudeModel(screen), parseClaudeEffort(screen), parseClaudeHeld(screen, sent, working), parseOmoModel(screen), ...omo()]
         : agent === "pi"
-          ? [parsePiModel(screen), parseOmoModel(screen), parsePiDialog(screen), ...omo()]
+          ? [parsePiModel(screen), parseOmoModel(screen), parseRpivAsk(screen), parsePiDialog(screen), ...omo()]
         : agent === "hermes"
           ? [parseHermesClarify(screen)]
         : agent === "omo" || agent === ""
@@ -2737,7 +2976,7 @@ export function answerKeys(prompt: InteractivePrompt, answer: Pick<PromptAnswer,
   if (answer.custom_text !== undefined) {
     if (typeof answer.custom_text !== "string") throw new InvalidAnswer("Custom text must be a string.");
     const text = answer.custom_text.trim();
-    if (!text || parsed.customMenuIndex === null || (parsed.multi_select && parsed.responder !== "claude-question")) throw new InvalidAnswer("This prompt does not accept a custom answer.");
+    if (!text || parsed.customMenuIndex === null || (parsed.multi_select && parsed.responder !== "claude-question" && parsed.responder !== "pi-ask")) throw new InvalidAnswer("This prompt does not accept a custom answer.");
     if (parsed.customSteps) return parsed.customSteps(text);
     // Claude's multiple choice: typing into the row ticks it, and Enter on Submit, the row under
     // it, sends the choice (→ in the row would move the text's cursor; measured on 2.1.301)

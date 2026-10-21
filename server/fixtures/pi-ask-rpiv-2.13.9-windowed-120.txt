@@ -1,0 +1,18 @@
+
+
+ ask_user_question questions=[{"header":"Library","question":"Which date library should we use for the app?","option...
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  Library
+
+ Which date library should we use for the app?
+
+❯ 1. Day.js
+     2 KB immutable wrapper, familiar moment-style API.
+↓
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ Enter to select · ↑/↓ to navigate · n to add notes · Esc to cancel · Ctrl+] to collapse
+ Sonnet 5.5 | think:high | ◫ 46k/1.0M (4.6%) AC | TPS: 25.9 tok/s​ | dir phase5-cap | LSP ✗ | sync ⇡ | ◷ 14s
