@@ -21,6 +21,19 @@ const html = (refresh: number) => inEnglish(() => renderToStaticMarkup(createEle
   children: createElement(WebPanel, { url: "http://localhost:19432/plan", refresh, onClose: () => {} }),
 })));
 
+/** The page rendered in a window of the given display modes: `standalone` is the installed app,
+ * `browser` a plain tab (bun has no window, so the test brings its own). */
+const inWindow = (modes: string[]): string => {
+  const saved = Object.getOwnPropertyDescriptor(globalThis, "window");
+  Object.defineProperty(globalThis, "window", { configurable: true, value: { matchMedia: (query: string) => ({ matches: modes.some((mode) => query === `(display-mode: ${mode})`) }) } });
+  try {
+    return html(0);
+  } finally {
+    if (saved) Object.defineProperty(globalThis, "window", saved);
+    else Reflect.deleteProperty(globalThis, "window");
+  }
+};
+
 describe("the page beside the pane", () => {
   it("loads the page again when it is pushed again, instead of keeping the frame it had", () => {
     // the first showing is the address as it came; each push of it names one the frame has not
@@ -31,5 +44,27 @@ describe("the page beside the pane", () => {
     // the panel still names the page itself, and its new-tab link is the address as the agent gave it
     expect(html(2)).toContain('href="http://localhost:19432/plan"');
     expect(html(2)).toContain("localhost:19432/plan");
+  });
+
+  it("opens the page in a new tab from a browser tab", () => {
+    // a browser tab gets the browser's own new tab, as it always did
+    const markup = inWindow(["browser"]);
+    expect(markup).toContain('href="http://localhost:19432/plan"');
+    expect(markup).toContain('target="_blank"');
+    expect(markup).toContain('aria-label="Open in a new tab"');
+    expect(markup).not.toContain('aria-label="Copy link"');
+  });
+
+  it("copies the address instead in the installed app's window, where a new tab leaves the app", () => {
+    // on iOS a new tab from the installed app is Safari, outside the app: nothing is opened, the
+    // address is copied for a browser instead, as the file viewer does
+    const markup = inWindow(["standalone"]);
+    expect(markup).toContain('aria-label="Copy link"');
+    expect(markup).not.toContain('target="_blank"');
+    expect(markup).not.toContain('aria-label="Open in a new tab"');
+    // the panel itself is untouched: the frame, its reload and its close stay
+    expect(markup).toContain('src="http://localhost:19432/plan"');
+    expect(markup).toContain('aria-label="Reload page"');
+    expect(markup).toContain('aria-label="Close page"');
   });
 });
