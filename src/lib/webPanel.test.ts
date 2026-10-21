@@ -32,10 +32,12 @@ describe("panelUrl", () => {
     expect(panelUrl("http://", lan)).toBeNull();
   });
 
-  it("leaves an http page to a tab when the app is https: the browser blocks it as mixed content", () => {
+  it("reaches a loopback page over the app's own https, and leaves another http page to a tab", () => {
     const tls = { protocol: "https:", hostname: "pc.tail.ts.net", origin: "https://pc.tail.ts.net" };
-    expect(panelUrl("http://localhost:5173/", tls)).toBeNull();
+    expect(panelUrl("http://localhost:5173/", tls)).toBe("https://pc.tail.ts.net:5173/");
+    expect(panelUrl("http://127.0.0.1:3000/docs?x=1#top", tls)).toBe("https://pc.tail.ts.net:3000/docs?x=1#top");
     expect(panelUrl("https://localhost:5173/", tls)).toBe("https://pc.tail.ts.net:5173/");
+    expect(panelUrl("http://example.com:5173/", tls)).toBeNull();
   });
 });
 

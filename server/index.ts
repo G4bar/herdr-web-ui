@@ -6,7 +6,7 @@ import { accessSync, constants, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { ServerWebSocket } from "bun";
 
-import type { AgentKind, AgentStatus, ClientMessage, ClientRole, HealthAuth, HerdrPane, IntegrationsResponse, PanePlan, PendingMessage, PlanSummary, PluginActionsResponse, ServerFeature, ServerMessage, SessionSnapshot } from "../shared/protocol.ts";
+import type { AgentKind, AgentStatus, ClientMessage, ClientRole, HealthAuth, HerdrPane, IntegrationsResponse, PanePlan, PendingMessage, PlanSummary, PluginActionsResponse, ServerFeature, ServerMessage, SessionSnapshot, WebPanelOpenRequest, WebPanelOpenResponse } from "../shared/protocol.ts";
 import { alertStatus, paneTitle } from "../shared/notify-policy.ts";
 import { DEFAULT_PORT } from "../shared/protocol.ts";
 import { DEVICE_COOKIE, authClient, bearerMatches, handleAuthRequest, isAuthenticated, isSecureRequest, parseCookies, presentedToken, presentedTokenHeld, recordPresentedTokenFailure, requiresAuth, unauthorizedJson } from "./auth.ts";
@@ -1835,7 +1835,12 @@ export function createServer(
 
       const readOnly = access.level === "full" && access.role === "watch";
       const mutating = !["GET", "HEAD", "OPTIONS"].includes(request.method);
-      if (pathname.startsWith("/api/") && mutating && !sameOrigin(request)) {
+      // A script's Bearer request (scripts/open-panel.sh) needs no Origin: no Origin and no
+      // Sec-Fetch-Site is no browser, and a cross-site page cannot send Bearer without a CORS
+      // preflight this server never grants. One route only, and no cookie gets that path.
+      const scriptPanelOpen = pathname === "/api/web-panel/open" && bearerMatches(request, token)
+        && !request.headers.has("origin") && !request.headers.has("sec-fetch-site");
+      if (pathname.startsWith("/api/") && mutating && !scriptPanelOpen && !sameOrigin(request)) {
         return jsonResponse({ error: { code: "invalid_origin", message: "Use controls from this app" } }, 403);
       }
       // An empty segment ("//") reads as another route to the checks below, while the PC proxy
@@ -1955,6 +1960,21 @@ export function createServer(
         } catch (error) {
           return errorResponse(error);
         }
+      }
+
+      if (pathname === "/api/web-panel/open") {
+        // The panel's own rules are the page's (src/lib/webPanel.ts): only the shape is checked here.
+        if (request.method !== "POST") return badRequest("method_not_allowed", "use POST");
+        const body = await readJsonObject<WebPanelOpenRequest>(request);
+        if (body instanceof Response) return body;
+        const badUrl = "an http or https address of at most 2048 characters";
+        let target: URL;
+        try { target = new URL(typeof body.url === "string" ? body.url : ""); } catch { return badRequest("invalid_url", badUrl); }
+        if (!/^https?:$/.test(target.protocol) || (typeof body.url === "string" && body.url.length > 2048)) return badRequest("invalid_url", badUrl);
+        if (body.label !== undefined && (typeof body.label !== "string" || body.label.length > 80)) return badRequest("invalid_label", "a label of at most 80 characters");
+        broadcastAll({ type: "web-panel-open", url: body.url, ...(body.label === undefined ? {} : { label: body.label }) });
+        // 0 tells the caller no browser has this app open; nothing is kept for one that opens later
+        return jsonResponse({ delivered: machines?.pageStreams() ?? 0 } satisfies WebPanelOpenResponse);
       }
 
       if (pathname === "/api/health") {

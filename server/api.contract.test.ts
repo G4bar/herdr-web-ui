@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { ConversationMonitor } from "./conversation-monitor.ts";
 import { createServer } from "./index.ts";
-import type { AgentKind, AgentStatus, ApiError, HealthAuth, IntegrationsResponse, LanExposure, PortalStatus, PushKey, RemoteAccess, SessionSnapshot, TabMoved, PaneFindResponse, PaneReadResult, UsageReport, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
+import type { AgentKind, AgentStatus, ApiError, HealthAuth, IntegrationsResponse, LanExposure, PortalStatus, PushKey, RemoteAccess, SessionSnapshot, TabMoved, PaneFindResponse, PaneReadResult, UsageReport, WebPanelOpenResponse, WorkspaceCreated, WorktreeListing, WorktreeOpened, WorktreeRemoved } from "../shared/protocol.ts";
 import { HerdrUpdater } from "./herdr-update.ts";
 import { PortalService } from "./portal.ts";
 import { noInstalledNotes, unmanagedUpdateStatus, type HerdrUpdateStatus, type InstalledNotes, type UpdateNotes } from "../shared/update.ts";
@@ -3547,5 +3547,82 @@ describe("repository diff of a pane's folder", () => {
     const posted = await fetch(`${base()}/api/workspace/diff/files?${pane}`, { method: "POST", headers: { "x-herdr-machine": "1" } });
     expect(posted.status).toBe(400);
     expect(((await posted.json()) as ApiError).error.code).toBe("method_not_allowed");
+  });
+});
+
+describe("POST /api/web-panel/open", () => {
+  const token = "web-panel-token";
+  const route = "/api/web-panel/open";
+  const page = "http://127.0.0.1:7399/docs";
+  let gated: ReturnType<typeof createServer>;
+  let stateDir = "";
+  let controller: AbortController | undefined;
+  const at = () => `http://127.0.0.1:${gated.port}`;
+  const open = (body: unknown, headers: Record<string, string> = {}) => fetch(`${at()}${route}`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}`, "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+
+  beforeAll(() => {
+    stateDir = mkdtempSync(join(tmpdir(), "herdr-web-ui-web-panel-"));
+    gated = createServer({ port: 0, token, stateDir });
+  });
+
+  afterAll(() => {
+    controller?.abort();
+    gated?.stop();
+    rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("needs the token, and refuses another site's Origin even with it", async () => {
+    const anonymous = await fetch(`${at()}${route}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ url: page }) });
+    expect([anonymous.status, ((await anonymous.json()) as ApiError).error.code]).toEqual([401, "unauthorized"]);
+    // a script states no Origin at all; one that states another site, or a cross-site fetch, is refused
+    for (const headers of [{ origin: "https://evil.example" }, { "sec-fetch-site": "cross-site" }] as Record<string, string>[]) {
+      const refused = await open({ url: page }, headers);
+      expect([headers, refused.status, ((await refused.json()) as ApiError).error.code]).toEqual([headers, 403, "invalid_origin"]);
+    }
+    // the same from a cookie: the bare Bearer path is the only one that skips the guard
+    const cookie = `herdr_web_token=${token}`;
+    const foreign = await fetch(`${at()}${route}`, { method: "POST", headers: { cookie, origin: "https://evil.example", "content-type": "application/json" }, body: JSON.stringify({ url: page }) });
+    expect(foreign.status).toBe(403);
+    expect((await open({ url: page })).status).toBe(200);
+    // and this app's own request still passes the guard it always did
+    const sameOrigin = await fetch(`${at()}${route}`, { method: "POST", headers: { cookie, origin: at(), "content-type": "application/json" }, body: JSON.stringify({ url: page }) });
+    expect(sameOrigin.status).toBe(200);
+  });
+
+  it("takes only an http or https address of a sane length, and a short label", async () => {
+    const refused: [unknown, string][] = [
+      [{ url: "javascript:alert(1)" }, "invalid_url"],
+      [{ url: "file:///etc/hosts" }, "invalid_url"],
+      [{ url: `http://127.0.0.1:7399/${"a".repeat(2048)}` }, "invalid_url"],
+      [{}, "invalid_url"],
+      [{ url: page, label: "a".repeat(81) }, "invalid_label"],
+    ];
+    for (const [body, code] of refused) {
+      const answer = await open(body);
+      expect([body, answer.status, ((await answer.json()) as ApiError).error.code]).toEqual([body, 400, code]);
+    }
+  });
+
+  it("counts the open page streams, and the page takes the frame", async () => {
+    expect(await (await open({ url: page, label: "the page" })).json()).toEqual({ delivered: 0 } satisfies WebPanelOpenResponse);
+    controller = new AbortController();
+    const stream = await fetch(`${at()}/api/machines/events`, { headers: { authorization: `Bearer ${token}` }, signal: controller.signal });
+    const reader = stream.body!.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    type Frame = { type: string; machine_id?: string; message?: { type: string; url?: string; label?: string } };
+    const frames = (): Frame[] => buffer.split("\n\n").filter((block) => block.startsWith("data: ")).map((block) => JSON.parse(block.slice("data: ".length)) as Frame);
+    const waitFor = async (test: (all: Frame[]) => boolean) => { while (!test(frames())) buffer += decoder.decode((await reader.read()).value); };
+    // the stream's own first frame: it is subscribed before it says the roster
+    await waitFor((all) => all.some((frame) => frame.type === "machines"));
+    expect(await (await open({ url: page, label: "the page" })).json()).toEqual({ delivered: 1 } satisfies WebPanelOpenResponse);
+    await waitFor((all) => all.some((frame) => frame.message?.type === "web-panel-open"));
+    expect(frames().find((frame) => frame.message?.type === "web-panel-open"))
+      .toEqual({ type: "machine-message", machine_id: "local", message: { type: "web-panel-open", url: page, label: "the page" } });
+    controller.abort();
   });
 });

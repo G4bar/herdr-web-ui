@@ -447,6 +447,14 @@ export function App() {
     setWebPage(url);
     return true;
   }, [settings.webLinks, viewing, fileDocked, closeFile]);
+  // a page an agent asked this app to show (POST /api/web-panel/open): the panel when it can frame
+  // it, else a tab. A hidden tab opens nothing: it would take over the page the user comes back to.
+  const openPanelUrl = useCallback((uri: string) => {
+    if (document.visibilityState !== "visible") return;
+    if (openWebPage(uri, false, LOCAL_MACHINE)) return;
+    window.open(uri, "_blank", "noopener");
+  }, [openWebPage]);
+  const openPanelUrlRef = useRef(openPanelUrl); openPanelUrlRef.current = openPanelUrl;
   // the panel is no dialog, so no trap gives the focus back when it closes: what opened the file
   // (a link in the chat, a row of Files) gets it, as it does from the popup
   useFocusReturn(viewing !== null && fileDocked);
@@ -678,6 +686,8 @@ export function App() {
         setMachineRosterLoaded(true);
         return;
       }
+      // a page an agent asked for (POST /api/web-panel/open), about no pane
+      if (payload.type === "machine-message" && payload.message.type === "web-panel-open") { openPanelUrlRef.current(payload.message.url); return; }
       const machine = machinesRef.current.find((m) => m.id === payload.machine_id);
       if (!machine) return;
       const message = payload.message;

@@ -17,8 +17,9 @@ const LOOPBACK = /^(?:localhost|[^.]+(?:\.[^.]+)*\.localhost|127(?:\.\d{1,3}){3}
  * by the PC this app runs on is framed, on another port than the app's: the app's policy
  * (server/static.ts) frames that host alone, and most other sites refuse to be framed anyway.
  * A loopback name means that PC, so it is reached under the host the browser used for the app:
- * from another computer, `localhost:5173` would be that computer's own. An https app cannot
- * frame an http page (mixed content), so that one opens in a tab too.
+ * from another computer, `localhost:5173` would be that computer's own. An https app frames such a
+ * page over its own https (the local setup serves that port the same way, `tailscale serve
+ * --https=<port>`); any other http page cannot be framed (mixed content) and opens in a tab.
  */
 export function panelUrl(uri: string, app: AppLocation): string | null {
   if (!/^https?:\/\//i.test(uri)) return null;
@@ -28,7 +29,10 @@ export function panelUrl(uri: string, app: AppLocation): string | null {
   } catch {
     return null;
   }
-  if (LOOPBACK.test(url.hostname)) url.hostname = app.hostname;
+  if (LOOPBACK.test(url.hostname)) {
+    url.hostname = app.hostname;
+    if (app.protocol === "https:" && url.protocol === "http:") url.protocol = "https:";
+  }
   else if (url.hostname.toLowerCase() !== app.hostname.toLowerCase()) return null;
   if (url.origin === app.origin) return null;
   if (app.protocol === "https:" && url.protocol === "http:") return null;

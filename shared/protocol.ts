@@ -232,6 +232,11 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         started: the browser must unsubscribe and subscribe anew; an older server never says it)
  *  DELETE /api/push/subscribe { endpoint }      -> 204
  *  POST   /api/push/test      { endpoint }      -> 204 | 404 subscription_not_found | 410 subscription_gone | 502 push_failed
+ *  POST   /api/web-panel/open { url, label? }   -> WebPanelOpenResponse (an agent asks the browser's
+ *         side panel to show `url`: http or https, at most 2048 characters, `label` at most 80.
+ *         `delivered` counts the /api/machines/events streams that took it, so 0 means no browser has
+ *         this app open, and nothing is kept for one that opens later. The page applies the panel's
+ *         own rules: a page it cannot frame opens in a tab)
  *  GET    /api/usage[?refresh=1]         -> UsageReport (plan limits of the AI subscriptions signed in on this PC)
  *  Errors: non-2xx with { error: { code, message } }
  *
@@ -243,7 +248,10 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *  the shared token (HERDR_WEB_TOKEN) as cookie or `Authorization: Bearer <token>`. With a
  *  token configured, only the last two count, this PC and its Tailscale login included. Without one, and while no
  *  device is paired, anything that reaches the server is let in as before (the startup
- *  warning says so). Refusals answer 401 `unauthorized` (403 `other_user` for another Tailscale
+ *  warning says so). POST /api/web-panel/open alone also takes a request that states no Origin
+ *  and no Sec-Fetch-Site, as a script's Bearer request does: a page cannot send Bearer without
+ *  a CORS preflight this server never grants, and no cookie ever gets that path.
+ *  Refusals answer 401 `unauthorized` (403 `other_user` for another Tailscale
  *  login, when no token is configured); the upgrade is refused. Static files are always public.
  */
 export interface ApiError {
@@ -439,6 +447,19 @@ export interface PortalStatus {
 /** GET /api/push: base64url VAPID public key, the `applicationServerKey` a browser subscribes with. */
 export interface PushKey {
   readonly public_key: string;
+}
+
+/** POST /api/web-panel/open: a page for the browser's side panel (an agent's script; see Access). */
+export interface WebPanelOpenRequest {
+  /** http or https, at most 2048 characters: the server does not apply the panel's own rules to it */
+  url: string;
+  /** the caller's name for the page, at most 80 characters; one that shows no name may ignore it */
+  label?: string;
+}
+
+/** POST /api/web-panel/open: `delivered` open page streams took the frame; 0 means no browser has this app open. */
+export interface WebPanelOpenResponse {
+  readonly delivered: number;
 }
 
 /** One turn of a structured agent conversation (the chat lens source). */
@@ -1256,6 +1277,9 @@ export type ServerMessage =
   | { type: "watch-end"; pane_id: string }
   /** the answer to a `ping`, with its id; only this frame, for a ping in flight, ends the client's liveness probe */
   | { type: "pong"; id: number }
+  /** a page an agent asked for (POST /api/web-panel/open): this app shows it in its side panel or a
+   * tab, and a hidden tab shows neither. About no pane; `label` is the caller's name for it */
+  | { type: "web-panel-open"; url: string; label?: string }
   /** `pane_id` names the pane an error is about, when it is about one (`attach_held`) */
   | { type: "error"; code: string; message: string; pane_id?: string };
 
