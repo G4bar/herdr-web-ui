@@ -2688,23 +2688,78 @@ function rpivReviewAnswers(lines: string[]): InteractivePromptAnswer[] {
 }
 
 /**
- * The question the session's open call asked that is the card on screen: matched by its question
- * text and its option labels, never by where its tab stands, and only when it is a multiple choice
- * exactly where the screen's rows are boxed. None or more than one (a form asked twice, not yet
- * answered) leaves the card screen-only: a guess would tag the wrong row or preview the wrong option.
+ * A pane that wraps or clips the text rpiv drew still names the same question: rpiv wraps a long
+ * question inside a word and cuts what it draws at the pane's width, so the screen's copy is a
+ * wrap of the call's (spaces gone at a break, "questio" over "n") or a long enough beginning of
+ * it. Comparing letters and digits alone reads both; the length keeps a short fragment from
+ * matching, and a match still needs the rows below it.
  */
-function rpivAskOnScreen(asks: OmoAsk[], question: string, labels: string[], multi: boolean): { header: string; recommended: number | null; previews: (string | null)[] } | null {
+function sameWrappedText(shown: string, asked: string): boolean {
+  const a = comparable(shown);
+  const b = comparable(asked);
+  return a === b || (a.length >= 24 && b.startsWith(a));
+}
+
+/** What the session's call adds to a card: text the pane wrapped, clipped or never drew at all. */
+type RpivCall = {
+  header: string;
+  question: string;
+  multi: boolean;
+  recommended: number | null;
+  options: { label: string; description: string | null; preview: string | null }[];
+};
+
+/**
+ * The question the session's open call asked that is the card on screen: matched by its question
+ * text and by its options at the numbers the screen's rows carry, never by where its tab stands,
+ * and only when it is a multiple choice exactly where the screen's rows are boxed. The rows may be
+ * a window of the call's options, or stop before rpiv's own `Type something.` row: a pane shorter
+ * than the dialog shows only what fits. None or more than one (a form asked twice, not yet
+ * answered) leaves the card screen-only: a guess would tag the wrong row or preview the wrong
+ * option.
+ */
+function rpivCallFor(asks: OmoAsk[], question: string, rows: RpivRow[], multi: boolean): RpivCall | null {
   const matches = asks.flatMap((ask) => ask.questions).filter((asked) => asked.multiSelect === multi
-    && sameText(question, asked.question)
-    && asked.options.length === labels.length
-    && asked.options.every((option, index) => sameText(labels[index]!, option.label)));
+    && sameWrappedText(question, asked.question)
+    // a row past the last option is rpiv's free-text row, and nothing else
+    && rows.every((row) => row.number <= asked.options.length + 1)
+    && rows.every((row) => row.number > asked.options.length || sameWrappedText(row.label, asked.options[row.number - 1]!.label)));
   if (matches.length !== 1) return null;
   const [match] = matches;
   return {
     header: capped(match!.header, PI_ASK_HEADER_CAP),
+    question: match!.question,
+    multi: match!.multiSelect,
     recommended: match!.recommended ?? null,
-    previews: match!.options.map((option) => option.preview === undefined ? null : capped(option.preview, PI_ASK_PREVIEW_CAP)),
+    options: match!.options.map((option) => ({
+      label: option.label,
+      description: option.description,
+      preview: option.preview === undefined ? null : capped(option.preview, PI_ASK_PREVIEW_CAP),
+    })),
   };
+}
+
+/**
+ * The card's rows, from the call: the screen's own copy of them is wrapped where the pane is
+ * narrow, cut where it is short, and may miss the rows under its bottom entirely. Each row keeps
+ * what only the screen knows, where the screen showed it (the cursor, a tick); `Type something.`
+ * stays the screen's where rpiv drew it, so a typed answer still reads as that row.
+ */
+function rpivRowsFromCall(call: RpivCall, shown: RpivRow[]): RpivRow[] {
+  const rows = call.options.map((option, index) => {
+    const row = shown.find((candidate) => candidate.number === index + 1);
+    return {
+      number: index + 1,
+      label: option.label,
+      description: option.description,
+      cursor: row?.cursor ?? false,
+      boxed: call.multi,
+      checked: row?.checked ?? false,
+    };
+  });
+  rows.push(shown.find((row) => row.number === call.options.length + 1)
+    ?? { number: call.options.length + 1, label: RPIV_ASK_OTHER_LABEL, description: null, cursor: false, boxed: call.multi, checked: false });
+  return rows;
 }
 
 /**
@@ -2777,15 +2832,30 @@ function parseRpivAsk(screen: string, piAsks: OmoAsk[] = []): ParsedPrompt | nul
   const first = inside.findIndex((line) => /^\s*(?:❯\s+)?\d+\.(?:\s|$)/.test(line));
   if (first < 0) return null;
   const headingLines = inside.slice(0, first).map((line) => line.trim()).filter(Boolean);
+  const title = questions.length > 0 ? questions[shownTab]?.label ?? "" : headingLines.length > 1 ? headingLines[0]! : "";
+  const shownQuestion = questions.length > 0 ? headingLines.join(" ") : headingLines.length > 1 ? headingLines.slice(1).join(" ") : headingLines[0] ?? "";
   const menu = rpivRows(inside.slice(first));
   if (menu.rows.length === 0) return null;
-  // rpiv scrolls a list too long for the pane: `↓`/`↑` on the left, or `(n/total)` over the rows,
-  // with the numbering starting past 1. The rows off the screen cannot be walked to, so the card
-  // would answer nothing or the wrong row — that screen stays terminal text
+  const boxed = menu.rows.some((row) => row.boxed);
+  // rpiv scrolls a list too long for the pane — `↓`/`↑` on the left, or `(n/total)` over the rows,
+  // with the numbering starting past 1 — and a pane shorter than the dialog cuts the list's own
+  // rows off at its bottom. Either way the rows off the screen are not on it, so the card is drawn
+  // from the session's call when the rows the screen does show are that call's, at their numbers;
+  // without it the screen stays terminal text, since the rows it hides cannot be walked to
   const more = [...body, ...lines.slice(bottom + 1, hintIndex)]
     .some((line) => /^[↑↓↕]$/.test(line.trim()) || /^\(\d+\/\d+\)$/.test(line.trim()));
-  if (more || menu.rows[0]!.number !== 1) return null;
-  const boxed = menu.rows.some((row) => row.boxed);
+  const clipped = more || menu.rows[0]!.number !== 1;
+  const call = rpivCallFor(piAsks, shownQuestion, menu.rows, boxed);
+  if (clipped && (call === null || !menu.rows.some((row) => row.cursor)
+    // a multiple choice's ticks only come from the rows it drew: with one off the pane the card
+    // cannot say which are ticked, and Space would press the wrong ones
+    || (boxed && menu.rows.filter((row) => row.number <= call.options.length).length !== call.options.length))) return null;
+  // the call's own text and rows: the pane may have wrapped either in the middle of a word
+  if (call !== null) {
+    menu.rows = rpivRowsFromCall(call, menu.rows);
+    menu.last = null;
+  }
+  const question = call?.question ?? shownQuestion;
   const last = menu.rows.at(-1)!;
   // `Type something.` is always the last numbered row; focused, rpiv redraws it as the editor, so
   // its label is empty (or the text typed into it, which then reads as one more option)
@@ -2804,17 +2874,16 @@ function parseRpivAsk(screen: string, piAsks: OmoAsk[] = []): ParsedPrompt | nul
   // numbers rpiv printed rather than from how many rows the pane happened to show
   const commit = boxed ? last.number : null;
   const checkedOptionIndices = menu.rows.flatMap((row, index) => (row.checked ? [index] : []));
-  const title = questions.length > 0 ? questions[shownTab]?.label ?? "" : headingLines.length > 1 ? headingLines[0]! : "";
-  const question = questions.length > 0 ? headingLines.join(" ") : headingLines.length > 1 ? headingLines.slice(1).join(" ") : headingLines[0] ?? "";
-  // what the screen never shows: the call's own header, its previews and its recommendation (§4.8)
-  const call = rpivAskOnScreen(piAsks, question, options.map((option) => option.label), boxed);
   return finishPrompt("pi", {
     kind: "question",
     title,
     ...(call === null ? {} : { header: call.header }),
     question,
     body: null,
-    options: options.map((option, index) => ({ ...option, ...(call?.previews[index] == null ? {} : { preview: call.previews[index] }) })),
+    options: options.map((option, index) => {
+      const preview = call?.options[index]?.preview;
+      return preview == null ? option : { ...option, preview };
+    }),
     multi_select: boxed,
     custom_option_index: custom,
     ...(call?.recommended == null ? {} : { recommended_index: call.recommended }),
