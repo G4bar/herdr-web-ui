@@ -3184,8 +3184,14 @@ describe("pi ask_user_question", () => {
     // a 12-row pane fits one row of the list and marks the rest with `↓`: the card offers what
     // is on screen, because a row nobody can see cannot be walked to
     const prompt = parseInteractivePrompt("pi", askFixture("windowed-120"))!;
-    expect(prompt.options.map((option) => option.label)).toEqual(["Day.js"]);
+    expect(prompt.options).toEqual([{ label: "Day.js", description: "2 KB immutable wrapper, familiar moment-style API." }]);
     expect(prompt.custom_option_index).toBeNull();
+  });
+
+  test("leaves a multiple choice whose Submit row is off the pane to the terminal", () => {
+    // captured off a 26-row herdr pane: the descriptions push `Type something.` and `Submit`
+    // under the bottom, and a card that cannot send the commit would leave it unanswered
+    expect(parseInteractivePrompt("pi", askFixture("multi-clipped-92"))).toBeNull();
   });
 
   test("leaves pi's own select, confirm and input dialogs to their readers", () => {

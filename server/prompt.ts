@@ -2588,11 +2588,11 @@ function rpivTabs(line: string): { label: string; answered: boolean; submit: boo
  * select's confirmed row, and the checkbox in front of a multiple choice's rows, come off the
  * label.
  */
-function rpivRows(lines: string[]): { rows: RpivRow[]; trailing: { label: string; cursor: boolean }[] } {
+function rpivRows(lines: string[]): { rows: RpivRow[]; last: { label: string; cursor: boolean } | null } {
   const kept = lines.map((line) => line.trim())
     .filter((line) => line && !isDivider(line) && !/^[↑↓↕]$/.test(line) && !/^\(\d+\/\d+\)$/.test(line));
   const rows: RpivRow[] = [];
-  const trailing: { label: string; cursor: boolean }[] = [];
+  let last: { label: string; cursor: boolean } | null = null;
   kept.forEach((line, index) => {
     const row = /^(❯\s+)?(\d+)\.\s*(.*)$/.exec(line);
     if (row) {
@@ -2609,14 +2609,15 @@ function rpivRows(lines: string[]): { rows: RpivRow[]; trailing: { label: string
     }
     const previous = rows.at(-1);
     if (!previous) return;
-    // the last line is what commits a multiple choice (`Submit`), never a description
+    // the last line under a list is what commits a multiple choice (`Submit`), or — on a pane too
+    // short for the whole list — the description of the last row shown; the caller tells them apart
     if (index === kept.length - 1) {
-      trailing.push({ label: line.replace(/^❯\s+/, "").trim(), cursor: /^❯\s/.test(line) });
+      last = { label: line.replace(/^❯\s+/, "").trim(), cursor: /^❯\s/.test(line) };
       return;
     }
     previous.description = previous.description ? `${previous.description} ${line}` : line;
   });
-  return { rows, trailing };
+  return { rows, last };
 }
 
 /** The Submit tab's review: `● Runtime` over `→ Bun`, one pair per question. */
@@ -2708,12 +2709,18 @@ function parseRpivAsk(screen: string): ParsedPrompt | null {
   // `Type something.` is always the last numbered row; focused, rpiv redraws it as the editor, so
   // its label is empty (or the text typed into it, which then reads as one more option)
   const custom = last.label === RPIV_ASK_OTHER_LABEL || last.label === "" ? menu.rows.length - 1 : null;
+  // a multiple choice commits on the row under its last one (`Submit`), which rpiv draws only once
+  // the list ends: a pane too short for it cuts `Type something.` too, and a card that cannot send
+  // the commit would leave the question unanswered — so that screen stays terminal text
+  if (boxed && custom === null) return null;
+  // a list cut off above the pane's bottom keeps its last row's description in `last`
+  if (!boxed && last.description === null && menu.last) last.description = menu.last.label;
   const options = menu.rows.slice(0, custom ?? menu.rows.length).map((row) => ({ label: row.label, description: row.description }));
   if (options.length === 0) return null;
   const cursor = menu.rows.findIndex((row) => row.cursor);
-  const selectedIndex = cursor >= 0 ? cursor : menu.trailing.some((row) => row.cursor) ? menu.rows.length : 0;
+  const selectedIndex = cursor >= 0 ? cursor : menu.last?.cursor ? menu.rows.length : 0;
   // where Enter commits a multiple choice, one row under the ones it ticks
-  const commit = boxed && menu.trailing.length === 1 ? menu.rows.length : null;
+  const commit = boxed ? menu.rows.length : null;
   const title = questions.length > 0 ? questions[shownTab]?.label ?? "" : headingLines.length > 1 ? headingLines[0]! : "";
   const question = questions.length > 0 ? headingLines.join(" ") : headingLines.length > 1 ? headingLines.slice(1).join(" ") : headingLines[0] ?? "";
   return finishPrompt("pi", {
