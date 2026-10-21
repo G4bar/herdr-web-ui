@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import { LOCAL_MACHINE } from "../../shared/machines.ts";
-import { panelFrameUrl, panelUrl, tabUrl, wantsPanel } from "./webPanel.ts";
+import { panelFrameUrl, panelFrameSrc, panelUrl, pushTarget, tabUrl, wantsPanel } from "./webPanel.ts";
 
 const lan = { protocol: "http:", hostname: "100.123.228.51", origin: "http://100.123.228.51:7317" };
 const local = { protocol: "http:", hostname: "localhost", origin: "http://localhost:7317" };
@@ -67,6 +67,45 @@ describe("tabUrl", () => {
     expect(tabUrl("http://localhost.:5173/", tailnet)).toBeNull();
     expect(tabUrl("http://localhost:5173/", local)).toBe("http://localhost:5173/");
     expect(tabUrl("javascript:alert(1)", local)).toBeNull();
+  });
+});
+
+describe("pushTarget", () => {
+  const lan = { protocol: "http:", hostname: "100.123.228.51", origin: "http://100.123.228.51:7317" };
+  const local = { protocol: "http:", hostname: "localhost", origin: "http://localhost:7317" };
+
+  it("goes to the panel for a page the panel can frame, whatever the Web links setting says", () => {
+    // no setting is read here: an explicit push named the panel itself
+    expect(pushTarget("http://localhost:19432/", lan, true)).toEqual({ panel: "http://100.123.228.51:19432/" });
+    expect(pushTarget("http://localhost:19432/", local, true)).toEqual({ panel: "http://localhost:19432/" });
+    expect(pushTarget("http://100.123.228.51:5174/plan", lan, true)).toEqual({ panel: "http://100.123.228.51:5174/plan" });
+  });
+
+  it("falls back to a tab only when the panel cannot show the page or has no room", () => {
+    // a narrow window has no panel to put it in
+    expect(pushTarget("http://localhost:19432/", local, false)).toEqual({ tab: "http://localhost:19432/" });
+    // an address the panel may not frame: another host, the app itself, another scheme
+    expect(pushTarget("https://example.com/x", lan, true)).toEqual({ tab: "https://example.com/x" });
+    expect(pushTarget("http://100.123.228.51:7317/settings", lan, true)).toEqual({ tab: "http://100.123.228.51:7317/settings" });
+    expect(pushTarget("javascript:alert(1)", lan, true)).toBeNull();
+  });
+
+  it("opens nothing when even a tab would show another device's page", () => {
+    const tailnet = { protocol: "https:", hostname: "pc.tail.ts.net", origin: "https://pc.tail.ts.net" };
+    // over the app's https the panel still reaches that page; with no room for the panel, a tab
+    // would show the device's own localhost, so nothing opens
+    expect(pushTarget("http://localhost:19432/", tailnet, true)).toEqual({ panel: "https://pc.tail.ts.net:19432/" });
+    expect(pushTarget("http://localhost:19432/", tailnet, false)).toBeNull();
+  });
+});
+
+describe("panelFrameSrc", () => {
+  it("keeps the address on its first showing, and marks every later one so the page is fetched again", () => {
+    expect(panelFrameSrc("http://localhost:19432/", 0)).toBe("http://localhost:19432/");
+    expect(panelFrameSrc("http://localhost:19432/plan?x=1#top", 1)).toBe("http://localhost:19432/plan?x=1&herdr-panel-reload=1#top");
+    expect(panelFrameSrc("http://localhost:19432/", 2)).toBe("http://localhost:19432/?herdr-panel-reload=2");
+    // every showing is its own address, so a stale one is never what the frame keeps
+    expect(new Set([1, 2, 3].map((nonce) => panelFrameSrc("http://localhost:19432/", nonce))).size).toBe(3);
   });
 });
 

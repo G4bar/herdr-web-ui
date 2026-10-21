@@ -1,10 +1,13 @@
 import { useState, type ReactNode } from "react";
 import { ExternalLink, Globe, RotateCw, X } from "lucide-react";
 import { useT } from "../lib/i18n.ts";
+import { panelFrameSrc } from "../lib/webPanel.ts";
 import "./FileViewer.css";
 
 export interface WebPanelProps {
   url: string;
+  /** pushes of this page: each one loads it again, also while it is already shown */
+  refresh?: number;
   onClose: () => void;
   panelStart?: ReactNode;
 }
@@ -14,9 +17,11 @@ export interface WebPanelProps {
  * cross-origin page (another port), so its scripts and storage are its own; the sandbox still
  * keeps it from navigating this window.
  */
-export function WebPanel({ url, onClose, panelStart }: WebPanelProps) {
+export function WebPanel({ url, refresh = 0, onClose, panelStart }: WebPanelProps) {
   const t = useT();
   const [loads, setLoads] = useState(0);
+  // both counters only grow, so a reload and a push each name an address the frame has not had
+  const frame = panelFrameSrc(url, loads + refresh);
   const { host, pathname, search } = new URL(url);
   const label = `${host}${pathname === "/" ? "" : pathname}${search}`;
   return (
@@ -33,7 +38,7 @@ export function WebPanel({ url, onClose, panelStart }: WebPanelProps) {
           <button type="button" className="icon-button file-viewer-action file-viewer-close" aria-label={t("Close page")} title={t("Close page")} onClick={onClose}><X aria-hidden="true" /></button>
         </header>
         <div className="file-viewer-body">
-          <iframe key={`${url}#${loads}`} className="file-viewer-page" src={url} title={label}
+          <iframe key={frame} className="file-viewer-page" src={frame} title={label}
             sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-popups allow-popups-to-escape-sandbox allow-downloads" />
         </div>
       </section>

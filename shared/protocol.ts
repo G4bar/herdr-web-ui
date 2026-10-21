@@ -236,7 +236,9 @@ export type { Machine, MachineEvent, PaneTarget, SetupJob, SetupRequest, SetupAc
  *         side panel to show `url`: http or https, at most 2048 characters, `label` at most 80.
  *         `delivered` is how many browser pages have this app open and took the frame: 0 means no
  *         page does, and one that opens later has missed it. The page applies the panel's own rules:
- *         a page it cannot frame opens in a new tab, and a hidden tab takes the frame and opens
+ *         it shows `url` in its side panel whatever its Web links setting says, since the request
+ *         asked for the panel, and loads it again when it already showed it; a page it cannot frame
+ *         opens in a new tab, and a hidden tab takes the frame and opens
  *         nothing. A frame is only for the PC the app itself runs on)
  *  GET    /api/usage[?refresh=1]         -> UsageReport (plan limits of the AI subscriptions signed in on this PC)
  *  Errors: non-2xx with { error: { code, message } }

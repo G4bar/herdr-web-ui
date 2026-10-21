@@ -81,6 +81,31 @@ export function wantsPanel(target: WebLinkTarget, shiftKey: boolean): boolean {
 }
 
 /**
+ * Where an explicit push (POST /api/web-panel/open) goes: the panel beside the pane whatever the
+ * Web links setting says, since the request asked for that panel itself, and a new tab only when
+ * the panel cannot show the page here (no room for it, or an address it may not frame). Null when
+ * not even a tab would show the page.
+ */
+export function pushTarget(uri: string, app: AppLocation, panelAvailable: boolean): { panel: string } | { tab: string } | null {
+  const panel = panelAvailable ? panelUrl(uri, app) : null;
+  if (panel !== null) return { panel };
+  const tab = tabUrl(uri, app);
+  return tab === null ? null : { tab };
+}
+
+/**
+ * The address the panel's frame loads, for the `nonce`th showing of it: a page shown again (the
+ * Reload button, or the same address pushed again) is fetched again rather than coming from its
+ * cache and leaving a stale one on screen. The first showing keeps the address as it is.
+ */
+export function panelFrameSrc(url: string, nonce: number): string {
+  if (nonce <= 0) return url;
+  const next = new URL(url);
+  next.searchParams.set("herdr-panel-reload", String(nonce));
+  return next.href;
+}
+
+/**
  * Opens a web address in the panel beside the pane when the setting (or Shift) asks for it and the
  * address can be framed; answers false when it did not, and the caller opens it in a new tab.
  * Null where no panel can show (a narrow window); `machineId` is the PC whose pane named the address.
