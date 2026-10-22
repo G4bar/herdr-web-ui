@@ -33,6 +33,7 @@ import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/i
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
 import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
+import { ToolCardHead } from "./ToolCardHead.tsx";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -449,46 +450,58 @@ function ToolImages({ paneId, part }: { paneId: string; part: ToolPartType }) {
  * verb table knows reads as verb + object, and its id moves to the title and the opened detail;
  * any other keeps its id in front, as the agent names it.
  */
-function WorkRow({ paneId, part, stateKey }: { paneId: string; part: ToolPartType; stateKey: string }) {
+function WorkRow({ paneId, part, stateKey, live, waiting, pending, expandRows }: { paneId: string; part: ToolPartType; stateKey: string; live: boolean; waiting: boolean; pending: boolean; expandRows: boolean }) {
   const t = useT();
   // the files an output names open from it ("saved /tmp/shot/t0.png")
   const openFile = useContext(OpenFileContext);
-  const [chosen, setOpen] = useChatRowToggle(stateKey, false);
-  const open = chosen === true;
+  const [chosen, setOpen] = useChatRowToggle(stateKey, null);
+  const open = chosen ?? expandRows;
   const whole = useWholeOutput(part.output_ref);
   const summary = part.arguments_omitted ? t("Arguments omitted (too large)") : todoCallSummary(part) ?? part.summary;
   // reads the call's input: once per call, not on every poll of the transcript
-  const { verb, narration } = useMemo(() => workRowLabel({ name: part.name, input: part.input }, summary), [part.name, part.input, summary]);
+  const { verb, narration, object, server } = useMemo(() => workRowLabel({ name: part.name, input: part.input }, summary), [part.name, part.input, summary]);
+  // a call whose result has not arrived: running while the turn runs, stopped once it ended
+  const running = pending && live && !waiting;
+  const stopped = pending && !live;
+  const cardState = part.error ? "failed" : pending ? (live ? "running" : "stopped") : "done";
   // the list is the answer of a todo call: its raw text would say it twice
   const output = isTodoTool(part.name) && parseTodoAnswer(part.output) !== null ? "" : whole.text ?? part.output;
-  return <div className={`work-row${part.error ? " is-error" : ""}`}>
+  return <div className={`work-row${part.error ? " is-error" : ""}${stopped ? " is-stopped" : ""}`}>
     <button type="button" className="work-row-head" aria-expanded={open} title={narration || verb !== null ? `${part.name} · ${summary}` : undefined} onClick={() => setOpen(!open)}>
       <span className="work-row-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
       {!narration && (verb !== null ? <span className="work-row-name is-verb">{t(verb)}</span> : <span className="work-row-name">{part.name}</span>)}
       {/* the spaces are for a screen reader: the row is read as words, not "Ranbun test" */}
       {!narration && part.error && verb === null && <>{" "}<span className="work-row-failed">{t("failed")}</span></>}
-      {summary.length > 0 && summary !== part.name && <>{" "}<span className="work-row-summary">{summary}</span></>}
+      {object.length > 0 && object !== part.name && <>{" "}<span className="work-row-summary">{object}</span></>}
       {/* after a verb, or the agent's own sentence, the word follows it: "Ran pnpm test failed", not "Ran failed pnpm test" */}
       {part.error && (narration || verb !== null) && <>{" "}<span className="work-row-failed">{t("failed")}</span></>}
+      {running && <>{" "}<span className="work-row-running">{t("Running…")}<span className="work-row-dot" aria-hidden="true" /></span></>}
+      {stopped && <>{" "}<span className="work-row-stopped">{t("stopped")}</span></>}
     </button>
-    {open && <div className="work-row-detail">{verb !== null && <p className="work-row-tool">{part.name}</p>}<ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4><pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}`}>{linkFilePaths(output, openFile)}</pre>
+    {open && <div className="work-row-detail"><ToolCardHead name={part.name} state={cardState} server={server} /><ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4><pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}`}>{linkFilePaths(output, openFile)}</pre>
       {part.output_ref !== undefined && whole.text === null && <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
         {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}
       </button>}</section>}</div>}
   </div>;
 }
 
-function ThinkingRow({ text, stateKey }: { text: string; stateKey: string }) {
+function ThinkingRow({ text, stateKey, streaming, expandRows }: { text: string; stateKey: string; streaming: boolean; expandRows: boolean }) {
   const t = useT();
-  const [chosen, setOpen] = useChatRowToggle(stateKey, false);
-  const open = chosen === true;
+  const [chosen, setOpen] = useChatRowToggle(stateKey, null);
+  const open = chosen ?? expandRows;
   return <div className="work-row work-row-thinking">
     <button type="button" className="work-row-head" aria-expanded={open} onClick={() => setOpen(!open)}>
       <span className="work-row-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
-      <span className="work-row-name">{t("thinking")}</span>
+      <span className="work-row-name">{t(streaming ? "Thinking…" : "thinking")}</span>
+      {streaming && <span className="work-row-dot" aria-hidden="true" />}
     </button>
     {open && <div className="work-row-detail work-thinking-text">{text}</div>}
   </div>;
+}
+
+/** A call whose result has not arrived: Pi records the call, its result is a later entry. */
+function hasNoResult(part: ToolPartType): boolean {
+  return part.output.length === 0 && part.output_ref === undefined && part.error !== true;
 }
 
 /**
@@ -508,7 +521,7 @@ function PendingWorkHead({ title, className = "" }: { title: string; className?:
   </div>;
 }
 
-function WorkBlockView({ paneId, parts, duration, live, waiting, defaultOpen, showThinking, pendingHead }: { paneId: string; parts: ConversationPart[]; duration: string | null; live: boolean; waiting: boolean; defaultOpen: boolean; showThinking: boolean; pendingHead: boolean }) {
+function WorkBlockView({ paneId, parts, duration, live, waiting, defaultOpen, showThinking, pendingHead, expandRows }: { paneId: string; parts: ConversationPart[]; duration: string | null; live: boolean; waiting: boolean; defaultOpen: boolean; showThinking: boolean; pendingHead: boolean; expandRows: boolean }) {
   const t = useT();
   const [chosenOpen, setOpen] = useChatRowToggle("work", null);
   const open = chosenOpen ?? defaultOpen;
@@ -519,6 +532,8 @@ function WorkBlockView({ paneId, parts, duration, live, waiting, defaultOpen, sh
   if (visible.length === 0) return live && !waiting && pendingHead ? <PendingWorkHead title={t("Working…")} /> : null;
   const summary = workSummary(parts);
   const failed = workFailed(parts);
+  // Pi runs a turn's tool calls one at a time: only the block's last call can still be without a result
+  const lastTool = visible.reduce((at, part, index) => part.kind === "tool" ? index : at, -1);
   // a blocked agent is not working: the open block takes the sidebar's words for it
   const title = waiting ? t("Needs you") : live ? t("Working…") : duration !== null ? t("Worked for {duration}", { duration }) : t("Worked");
   return <section className={`work-block${live ? " is-live" : ""}${waiting ? " is-waiting" : ""}${open ? "" : " is-folded"}`}>
@@ -532,9 +547,9 @@ function WorkBlockView({ paneId, parts, duration, live, waiting, defaultOpen, sh
     {/* the rows open and fold at the block's measured height; folded and settled, they are not drawn */}
     <AnimatedHeight open={open} animateContent={false}>
       <div className="work-block-rows" onFocus={keepOpen} onClick={keepOpen}>{visible.map((part, index) =>
-        part.kind === "thinking" ? <ThinkingRow key={index} stateKey={`thinking:${parts.indexOf(part)}`} text={part.text} />
+        part.kind === "thinking" ? <ThinkingRow key={index} stateKey={`thinking:${parts.indexOf(part)}`} text={part.text} streaming={live && !waiting && index === visible.length - 1} expandRows={expandRows} />
           : part.kind === "text" ? <div key={index} className="work-narration"><Markdown>{part.text}</Markdown></div>
-            : part.kind === "tool" ? <WorkRow key={index} stateKey={`tool:${parts.indexOf(part)}`} paneId={paneId} part={part} /> : null)}
+            : part.kind === "tool" ? <WorkRow key={index} stateKey={`tool:${parts.indexOf(part)}`} paneId={paneId} part={part} live={live} waiting={waiting} pending={index === lastTool && hasNoResult(part)} expandRows={expandRows} /> : null)}
       </div>
     </AnimatedHeight>
   </section>;
@@ -736,6 +751,8 @@ interface TurnProps {
   /** ...and "Needs you" while the agent is blocked */
   waiting: boolean;
   showThinking: boolean;
+  /** the chat's default for a work row: open when Expand tool output is on (More ⋯ → Chat view) */
+  expandRows: boolean;
   /** the pane's skill names: an answer's text chips them */
   skills?: SkillMatcher | null;
   /** omo only: the user's own `$skill:x` and the `[skill: x]` omo leaves where one stood are chipped too */
@@ -816,7 +833,7 @@ function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPar
 }
 
 // a turn that did not change keeps its object across polls: skip re-rendering it
-const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null }: TurnProps) {
+const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, expandRows, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null }: TurnProps) {
   const t = useT();
   // under the turn, not in its meta row: that row fades out once the pointer and focus leave
   const [copyFailed, setCopyFailed] = useChatRowToggle("copy-failed", false);
@@ -883,7 +900,7 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, ski
     <SkillActivityList parts={turn.parts} />
     {goal !== null && <GoalActivity goal={goal} />}
     {/* the pending head stands only above no answer: one above words would leave a gap when the turn ends */}
-    {(work.length > 0 || (live && answer.length === 0)) && <WorkBlockView paneId={paneId} parts={work} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={workStartsOpen(live, turn.parts)} showThinking={showThinking} pendingHead={answer.length === 0} />}
+    {(work.length > 0 || (live && answer.length === 0)) && <WorkBlockView paneId={paneId} parts={work} duration={formatWorkDuration(turn.ts, turn.end_ts ?? null)} live={live} waiting={waiting} defaultOpen={workStartsOpen(live, turn.parts)} showThinking={showThinking} expandRows={expandRows} pendingHead={answer.length === 0} />}
     {answer.map((part, index) => <Markdown key={index} skills={skills}>{part.text}</Markdown>)}
     {answerText.length > 0 && <div className="chat-turn-meta chat-agent-meta">
       {/* a mouse reads one copy glyph and the words "Plain text"; touch reads the two formats */}
@@ -915,7 +932,7 @@ export function ChatFallback({ paneId, agent, visible, messages, outcomes, resto
     {agent !== null && <TerminalFallback key={paneId} paneId={paneId} visible={visible} />}
     {rows.map((row) => row.kind === "sent"
       ? <OutcomeRow key={`outcome:${row.outcome.id}`} outcome={row.outcome} actions={actions} skills={skills} />
-      : <Turn key={row.index} paneId={paneId} turn={turns[row.index]!} live={false} waiting={false} showThinking={false} outcome={row.outcome} outcomeActions={actions} />)}
+      : <Turn key={row.index} paneId={paneId} turn={turns[row.index]!} live={false} waiting={false} showThinking={false} expandRows={false} outcome={row.outcome} outcomeActions={actions} />)}
   </>;
 }
 
@@ -1748,7 +1765,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const { turn } = row;
     const live = isLiveWorkTurn(turn, row.index === shownTurns.length - 1, workStatus, finishedBeforeSend);
     return <RenderBoundary resetKey={turnRevision(turn, true)} fallback={() => <p className="chat-inline-state chat-inline-error" data-pane-content-error>{t("This message can't be shown here. The terminal has it.")}</p>}>
-      <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} showThinking={settings.showThinking} skills={skillMatcher} userSkills={skillMatcher} outcome={row.outcome} outcomeActions={outcomeActions}
+      <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} showThinking={settings.showThinking} expandRows={settings.expandToolOutput} skills={skillMatcher} userSkills={skillMatcher} outcome={row.outcome} outcomeActions={outcomeActions}
         onRewindInTerminal={turn.role === "user" ? rewindInTerminal : null} />
     </RenderBoundary>;
   }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agentStatus, settings.showThinking, skillMatcher, outcomeActions, rewindInTerminal]);

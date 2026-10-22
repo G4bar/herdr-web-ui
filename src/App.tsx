@@ -1,5 +1,5 @@
 import { type CSSProperties, type DragEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Bell, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
+import { Bell, Brain, ChevronDown, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane, SessionHistoryAgent } from "../shared/protocol.ts";
 import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, routeMissing, sendTestPush, shareSeen, signOut, splitPane, verifySourceBoot, zoomPane, type HealthInfo } from "./lib/api.ts";
@@ -52,7 +52,7 @@ import { rosterPanes } from "./lib/dagPane.ts";
 import { SnapshotRequests } from "./lib/snapshotRequests.ts";
 import { ReorderCoordinator } from "./lib/workspaceOrder.ts";
 import { ReorderContext } from "./lib/machineContext.tsx";
-import { alertPrefs, useSettings } from "./lib/settings.ts";
+import { alertPrefs, useChatViewToggles, useSettings } from "./lib/settings.ts";
 import { formatKeys, shortcutDisplayKeys, useShortcuts } from "./lib/shortcuts.ts";
 import { useMediaQuery } from "./lib/useMediaQuery.ts";
 import { useAnnouncedText } from "./lib/useAnnouncedText.ts";
@@ -222,6 +222,7 @@ export function App() {
   const t = useT();
   const apple = /Mac|iPhone|iPad/.test(navigator.platform);
   const { settings, resolvedTheme, resolvedEntry, update: updateSettings } = useSettings();
+  const chatView = useChatViewToggles();
   // this device's alert choices: sent with its push subscription, and applied to tab alerts here
   const alerts = useMemo(() => alertPrefs(settings), [settings.alertInput, settings.alertDone]);
   const alertsRef = useRef(alerts);
@@ -1629,6 +1630,9 @@ export function App() {
     ...(selectedPane && !wideScreen ? [{ id: "files", label: t("Browse files"), icon: FolderOpen, run: () => setFilesOpen(true) }] : []),
     // the address says where the app is (lib/deepLink.ts); a phone has no address bar to copy it from
     { id: "copy-link", label: t("Copy link"), icon: Link, run: () => void copyText(window.location.href).then((ok) => { if (ok) setHeaderNote("copied"); }) },
+    // the chat's folded reading, the same two switches as Settings → Chat (DS §3.1)
+    { id: "show-thinking", label: t("Show thinking"), icon: Brain, divider: true, checked: settings.showThinking, run: chatView.thinking },
+    { id: "expand-tool-output", label: t("Expand tool output"), icon: ChevronDown, checked: settings.expandToolOutput, run: chatView.toolOutput },
     ...(bellVisible ? [{ id: "alerts", label: t("Alerts"), hint: bell.state, checked: bell.on, title: bell.title, icon: Bell, run: () => void bell.run() }] : []),
   ];
 

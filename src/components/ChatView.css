@@ -858,13 +858,63 @@
   font-size: var(--chat-fs-body);
 }
 
-/* the tool's own id, first in the opened detail of a row that shows a verb in its place */
-.work-row-tool {
-  margin: 0;
+/* the opened card's head strip: the tool's own id, an MCP call's server, and the state word.
+   The word always says the state; the tint is the second signal, never the only one */
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: calc(var(--control-h) - 6px);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+}
+
+.tool-card-head.is-running {
+  background: var(--status-working-tint);
+}
+
+.tool-card-head.is-done {
+  background: var(--status-done-tint);
+}
+
+.tool-card-head.is-failed {
+  background: var(--status-blocked-tint);
+}
+
+/* a stopped call is not a success and not a failure: the quiet surface, no state tint */
+.tool-card-head.is-stopped {
+  background: var(--bg-input);
+}
+
+.tool-card-head-id {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--text-dim);
   font-family: var(--font-mono);
-  font-size: var(--fs-xs);
-  overflow-wrap: anywhere;
+}
+
+.tool-card-head-server {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+
+/* --text where the state colour on its own tint is below 4.5:1 (DS §8.2); the error word is not */
+.tool-card-head-state {
+  flex: none;
+  margin-left: auto;
+  color: var(--text);
+}
+
+.tool-card-head.is-failed .tool-card-head-state {
+  color: var(--danger-text);
+}
+
+.tool-card-head.is-stopped .tool-card-head-state {
+  color: var(--text-dim);
 }
 
 .work-row-detail {
@@ -1283,6 +1333,42 @@
   border-radius: var(--radius-sm);
   background: var(--status-blocked-tint);
   color: var(--status-blocked);
+  font-size: var(--fs-2xs);
+  font-weight: var(--fw-semibold);
+}
+
+/* a call still waiting for its result while the turn runs: a dim word and the working dot */
+.work-row-running {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-dim);
+  font-family: var(--font-ui);
+  font-size: var(--fs-sm);
+}
+
+/* the working dot after "Running…", and beside a thinking row that is still streaming */
+.work-row-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--status-working);
+  animation: pulse var(--dur-pulse) var(--ease-pulse) infinite;
+}
+
+/* a call whose result never came, on a turn that has ended: dim, and a word that says so */
+.work-row.is-stopped .work-row-name {
+  color: var(--text-dim);
+}
+
+.work-row-stopped {
+  flex: none;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--bg-hover);
+  color: var(--text-dim);
   font-size: var(--fs-2xs);
   font-weight: var(--fw-semibold);
 }

@@ -361,6 +361,9 @@ function ChatPage() {
         <SettingsRow label={t("Show thinking")} description={t("Include the agent's reasoning blocks")}>
           <Toggle label={t("Show thinking")} checked={settings.showThinking} onChange={(showThinking) => update({ showThinking })} />
         </SettingsRow>
+        <SettingsRow label={t("Expand tool output")} description={t("Every tool row opens in the chat; rows you opened or folded yourself keep their state")}>
+          <Toggle label={t("Expand tool output")} checked={settings.expandToolOutput} onChange={(expandToolOutput) => update({ expandToolOutput })} />
+        </SettingsRow>
         <SettingsRow label={t("Chat width")} description={t("How wide the conversation and the message box run on a large screen")} wide>
           <Segmented label={t("Chat width")} value={settings.chatWidth} onChange={(chatWidth) => update({ chatWidth })} options={CHAT_WIDTHS.map((chatWidth) => ({ value: chatWidth, label: t(chatWidth === "narrow" ? "Narrow" : chatWidth === "wide" ? "Wide" : chatWidth === "full" ? "Full" : "Default") }))} />
         </SettingsRow>

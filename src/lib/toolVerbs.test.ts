@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { isToolNarration, toolVerb, toolVerbKind } from "./toolVerbs.ts";
+import { isToolNarration, mcpTarget, toolCallLabel, toolVerb, toolVerbKind } from "./toolVerbs.ts";
 
 describe("toolVerbKind", () => {
   it("reads every agent's file and shell tools as one of four verbs", () => {
@@ -15,16 +15,30 @@ describe("toolVerbKind", () => {
     for (const [name, kind] of Object.entries(expected)) expect([name, toolVerbKind(name)]).toEqual([name, kind as ReturnType<typeof toolVerbKind>]);
   });
 
+  it("reads Pi's search, todo, question, script, web and delegation tools as their own verbs", () => {
+    const expected: Record<string, string> = {
+      grep: "searched", Grep: "searched", find: "found", Find: "found", ls: "listed", LS: "listed",
+      todo: "todo", ask_user_question: "asked", codemode: "script", tool_search: "toolSearch",
+      web_search: "webSearch", fetch_content: "fetched",
+      delegate_agent: "delegated", continue_agent: "delegated",
+      steer_agent: "steered", interrupt_agent: "interrupted", reply_agent: "replied", close_agent: "closed",
+      list_agents: "listedAgents", ask_owner: "askedOwner",
+      // any MCP tool is one verb: its own name says which tool ran and on which server
+      mcp__github__create_issue: "called", mcp__files__read_all: "called", mcp__omo__todo: "called",
+    };
+    for (const [name, kind] of Object.entries(expected)) expect([name, toolVerbKind(name)]).toEqual([name, kind as ReturnType<typeof toolVerbKind>]);
+  });
+
   it("leaves every other tool the chat knows under its own name", () => {
     const untouched = [
       // counted as a file read or a command in the header, but not a plain read or run
-      "Grep", "grep", "Glob", "glob", "LS", "ls", "find", "list", "search", "eval", "run_command",
+      "Glob", "glob", "list", "search", "eval", "run_command",
       // tools with their own row or panel
-      "Skill", "Task", "Agent", "task", "WebFetch", "WebSearch", "webfetch", "web_search",
-      "TodoWrite", "update_plan", "todo", "todo_write", "mcp__omo__todo",
+      "Skill", "Task", "Agent", "task", "WebFetch", "WebSearch", "webfetch",
+      "TodoWrite", "update_plan", "todo_write",
       "create_goal", "update_goal", "get_goal", "request_user_input_async",
-      // a name that only contains a known one
-      "mcp__files__read_all", "read_mcp_resource", "BashOutput", "write_stdin", "tool",
+      // a name that only contains a known one, and an MCP-shaped name that is not one
+      "read_mcp_resource", "BashOutput", "write_stdin", "tool", "mcp__github",
     ];
     for (const name of untouched) expect([name, toolVerbKind(name)]).toEqual([name, null]);
   });
@@ -90,8 +104,50 @@ describe("toolVerb", () => {
   });
 
   it("keeps the id of a tool it does not know", () => {
-    expect(toolVerb(part("Grep", { pattern: "TODO" }), "TODO")).toBeNull();
-    expect(toolVerb(part("mcp__linear__create_issue", { path: "Fix the chart" }), "Fix the chart")).toBeNull();
+    expect(toolVerb(part("Glob", { pattern: "TODO" }), "TODO")).toBeNull();
+    expect(toolVerb(part("mcp__github", { path: "Fix the chart" }), "Fix the chart")).toBeNull();
+  });
+
+  it("reads Pi's own tools as their verb and object", () => {
+    expect(toolVerb(part("grep", { pattern: "TODO" }), "TODO")).toBe("Searched");
+    expect(toolVerb(part("find", { path: "src" }), "src")).toBe("Found");
+    expect(toolVerb(part("ls", { path: "src/lib" }), "src/lib")).toBe("Listed");
+    expect(toolVerb(part("todo", { todos: [{ status: "completed" }] }), "3/7 done")).toBe("Updated todos");
+    expect(toolVerb(part("codemode", { code: "1", summary: "Map the chat" }), "Map the chat")).toBe("Ran script");
+    expect(toolVerb(part("tool_search", { query: "spawn" }), "spawn")).toBe("Searched tools");
+    expect(toolVerb(part("web_search", { query: "pi rpc" }), "pi rpc")).toBe("Searched the web");
+    expect(toolVerb(part("fetch_content", { url: "https://example.com/a" }), "https://example.com/a")).toBe("Fetched");
+    expect(toolVerb(part("delegate_agent", { label: "scout_ui" }), "scout_ui")).toBe("Delegated");
+    expect(toolVerb(part("list_agents"), "3 agents")).toBe("Listed agents");
+    expect(toolVerb(part("ask_owner", { question: "Ship it?" }), "Ship it?")).toBe("Asked owner");
+    // a todo row whose summary is still the id has no object to put after the verb
+    expect(toolVerb(part("todo"), "todo")).toBeNull();
+  });
+
+  it("asks the first question's header in front of the verb", () => {
+    const asked = part("ask_user_question", { questions: [{ header: "Database", question: "Which database?", options: [] }] });
+    expect(toolVerb(asked, "ask_user_question")).toBe("Asked");
+    expect(toolCallLabel(asked, "ask_user_question")?.object).toBe("Database");
+    const unheadered = part("ask_user_question", { questions: [{ question: "Which database?", options: [] }] });
+    expect(toolCallLabel(unheadered, "ask_user_question")?.object).toBe("Which database?");
+    // arguments that are not questions keep the id
+    expect(toolVerb(part("ask_user_question", { questions: "x" }), "ask_user_question")).toBeNull();
+  });
+
+  it("names an MCP call by its tool, and keeps its server for the card", () => {
+    const call = toolCallLabel(part("mcp__github__create_issue", { title: "x" }), "mcp__github__create_issue");
+    expect(call).toEqual({ verb: "Called", object: "create_issue", server: "github" });
+    // a tool name with the separator in it keeps both parts after the server
+    expect(mcpTarget("mcp__linear__team__issues")).toEqual({ server: "linear", tool: "team__issues" });
+    expect(mcpTarget("mcp__github")).toBeNull();
+  });
+
+  it("gives a ranged read the lines it covers", () => {
+    expect(toolCallLabel(part("read", { path: "src/a.ts", offset: 120, limit: 61 }), "src/a.ts")).toEqual({ verb: "Read", object: "src/a.ts 120–180" });
+    // a limit alone starts at the first line; an offset alone has no last line yet
+    expect(toolCallLabel(part("read", { path: "src/a.ts", limit: 10 }), "src/a.ts")?.object).toBe("src/a.ts 1–10");
+    expect(toolCallLabel(part("read", { path: "src/a.ts", offset: 120 }), "src/a.ts")?.object).toBe("src/a.ts 120–");
+    expect(toolCallLabel(part("read", { path: "src/a.ts" }), "src/a.ts")?.object).toBe("src/a.ts");
   });
 });
 
