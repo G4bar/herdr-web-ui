@@ -40,6 +40,7 @@ import type {
   PaneZoomed,
   PaneFindRequest,
   PaneFindResponse,
+  PiNativeState,
   PlanStep,
   ProjectFavicon,
   PromptAnswer,
@@ -836,6 +837,71 @@ export async function fetchPanePromptState(paneId: string, machineId = "local"):
 /** POST /api/pane/prompt/answer: ApiError 409 `prompt_changed` when the menu moved on. */
 export async function answerPanePrompt(answer: PromptAnswer, machineId = "local"): Promise<void> {
   await sendJson(machinePath(machineId, "pane/prompt/answer"), "POST", answer);
+}
+
+/**
+ * The folder a take-over found settings in, and what it found there (server/pi-native.ts). `message` is
+ * the server's own sentence; the folder is what a "Trust folder" answer approves.
+ */
+export interface PiTrustRequest {
+  folder: string;
+  found: string[];
+  message: string;
+}
+
+/** POST /api/pi/takeover: the pane is driven over RPC now, or Pi wants its folder trusted before it loads
+ * what is in it. Every other refusal is an ApiError with the server's sentence. */
+export type PiTakeover = { state: PiNativeState } | { needsTrust: PiTrustRequest };
+
+/** One command for a native pane's Pi: the allowlist of what each may carry is the server's (server/pi-native-routes.ts). */
+export type PiRpcCommand = { type: string } & Record<string, unknown>;
+
+/** POST /api/pi/takeover: Pi's live state, or its folder's trust question (409 `needs_trust`, not a failure). */
+export async function takeOverPiPane(paneId: string, trust?: "approve" | "deny", machineId = "local"): Promise<PiTakeover> {
+  const url = machinePath(machineId, "pi/takeover");
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-herdr-machine": "1" },
+    body: JSON.stringify({ pane_id: paneId, ...(trust === undefined ? {} : { trust }) }),
+  });
+  if (response.ok) return { state: (await response.json()) as PiNativeState };
+  // the trust question carries what the refusal alone would drop: read it here, not through errorFrom
+  if (response.status === 409) {
+    const body = (await response.json().catch(() => null)) as { error?: { code?: string; message?: string }; folder?: unknown; found?: unknown } | null;
+    if (body?.error?.code === "needs_trust" && typeof body.folder === "string") {
+      return { needsTrust: { folder: body.folder, found: Array.isArray(body.found) ? body.found.filter((item): item is string => typeof item === "string") : [], message: body.error.message ?? "" } };
+    }
+    throw new ApiError(url, response.status, body?.error?.message ?? response.statusText, body?.error?.code ?? null);
+  }
+  throw await errorFrom(url, response);
+}
+
+/** POST /api/pi/handback: Pi goes back to its terminal; 409 while a turn or a restart is in the way. */
+export async function handBackPiPane(paneId: string, machineId = "local"): Promise<void> {
+  await sendJson(machinePath(machineId, "pi/handback"), "POST", { pane_id: paneId });
+}
+
+/** POST /api/pi/reconnect: a lost child started again on the same session; 409 when it was never lost. */
+export async function reconnectPiPane(paneId: string, machineId = "local"): Promise<PiNativeState> {
+  const response = await sendJson(machinePath(machineId, "pi/reconnect"), "POST", { pane_id: paneId });
+  return (await response.json()) as PiNativeState;
+}
+
+/** GET /api/pi/state: null when this pane is not driven over RPC (a Terminal-mode pane, or a bridge from
+ * before the routes): the chat then behaves as it always did. */
+export async function fetchPiNativeState(paneId: string, machineId = "local"): Promise<PiNativeState | null> {
+  try {
+    return await getJson<PiNativeState>(`${machinePath(machineId, "pi/state")}?pane_id=${encodeURIComponent(paneId)}`, { cache: "no-store" });
+  } catch (error) {
+    if (error instanceof ApiError && (error.code === "not_native" || routeMissing(error))) return null;
+    throw error;
+  }
+}
+
+/** POST /api/pi/rpc: one allowlisted command, answered with what Pi answered; a refusal throws ApiError. */
+export async function sendPiRpc(paneId: string, command: PiRpcCommand, machineId = "local"): Promise<unknown> {
+  const response = await sendJson(machinePath(machineId, "pi/rpc"), "POST", { pane_id: paneId, command });
+  return response.json();
 }
 
 /** GET /api/push: the server's VAPID key, the `applicationServerKey` this device subscribes with. */

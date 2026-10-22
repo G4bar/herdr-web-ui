@@ -51,6 +51,7 @@ import { PendingMessages } from "./PendingMessages.tsx";
 import type { AgentStatus, ClientRole, ConversationMetadata, InteractivePrompt, PlanSummary, ServerMessage } from "../../shared/protocol.ts";
 import type { PaneControls, PaneView } from "../lib/actions.ts";
 import { usePaneLane } from "../lib/chatLane.ts";
+import { clearedQueue, usePiNative } from "../lib/piNative.ts";
 import { useSettings, terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings.ts";
 import { loadFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "../lib/fontFamily.ts";
 import { useT } from "../lib/i18n.ts";
@@ -231,6 +232,9 @@ export function PaneTerminal({
   const openWebPage = useContext(WebPanelContext);
   const machineId = useMachineId();
   const commands = usePaneCommands(paneId, agent);
+  // The pane's live Pi state while the chat drives Pi over RPC (lib/piNative.ts): null for a Pi the
+  // terminal still owns, and for every other agent, where the chat behaves exactly as it always did
+  const piNative = usePiNative(agent === "pi" ? paneId : null);
   const openWebRef = useRef((uri: string, shiftKey: boolean) => openWebPage?.(uri, shiftKey, machineId) ?? false);
   openWebRef.current = (uri, shiftKey) => openWebPage?.(uri, shiftKey, machineId) ?? false;
   const branchWord = usePaneBranch(machineId, workspaceId);
@@ -516,7 +520,7 @@ export function PaneTerminal({
   useEffect(() => {
     if (!paneId || draftState.owner !== paneStorageId(machineId, paneId)) return;
     const key = `ovis:terminal-draft:${draftState.owner}`;
-    try { if (draftIsEmpty(draft)) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify({ ...draft, at: Date.now() })); } catch {}
+    try { if (draftIsEmpty(draft)) localStorage.removeItem(key); else localStorage.setItem(key, JSON.stringify({ ...draft, at: Date.now() })); } catch { /* private mode: the draft lives in this page only */ }
   }, [draftState, paneId, machineId, draft]);
   // transient OSC 52 feedback ("copied") — a pill in the banner column
   const [clipboardNote, setClipboardNote] = useState<string | null>(null);
@@ -2654,7 +2658,7 @@ export function PaneTerminal({
     let saved = EMPTY_DRAFT;
     try {
       saved = paneId ? restoreDraft(localStorage.getItem(`ovis:terminal-draft:${paneStorageId(machineId, paneId)}`), Date.now()) : EMPTY_DRAFT;
-    } catch {}
+    } catch { /* private mode: nothing was stored here */ }
     setDraft(saved);
     draftPaneRef.current = paneId;
     term.reset();
@@ -2921,7 +2925,17 @@ export function PaneTerminal({
   // a turn waiting on an approval (blocked) is still the same turn
   useEffect(() => { if (agentStatus !== "working" && agentStatus !== "blocked") hermesStopSentRef.current = false; }, [agentStatus]);
   useEffect(() => { hermesStopSentRef.current = false; hermesCtrlCAtRef.current = null; }, [paneId, agent]);
-  const abortTurn = useCallback(() => {
+  const abortTurn = useCallback((): void | Promise<readonly string[]> => {
+    // A pane the chat drives over RPC has no key to press: Stopping is Pi's own queue cleared, then the
+    // turn aborted, and what the queue held goes back to the box (DS §4.4)
+    if (piNative.state !== null && paneRef.current !== null) {
+      const piRpc = piNative.piRpc;
+      return (async (): Promise<readonly string[]> => {
+        const cleared = await piRpc({ type: "clear_queue" }).catch(() => null);
+        await piRpc({ type: "abort" }).catch((error: unknown) => setInputError(error instanceof Error ? error.message : String(error)));
+        return clearedQueue(cleared);
+      })();
+    }
     const term = termRef.current;
     const socket = socketRef.current;
     if (!term || !socket || !socket.connected) return;
@@ -2944,7 +2958,7 @@ export function PaneTerminal({
     }
     stopKeyRef.current = true;
     try { term.input(key); } finally { stopKeyRef.current = false; }
-  }, [agent]);
+  }, [agent, piNative]);
 
   // While the agent runs, append to its held messages. Each requires an explicit send.
   // a question in Codex's queue leaves the composer alone: Codex keeps working, and a
@@ -3064,6 +3078,17 @@ export function PaneTerminal({
       </>,
     });
     if (clipboardNote) noticeItems.push({ id: `${owner}:clipboard`, priority: "notice", revision: clipboardNote, warning: false, mark: <ClipboardCheck />, text: clipboardNote });
+    // Pi's folder is not trusted yet: the take-over stopped there, and its own sentence and folder say
+    // what the choice is (Phase 13 draws the card; a row here until then)
+    const trust = piNative.trustRequest;
+    if (trust !== null) noticeItems.push({
+      id: `${owner}:pi-trust`, priority: "urgent", revision: trust.folder, warning: true, mark: <TriangleAlert />,
+      text: <>{trust.message} <code title={trust.folder}>{trust.folder}</code></>,
+    });
+    // a take-over, hand-back or reconnect the pane refused: the server's sentence, and the pane as it was
+    if (piNative.failure !== null) noticeItems.push({
+      id: `${owner}:pi-refusal`, priority: "urgent", revision: piNative.failure, warning: true, mark: <TriangleAlert />, text: piNative.failure,
+    });
     // a peek ended by hand over a screen still open in the terminal: the next message would land in it
     if (stillOpen !== null && stillOpen.pane === paneId) noticeItems.push({
       id: `${owner}:still-open`, priority: "urgent", revision: stillOpen.named ? stillOpen.command : "", warning: false, mark: <SquareTerminal />,
@@ -3494,6 +3519,7 @@ export function PaneTerminal({
             ended={ended}
             agent={agent}
             agentStatus={agentStatus}
+            piNative={piNative.state}
             onMetadata={onChatMetadata}
             onRead={onChatRead}
             greeted={greeted}
@@ -3620,6 +3646,7 @@ export function PaneTerminal({
           active={active}
           agent={agent}
           agentStatus={agentStatus}
+          piNative={piNative.state}
           backgroundTasks={backgroundTasks}
           plan={plan}
           backgroundWait={backgroundWait}

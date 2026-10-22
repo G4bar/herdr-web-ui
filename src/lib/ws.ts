@@ -1,4 +1,4 @@
-import type { ClientMessage, ClientRole, PendingMessage, ServerFeature, ServerMessage } from "../../shared/protocol.ts";
+import type { ClientMessage, ClientRole, PendingMessage, PiNativeState, ServerFeature, ServerMessage } from "../../shared/protocol.ts";
 import { OUTPUT_STALLED_CLOSE_CODE } from "../../shared/terminal-flow.ts";
 import { ConnectionTrace } from "./connectionTrace.ts";
 
@@ -9,6 +9,8 @@ type Handler = (message: ServerMessage) => void;
  * `box`: a refusal naming no draft, what the server read in the box, after which a send with sendAnyway may go */
 /** immediate: typed now; queue: waits for the next turn; hold: waits for the user's Send now */
 export type SubmitDelivery = "immediate" | "queue" | "hold";
+/** A native Pi pane holds a message while a turn runs: as a steer, or after the turn (`followUp`) */
+export type PiDeliver = "steer" | "followUp";
 /** `unconfirmed`: written to an older bridge that sends no receipt, so nothing says the pane took it */
 export type SubmitResult = { ok: true; pending?: PendingMessage; unconfirmed?: true } | { ok: false; code: string; message: string; draft?: string; box?: string };
 
@@ -119,6 +121,9 @@ export class HerdrSocket {
    * with the attachment, so each attach of a pane listed here (a reconnect's, or a tab back in use
    * after letting go of it) asks again; only the chat taking its interest back removes it. */
   private readonly conversationWanted = new Set<string>();
+  /** Per pane, the readers of the bridge's live Pi native state (lib/piNative.ts); a frame replaces what
+   * each of them held, and the pane's own view is the only one there is. */
+  private readonly piNativeHandlers = new Map<string, Set<(state: PiNativeState) => void>>();
   private retries = 0;
   /** When this connection opened; a brief open must not restart a flapping connection's retries. */
   private openedAt: number | null = null;
@@ -656,6 +661,9 @@ export class HerdrSocket {
   }
 
   private emit(message: ServerMessage): void {
+    // one pane's Pi state goes to that pane's readers before the general handlers: it is pushed whole, so
+    // a reader replaces what it had, and a pane with no reader costs nobody a copy
+    if (message.type === "pi-native-state") for (const handler of this.piNativeHandlers.get(message.pane_id) ?? []) handler(message.state);
     for (const handler of this.handlers) handler(message);
   }
 
@@ -707,6 +715,22 @@ export class HerdrSocket {
   /** Whether this connection's bridge pushes transcript changes to a watching chat. */
   conversationPushes(): boolean {
     return this.connected && this.features.has("conversation-watch");
+  }
+
+  /**
+   * One pane's live Pi native state (feature "pi-native"): pushed whole, only while this client watches
+   * the pane's conversation. Returns the unsubscribe; a pane with no reader hears nothing.
+   */
+  onPiNativeState(paneId: string, handler: (state: PiNativeState) => void): () => void {
+    let handlers = this.piNativeHandlers.get(paneId);
+    if (handlers === undefined) { handlers = new Set(); this.piNativeHandlers.set(paneId, handlers); }
+    handlers.add(handler);
+    return () => {
+      const current = this.piNativeHandlers.get(paneId);
+      if (current === undefined) return;
+      current.delete(handler);
+      if (current.size === 0) this.piNativeHandlers.delete(paneId);
+    };
   }
 
   /** Capture connection AND subscription before xterm's asynchronous write. Never queue ACKs. */
@@ -844,8 +868,9 @@ export class HerdrSocket {
    */
   /** `typed`: from the terminal's input line, typed into the pane like the keyboard (see ClientMessage).
    * `clearDraft`: an immediate send over the draft an input_draft refusal named (ClientMessage `clear_draft`)
-   * `sendAnyway`: an immediate send after a refusal that showed the box (ClientMessage `send_anyway`) */
-  submit(paneId: string, text: string, payload: string, typed = false, delivery: SubmitDelivery = "immediate", clearDraft?: string, sendAnyway = false, resendId?: string, generation?: number): Promise<SubmitResult> | null {
+   * `sendAnyway`: an immediate send after a refusal that showed the box (ClientMessage `send_anyway`)
+   * `deliver`: a native Pi pane's own hold while a turn runs, steer or after it (ClientMessage `deliver`) */
+  submit(paneId: string, text: string, payload: string, typed = false, delivery: SubmitDelivery = "immediate", clearDraft?: string, sendAnyway = false, resendId?: string, generation?: number, deliver?: PiDeliver): Promise<SubmitResult> | null {
     const socket = this.socket;
     if (!this.connected || socket === null || this.mode === "observe") return null;
     if (resendId !== undefined && sendAnyway) return Promise.resolve({ ok: false, code: "invalid_delivery", message: "Use a held-copy resend id only for an immediate chat message" });
@@ -864,6 +889,7 @@ export class HerdrSocket {
       }
       const id = this.nextSubmit++;
       return this.submitRequest({ type: "submit", id, pane_id: paneId, text, payload, ...(typed ? { typed: true } : {}), ...(delivery !== "immediate" ? { delivery } : {}),
+        ...(deliver !== undefined ? { deliver } : {}),
         ...(clearDraft !== undefined ? { clear_draft: clearDraft } : {}), ...(sendAnyway ? { send_anyway: true as const } : {}), ...(resendId !== undefined ? { resend_id: resendId, resend_generation: generation ?? 0 } : {}) });
     })();
   }
@@ -984,5 +1010,6 @@ export class HerdrSocket {
     this.handlers.clear();
     this.disconnectHandlers.clear();
     this.beforeReplayHandlers.clear();
+    this.piNativeHandlers.clear();
   }
 }

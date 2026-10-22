@@ -1,5 +1,5 @@
 import { type CSSProperties, type DragEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Bell, Brain, ChevronDown, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, Search, SquareTerminal, X } from "lucide-react";
+import { Bell, Brain, ChevronDown, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, RefreshCw, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane, SessionHistoryAgent } from "../shared/protocol.ts";
 import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, routeMissing, sendTestPush, shareSeen, signOut, splitPane, verifySourceBoot, zoomPane, type HealthInfo } from "./lib/api.ts";
@@ -57,6 +57,7 @@ import { formatKeys, shortcutDisplayKeys, useShortcuts } from "./lib/shortcuts.t
 import { useMediaQuery } from "./lib/useMediaQuery.ts";
 import { useAnnouncedText } from "./lib/useAnnouncedText.ts";
 import { PaneLenses } from "./lib/paneLens.ts";
+import { handBackPi, reconnectPi, takeOverPi, usePiNativeLane } from "./lib/piNative.ts";
 import { paneContextPress } from "./lib/paneCanvas.ts";
 import type { AppActions, PaneView, PaneControls } from "./lib/actions.ts";
 import {
@@ -1622,10 +1623,24 @@ export function App() {
   // the palette's shortcut, said beside its item where a hardware keyboard is likely (a fine pointer)
   const keyboardLikely = useMediaQuery("(hover: hover) and (pointer: fine)");
   const paletteKeys = keyboardLikely ? formatKeys(shortcutDisplayKeys("palette", settings.shortcutOverrides)).join("+") : "";
+  // a Pi pane's mode is the chat's to change (lib/piNative.ts): the pane's own view seeds and follows the
+  // lane, the menu only asks for a mode and switches the lens; a Terminal-mode pane keeps today's menu
+  const piLane = usePiNativeLane(selectedMachineId, selectedPaneId);
+  const piPane = selectedPane?.agent === "pi" ? selectedPane : null;
+  const piMode = piLane.state?.mode ?? null;
+  const piItems: RowMenuItem[] = piPane === null ? [] : piMode === null
+    ? [{ id: "pi-takeover", label: t("Take over in chat"), icon: MessageSquare, divider: true, title: t("Drive Pi from the chat instead of its terminal"), run: () => { void takeOverPi(piPane.pane_id, selectedMachineId).then((answer) => { if ("state" in answer) setView("chat"); }, () => undefined); } }]
+    : [
+      { id: "pi-terminal", label: t("Open in terminal"), icon: SquareTerminal, divider: true, run: () => { void handBackPi(piPane.pane_id, selectedMachineId).then(() => setView("terminal"), () => undefined); } },
+      ...(piMode === "lost" ? [{ id: "pi-reconnect", label: t("Reconnect"), icon: RefreshCw, run: () => { void reconnectPi(piPane.pane_id, selectedMachineId).catch(() => undefined); } }] : []),
+    ];
   const moreItems: RowMenuItem[] = [
     // first at every width: a phone's header has no palette button, and a touch screen no shortcut
     { id: "palette", label: t("Search panes and actions"), icon: Search, ...(paletteKeys ? { hint: paletteKeys } : {}), run: () => openPalette() },
     ...(selectedPane && !selectedPane.restore_error ? [{ id: "find", label: t("Find in terminal"), icon: Search, run: actions.openFind }] : []),
+    // the pane's mode (DS §3.0): a Pi the chat drives can go back to its terminal, a lost one reconnect;
+    // the lens is the chat's to switch, so a take-over lands where the work is
+    ...piItems,
     // from 769px Files has its own button beside the lens switch; a phone keeps it here
     ...(selectedPane && !wideScreen ? [{ id: "files", label: t("Browse files"), icon: FolderOpen, run: () => setFilesOpen(true) }] : []),
     // the address says where the app is (lib/deepLink.ts); a phone has no address bar to copy it from

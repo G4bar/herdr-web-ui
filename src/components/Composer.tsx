@@ -16,7 +16,7 @@ import { ArrowUp, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, Message
 
 import "./Composer.css";
 
-import type { AgentStatus, ClientRole, ConversationMetadata, PlanSummary, SlashCommand } from "../../shared/protocol.ts";
+import type { AgentStatus, ClientRole, ConversationMetadata, PiNativeState, PlanSummary, SlashCommand } from "../../shared/protocol.ts";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { composerDrafts } from "../lib/composerDraft.ts";
@@ -85,6 +85,9 @@ export interface ComposerProps {
   /** the pane's turn ended on work still running in the background: its word is BG, not DONE (lib/status.ts paneStatus) */
   backgroundWait?: boolean;
   metadata?: ConversationMetadata | null;
+  /** the pane's live Pi state while the chat drives Pi over RPC (`lib/piNative.ts`, Phase 6): null for a Pi
+   * the terminal still owns, and for every other agent, where nothing below changes */
+  piNative?: PiNativeState | null;
   /** replaces the placeholder: how a message answers the agent's waiting prompt */
   answerHint?: string | null;
   /** what the agent suggests typing next (Claude's grey input text): the placeholder, taken with Tab */
@@ -115,7 +118,8 @@ export interface ComposerProps {
    * note offers to send again with `clearDraft`, which clears that draft from the terminal first, or,
    * where it named none, with `sendAnyway`; a promise settles to any of them */
   onSend: (text: string, clearDraft?: string, sendAnyway?: boolean) => boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal>;
-  onAbort: () => void;
+  /** Stop; a native Pi pane answers with the messages Pi still held, which go back into the box (DS §4.4) */
+  onAbort: () => void | Promise<readonly string[]>;
   onUploadImage: (file: File) => Promise<string>;
 }
 
@@ -625,6 +629,19 @@ export function Composer({
     if (activeRef.current) element.focus();
   }, []);
 
+  // Stop. A native Pi pane answers with the messages Pi still held, and they come back into the box in
+  // delivery order, under whatever was already typed (DS §4.4); every other agent answers nothing.
+  const abort = useCallback(() => {
+    const back = onAbort();
+    if (back === undefined) return;
+    void back.then((texts) => {
+      if (texts.length === 0) return;
+      const current = textRef.current.replace(/\s+$/u, "");
+      const next = current === "" ? texts.join("\n") : `${current}\n${texts.join("\n")}`;
+      setTextAndCaret(next, next.length);
+    }, () => undefined);
+  }, [onAbort, setTextAndCaret]);
+
   // an upload finishes while the user may be typing: its mention goes to the start (insertLeadingMention),
   // and the caret and selection only move along with the text they sit in, without taking focus
   /** 0 once inserted; otherwise how many characters short the message is, and nothing changed */
@@ -962,7 +979,7 @@ export function Composer({
       // a draft puts Send where Stop was: Escape is then the Stop the agent's own input has
       if (event.key === "Escape" && connected && agentStatus === "working" && textRef.current.trim().length > 0) {
         event.preventDefault();
-        onAbort();
+        abort();
         return;
       }
       // Tab takes the suggestion into the empty box, as in Claude's own input
@@ -979,7 +996,7 @@ export function Composer({
       event.preventDefault();
       send();
     },
-    [agentStatus, choices, connected, menuDismissed, menuOpen, offered, onAbort, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, trigger],
+    [agentStatus, abort, choices, connected, menuDismissed, menuOpen, offered, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, trigger],
   );
 
   const onPaste = useCallback(
@@ -1416,7 +1433,7 @@ export function Composer({
               aria-label={t("Stop agent")}
               title={t("Stop agent")}
               disabled={!connected}
-              onClick={onAbort}
+              onClick={abort}
             >
               <Square aria-hidden="true" />
             </button>
