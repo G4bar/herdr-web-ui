@@ -35,6 +35,8 @@ class FakeChild implements PiNativeChild {
     return {};
   }
 
+  respond(): void {}
+
   close(): Promise<void> { this.closed = true; return Promise.resolve(); }
 
   onState(listener: (state: PiNativeState) => void): () => void {

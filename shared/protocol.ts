@@ -766,9 +766,14 @@ export interface PiNativeUiRequest {
   placeholder?: string;
   /** `editor`'s starting text */
   prefill?: string;
-  /** pi gives up after this many milliseconds on its own; the client tracks nothing */
+  /** pi gives up after this many milliseconds on its own; the card counts down to `timeout` from `receivedAt` */
   timeout?: number;
+  /** when the bridge read the request (epoch ms), so the card's deadline is the same on every poll of it */
+  receivedAt?: number;
 }
+
+/** The answer to one `PiNativeUiRequest`: exactly one of the three shapes pi accepts. */
+export type PiNativeUiAnswer = { value: string } | { confirmed: boolean } | { cancelled: true };
 
 /** One fire-and-forget `notify`, capped in the state and dropped oldest first. */
 export interface PiNativeNotice {
@@ -1379,6 +1384,12 @@ export interface InteractivePrompt {
   fallback?: true;
   /** Claude's plan file behind a plan card, whose whole text is then the body: opened in the file viewer */
   plan_file?: string;
+  /** the shape of a native pi dialog (RPC `extension_ui_request`): which of the four the card draws */
+  variant?: "select" | "confirm" | "input" | "editor";
+  /** when pi gives up on a native dialog by itself (epoch ms): the card's timer line counts to it */
+  deadline?: number;
+  /** a native `editor`'s starting text, typed into the card's field */
+  prefill?: string;
 }
 
 export interface InteractivePromptStep {

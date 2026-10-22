@@ -1,4 +1,4 @@
-import type { PiNativeModel, PiNativeNotice, PiNativeState, PiNativeStats, PiNativeUiRequest } from "../shared/protocol.ts";
+import type { PiNativeModel, PiNativeNotice, PiNativeState, PiNativeStats, PiNativeUiAnswer, PiNativeUiRequest } from "../shared/protocol.ts";
 
 /**
  * pi driven over its RPC mode (`pi --mode rpc --session <file>`), one child per native pane, and
@@ -254,7 +254,7 @@ function reduceUiRequest(state: PiNativeState, event: PiRpcRecord): PiNativeStat
   if (id === null) return state;
   if (oneOf(method, DIALOG_METHODS) !== null) {
     // pi blocks inside one dialog call, so a second request replaces nothing that is still waited on
-    const dialog: PiNativeUiRequest = { id, method: method as PiNativeUiRequest["method"], title: text(event["title"]) ?? "" };
+    const dialog: PiNativeUiRequest = { id, method: method as PiNativeUiRequest["method"], title: text(event["title"]) ?? "", receivedAt: Date.now() };
     const message = text(event["message"]);
     const placeholder = text(event["placeholder"]);
     const prefill = text(event["prefill"]);
@@ -416,7 +416,7 @@ export class PiRpc {
   }
 
   /** Answer the dialog pi waits on. It sends no response to this, so nothing is awaited. */
-  respond(id: string, answer: { value: string } | { confirmed: boolean } | { cancelled: true }): void {
+  respond(id: string, answer: PiNativeUiAnswer): void {
     this.write({ type: "extension_ui_response", id, ...answer });
     this.apply({ type: "ui_answered", id });
   }

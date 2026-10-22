@@ -9,7 +9,7 @@
  */
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { PiNativeState } from "../shared/protocol.ts";
+import type { PiNativeState, PiNativeUiAnswer } from "../shared/protocol.ts";
 import { herdrSocketPath, paneSendKeys, paneSendText } from "./herdr/client.ts";
 import { paneContext } from "./pane-context.ts";
 import { piAgentDir } from "./pi-models.ts";
@@ -22,6 +22,8 @@ import { readStateDocument, type StateDocument, writeStateDocument } from "./sta
 export interface PiNativeChild {
   readonly state: PiNativeState;
   call(command: { type: string } & Record<string, unknown>): Promise<unknown>;
+  /** answer the dialog pi waits on; pi sends no response to it */
+  respond(id: string, answer: PiNativeUiAnswer): void;
   close(): Promise<void>;
   onState(listener: (state: PiNativeState) => void): () => void;
   onExit(listener: (code: number | null) => void): () => void;
@@ -64,6 +66,8 @@ export interface PiNativeControl {
   sessionFile(paneId: string): string | null;
   /** one command over the pane's child, answered with Pi's `data` or the refusal it threw */
   call(paneId: string, command: { type: string } & Record<string, unknown>): Promise<unknown>;
+  /** answer the dialog pi waits on in this pane (`extension_ui_response`), for the prompt route */
+  respond(paneId: string, id: string, answer: PiNativeUiAnswer): void;
   /** every change a native pane's state makes, by pane id; returns the unsubscribe */
   onState(listener: (paneId: string, state: PiNativeState) => void): () => void;
   takeover(paneId: string, options?: { trust?: PiTrust }): Promise<PiNativeState>;
@@ -264,6 +268,14 @@ export class PiNativeRegistry implements PiNativeControl {
     if (entry === undefined) throw new PiNativeError("not_native", "this pane is not driven by the chat", 404);
     if (entry.rpc === null) throw new PiNativeError("not_connected", "pi in this pane is not connected; reconnect it first", 409);
     return await entry.rpc.call(command);
+  }
+
+  /** The answer to the dialog the child waits on: its `extension_ui_response`, and the state stops waiting. */
+  respond(paneId: string, id: string, answer: PiNativeUiAnswer): void {
+    const entry = this.panes.get(paneId);
+    if (entry === undefined) throw new PiNativeError("not_native", "this pane is not driven by the chat", 404);
+    if (entry.rpc === null) throw new PiNativeError("not_connected", "pi in this pane is not connected; reconnect it first", 409);
+    entry.rpc.respond(id, answer);
   }
 
   /** Every change any native pane's state makes, by pane id. Returns the unsubscribe. */

@@ -18,6 +18,7 @@ function native(state: PiNativeState | null, sent: Sent, refusal?: string): PiNa
       if (refusal !== undefined) throw new Error(refusal);
       return { disposition: "started" };
     },
+    respond: () => undefined,
     onState: () => () => undefined,
     takeover: async () => initialPiNativeState(),
     handBack: async () => undefined,

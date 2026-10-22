@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from "node:crypto";
-import type { HerdrPane, InteractivePrompt, InteractivePromptOption, PanePromptResponse, PromptAnswer, SessionSnapshot, SlashCommand } from "../shared/protocol.ts";
+import type { HerdrPane, InteractivePrompt, InteractivePromptOption, PanePromptResponse, PiNativeState, PromptAnswer, SessionSnapshot, SlashCommand } from "../shared/protocol.ts";
 import { builtinCommands, cachedPaneCommands } from "./commands.ts";
 import { agentProcesses, readCommandTranscript } from "./conversation.ts";
 import { resolveAgent } from "./pane-context.ts";
@@ -15,6 +15,8 @@ import { claudePlanFile } from "./claude-plan.ts";
 import { listPendingQuestionForms, openCodeService, replyOpenCodeForm } from "./opencode-service.ts";
 import { opencodeSessionId } from "./opencode.ts";
 import { registry } from "./dialogs/registry.ts";
+import { type PiNativeControl, PiNativeError } from "./pi-native.ts";
+import { nativeDeadline, nativePromptId, piNativeAnswer, piNativePrompt } from "./pi-native-prompt.ts";
 import { PI_ASK_HEADER_CAP, PI_ASK_PREVIEW_CAP, RPIV_ASK_FOOTER_LINES, RPIV_ASK_HINT_AT_END_RE, RPIV_ASK_HINT_RE, RPIV_ASK_PROMPT, capped } from "./dialogs/pi-ask.ts";
 import { claudeRewindPanelBelow } from "./dialogs/claude.ts";
 import { ANSI_RE, type AnswerStep, KEY, type OmoAsk, type OpenCodePromptEntry, PI_MODEL_HINT_RE, type ParsedPrompt, SOLID_RULE_RE, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, parsedByPublicPrompt, publicPrompt, wrapped } from "./dialogs/shared.ts";
@@ -1667,9 +1669,35 @@ function promptChanged(): Response {
   return jsonResponse({ error: { code: "prompt_changed", message: "The interactive prompt changed; reopen it and try again." } }, 409);
 }
 
+/**
+ * Answers the dialog pi waits on in a native pane: the card's answer mapped back to pi's
+ * `extension_ui_response`, with the refusals a screen's card gets. A dialog pi no longer waits on
+ * (another one replaced it, or pi gave up on it at its own timeout) is `prompt_changed`, never sent.
+ */
+function answerNativePrompt(piNative: PiNativeControl, body: PromptAnswer, state: PiNativeState, log: { matched: boolean }): Response {
+  const dialog = state.uiRequest;
+  if (dialog === null || nativePromptId(dialog.id) !== body.prompt_id) return promptChanged();
+  const deadline = nativeDeadline(dialog);
+  if (deadline !== null && Date.now() > deadline) return promptChanged();
+  log.matched = true;
+  const mapped = piNativeAnswer(dialog, body);
+  if ("invalid" in mapped) return badRequest("invalid_answer", mapped.invalid);
+  try {
+    piNative.respond(body.pane_id, dialog.id, mapped.answer);
+  } catch (error) {
+    // the child left between the read and the answer: nothing waits on that dialog any more
+    if (error instanceof PiNativeError) return promptChanged();
+    throw error;
+  }
+  // the state pi is sent drops the request as it goes out (`ui_answered`), so the next read has none
+  return jsonResponse({ ok: true });
+}
+
 export interface PromptRequestOptions {
   /** runs a pane's answer after the input already queued for it (a composer message in flight) */
   serialize?: <T>(paneId: string, task: () => Promise<T>) => Promise<T>;
+  /** the panes the bridge drives over Pi's RPC mode: their dialogs are pi's own requests, not a screen */
+  piNative?: PiNativeControl;
   /** Native Codex store, for the rollout behind a collapsed queue; defaults to CODEX_HOME */
   codexHome?: string;
   /** a Claude pane's transcript, for the plan file behind a plan card */
@@ -1705,6 +1733,17 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       if (request.method !== "GET") return badRequest("method_not_allowed", "GET is required.");
       const paneId = url.searchParams.get("pane_id")?.trim();
       if (!paneId) return badRequest("missing_pane_id", "pane_id is required.");
+      // A pane the bridge drives over RPC has no menu on its screen: pi's own request is the
+      // prompt, and no screen reader is read for it. The card polls this, so the id it names is
+      // the same dialog's for as long as pi waits on it.
+      const native = options.piNative?.state(paneId) ?? null;
+      if (native !== null) {
+        return jsonResponse({
+          prompt: native.uiRequest === null ? null : piNativePrompt(native.uiRequest),
+          suggestion: null,
+          restored: null,
+        } satisfies PanePromptResponse);
+      }
       const readSendId = chatSent.get(paneId)?.commands.at(-1)?.id;
       const read = await readPrompt(paneId, options.codexHome, options.openCodeStateDir, options.openCodeState, request.signal);
       if (read.stale) return promptChanged();
@@ -1741,6 +1780,17 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
     if (!body || typeof body !== "object") return badRequest("invalid_answer", "The answer body is required.");
     if (typeof body.pane_id !== "string" || !body.pane_id.trim()) return badRequest("missing_pane_id", "pane_id is required.");
     if (typeof body.prompt_id !== "string" || !body.prompt_id) return badRequest("invalid_answer", "prompt_id is required.");
+
+    // a native pane's dialog is pi's own `extension_ui_request`: it is answered over RPC, never
+    // by keys into a screen, and the id is checked against the one pi still waits on
+    const piNative = options.piNative ?? null;
+    const native = piNative === null ? null : piNative.state(body.pane_id);
+    if (piNative !== null && native !== null) {
+      const log = { paneId: body.pane_id, matched: false };
+      const response = answerNativePrompt(piNative, body, native, log);
+      await logAnswer(log, response);
+      return response;
+    }
 
     // read, checked and answered in the pane's turn: a message still in flight goes first, and
     // one sent meanwhile waits until the queue is opened, answered and closed again
