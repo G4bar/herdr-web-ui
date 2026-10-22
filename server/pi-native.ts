@@ -130,8 +130,25 @@ export function trustDecided(folder: string, trustFile: string): boolean {
   }
 }
 
-/** `/quit` is pi's own exit command; its TUI takes the text and then Enter, as the composer does. */
+/** The one-time trust answer as pi's CLI flag; a saved decision or the global default needs none. */
+const trustArgs = (trust: PiTrust | undefined): string[] => trust === undefined ? [] : [trust === "approve" ? "--approve" : "--no-approve"];
+
+/** The user's `defaultProjectTrust`; `always` loads the resources, so no card is needed for them. */
+function defaultProjectTrust(agentDir: string): string | null {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(agentDir, "settings.json"), "utf8"));
+    if (parsed === null || typeof parsed !== "object") return null;
+    const value = (parsed as Record<string, unknown>)["defaultProjectTrust"];
+    return typeof value === "string" ? value : null;
+  } catch { return null; }
+}
+
+/**
+ * Pi's own exit command, after its clear-editor key: `ctrl+c` clears the draft (first press) before
+ * `/quit` is typed, so a half-written draft is never joined by it and submitted to the model.
+ */
 async function quitPiTui(paneId: string): Promise<void> {
+  await paneSendKeys(paneId, ["ctrl+c"]);
   await paneSendText(paneId, "/quit");
   await paneSendKeys(paneId, ["Enter"]);
 }
@@ -144,12 +161,13 @@ async function startPiTui(paneId: string, sessionFile: string): Promise<void> {
 }
 
 /** What a stored entry is, checked row by row: anything else is dropped and the file kept aside. */
-function storedPane(value: unknown): { pane_id: string; session: string; cwd: string } | null {
+function storedPane(value: unknown): { pane_id: string; session: string; cwd: string; trust?: PiTrust } | null {
   if (value === null || typeof value !== "object") return null;
   const row = value as Record<string, unknown>;
   const { pane_id, session, cwd } = row;
   if (typeof pane_id !== "string" || pane_id === "" || typeof session !== "string" || session === "" || typeof cwd !== "string" || cwd === "") return null;
-  return { pane_id, session, cwd };
+  const trust = row["trust"] === "approve" || row["trust"] === "deny" ? row["trust"] : undefined;
+  return { pane_id, session, cwd, ...(trust === undefined ? {} : { trust }) };
 }
 
 class Entry implements PiNativePane {
@@ -157,9 +175,12 @@ class Entry implements PiNativePane {
     readonly paneId: string,
     readonly sessionFile: string,
     readonly cwd: string,
-    readonly args: string[],
+    readonly trust: PiTrust | undefined,
     readonly rpc: PiNativeChild | null,
   ) {}
+
+  /** the flags this child started with, kept so a reconnect after a restart repeats the trust answer */
+  get args(): string[] { return trustArgs(this.trust); }
 
   get mode(): PiNativeMode { return this.rpc === null ? "lost" : this.rpc.state.mode; }
 
@@ -232,6 +253,7 @@ export class PiNativeRegistry implements PiNativeControl {
   /** Forget panes herdr no longer lists, so a stale map cannot grow without a pane to show it in. */
   prune(livePaneIds: readonly string[]): void {
     const live = new Set(livePaneIds);
+    // a pane pruned while start() awaits leaves its child without an entry to close (rare: a pane vanishing mid-take-over)
     let changed = false;
     for (const [paneId, entry] of [...this.panes]) {
       if (live.has(paneId)) continue;
@@ -257,14 +279,24 @@ export class PiNativeRegistry implements PiNativeControl {
       if (options.trust === undefined) {
         const folder = canonical(pane.cwd);
         const found = projectResources(folder);
-        if (found.length > 0 && !trustDecided(folder, join(this.agentDir, "trust.json"))) throw new PiNeedsTrustError(folder, found);
+        // `always` loads them anyway, so asking would be a card with nothing behind it
+        if (found.length > 0 && defaultProjectTrust(this.agentDir) !== "always" && !trustDecided(folder, join(this.agentDir, "trust.json"))) {
+          throw new PiNeedsTrustError(folder, found);
+        }
       }
-      const args = options.trust === undefined ? [] : [options.trust === "approve" ? "--approve" : "--no-approve"];
+      let quit = false;
       if (await this.runsPi(paneId)) {
         await this.quitTui(paneId);
         await this.waitForPiToLeave(paneId);
+        quit = true;
       }
-      return (await this.start(paneId, sessionFile, pane.cwd, args)).state;
+      try {
+        return (await this.start(paneId, sessionFile, pane.cwd, options.trust, null)).state;
+      } catch (error) {
+        // the TUI already left: put it back rather than leave the pane at a bare shell
+        if (quit) await this.startTui(paneId, sessionFile).catch((restore: unknown) => this.log(`restoring pi in ${paneId}: ${describe(restore)}`));
+        throw error;
+      }
     });
   }
 
@@ -289,7 +321,7 @@ export class PiNativeRegistry implements PiNativeControl {
       const entry = this.panes.get(paneId);
       if (entry === undefined) throw new PiNativeError("not_native", "this pane is not driven by the chat", 404);
       if (entry.mode !== "lost") throw new PiNativeError("not_lost", "pi in this pane is still connected", 409);
-      return (await this.start(paneId, entry.sessionFile, entry.cwd, entry.args)).state;
+      return (await this.start(paneId, entry.sessionFile, entry.cwd, entry.trust, entry)).state;
     });
   }
 
@@ -299,15 +331,19 @@ export class PiNativeRegistry implements PiNativeControl {
     await Promise.all(closing);
   }
 
-  private async start(paneId: string, sessionFile: string, cwd: string, args: string[]): Promise<Entry> {
+  /**
+   * Spawn the child and seed it. `previous`, for a reconnect, is the lost entry that was there
+   * before: a child that exits before answering restores it, so the pane stays reconnectable.
+   */
+  private async start(paneId: string, sessionFile: string, cwd: string, trust: PiTrust | undefined, previous: Entry | null): Promise<Entry> {
     let rpc: PiNativeChild;
     try {
       // a missing `pi`, a cwd that is gone or a refused spawn is an answer, not a crash after the TUI quit
-      rpc = this.spawn({ sessionFile, cwd, args, env: this.env(paneId) });
+      rpc = this.spawn({ sessionFile, cwd, args: trustArgs(trust), env: this.env(paneId) });
     } catch (error) {
       throw new PiNativeError("spawn_failed", `could not start pi: ${describe(error)}`, 502);
     }
-    const entry = new Entry(paneId, sessionFile, cwd, args, rpc);
+    const entry = new Entry(paneId, sessionFile, cwd, trust, rpc);
     this.panes.set(paneId, entry);
     const mine = (): boolean => this.panes.get(paneId) === entry;
     rpc.onState((state) => { if (mine()) this.emit(paneId, state); });
@@ -318,7 +354,11 @@ export class PiNativeRegistry implements PiNativeControl {
       void rpc.call({ type: "get_session_stats" }).catch(() => undefined);
     } catch (error) {
       if (rpc.state.mode === "lost") {
-        this.panes.delete(paneId);
+        // a pane pruned while this waited is left pruned: the child it started is already gone
+        if (this.panes.get(paneId) === entry) {
+          if (previous === null) this.panes.delete(paneId);
+          else this.panes.set(paneId, previous);
+        }
         throw new PiNativeError("spawn_failed", `pi exited before answering: ${describe(error)}`, 502);
       }
       // a live child that refused one read is still a usable child
@@ -353,6 +393,8 @@ export class PiNativeRegistry implements PiNativeControl {
   }
 
   private load(): void {
+    // entries are matched by pane id alone, and herdr can reuse an id after a restart; a stale entry
+    // can light up another pane until a /api/pi request prunes it
     let read: StateDocument;
     try { read = readStateDocument(this.mapPath); }
     catch (error) { this.log(`cannot read ${this.mapPath}: ${describe(error)}; native panes start empty`); return; }
@@ -366,12 +408,17 @@ export class PiNativeRegistry implements PiNativeControl {
     for (const row of rows) {
       const pane = storedPane(row);
       if (pane === null) { this.damaged = true; continue; }
-      this.panes.set(pane.pane_id, new Entry(pane.pane_id, pane.session, pane.cwd, [], null));
+      this.panes.set(pane.pane_id, new Entry(pane.pane_id, pane.session, pane.cwd, pane.trust, null));
     }
   }
 
   private save(): void {
-    const panes = [...this.panes.values()].map((entry) => ({ pane_id: entry.paneId, session: entry.sessionFile, cwd: entry.cwd }));
+    const panes = [...this.panes.values()].map((entry) => ({
+      pane_id: entry.paneId,
+      session: entry.sessionFile,
+      cwd: entry.cwd,
+      ...(entry.trust === undefined ? {} : { trust: entry.trust }),
+    }));
     try {
       writeStateDocument(this.mapPath, `${JSON.stringify(panes, null, 2)}\n`, this.damaged);
       this.damaged = false;

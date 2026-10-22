@@ -6,7 +6,8 @@
  * `pane_id` is checked against herdr's snapshot before the registry is asked, so a pane the
  * terminal no longer has is a 404 and its map entry is dropped, not a child spawned for nobody.
  */
-import { sessionSnapshot } from "./herdr/client.ts";import { badRequest, errorResponse, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
+import { sessionSnapshot } from "./herdr/client.ts";
+import { badRequest, errorResponse, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
 import { type PiNativeControl, PiNeedsTrustError, PiNativeError, type PiTrust } from "./pi-native.ts";
 
 export interface PiNativeRoutesOptions {

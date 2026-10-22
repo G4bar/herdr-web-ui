@@ -13,6 +13,8 @@ class FakeChild implements PiNativeChild {
   state: PiNativeState;
   readonly calls: { type: string }[] = [];
   closed = false;
+  /** a child that leaves instead of answering the first get_state */
+  exitOnGetState = false;
   private readonly stateListeners = new Set<(state: PiNativeState) => void>();
   private readonly exitListeners = new Set<(code: number | null) => void>();
 
@@ -23,6 +25,10 @@ class FakeChild implements PiNativeChild {
   async call(command: { type: string } & Record<string, unknown>): Promise<unknown> {
     this.calls.push(command);
     if (command.type === "get_state") {
+      if (this.exitOnGetState) {
+        this.exit();
+        throw new Error("pi exited (0)");
+      }
       this.state = { ...initialPiNativeState(), mode: "native", sessionFile: this.sessionFile };
       this.notify();
     }
@@ -73,6 +79,8 @@ interface Harness {
   children: FakeChild[];
   spawned: PiRpcOptions[];
   calls: string[];
+  /** the next child leaves instead of answering get_state */
+  failNextGetState: { current: boolean };
 }
 
 /** A new registry over a temp folder; `pane` and any other dependency can be replaced per test. */
@@ -86,6 +94,7 @@ function setup(overrides: Partial<PiNativeOptions> = {}, pane: { agent?: string;
   const children: FakeChild[] = [];
   const spawned: PiRpcOptions[] = [];
   const calls: string[] = [];
+  const failNextGetState = { current: false };
   const options: PiNativeOptions = {
     stateDir: join(root, "state"),
     pane: async () => ({ agent: pane.agent ?? "pi", cwd: project, status: pane.status ?? "idle" }),
@@ -96,6 +105,8 @@ function setup(overrides: Partial<PiNativeOptions> = {}, pane: { agent?: string;
     spawn: (spawnOptions) => {
       spawned.push(spawnOptions);
       const child = new FakeChild(spawnOptions.sessionFile);
+      child.exitOnGetState = failNextGetState.current;
+      failNextGetState.current = false;
       children.push(child);
       return child;
     },
@@ -106,7 +117,7 @@ function setup(overrides: Partial<PiNativeOptions> = {}, pane: { agent?: string;
     log: () => undefined,
     ...overrides,
   };
-  return { root, project, sessionFile, agentDir, registry: new PiNativeRegistry(options), options, children, spawned, calls };
+  return { root, project, sessionFile, agentDir, registry: new PiNativeRegistry(options), options, children, spawned, calls, failNextGetState };
 }
 
 describe("PiNativeRegistry take-over", () => {
@@ -143,6 +154,16 @@ describe("PiNativeRegistry take-over", () => {
     writeFileSync(join(h.agentDir, "trust.json"), JSON.stringify({ [realpathSync(h.root)]: true }));
     await expect(h.registry.takeover("w:p1")).resolves.toMatchObject({ mode: "native" });
     expect(h.spawned).toHaveLength(1);
+  });
+
+  it("skips the trust card when the user's default is to always load project resources", async () => {
+    const h = setup();
+    mkdirSync(join(h.project, ".pi"), { recursive: true });
+    writeFileSync(join(h.project, ".pi", "settings.json"), "{}\n");
+    mkdirSync(h.agentDir, { recursive: true });
+    writeFileSync(join(h.agentDir, "settings.json"), JSON.stringify({ defaultProjectTrust: "always" }));
+    await expect(h.registry.takeover("w:p1")).resolves.toMatchObject({ mode: "native" });
+    expect(h.spawned[0]?.args).toEqual([]);
   });
 
   it("passes the trust answer as pi's one-time approval flag", async () => {
@@ -184,6 +205,17 @@ describe("PiNativeRegistry take-over", () => {
     expect(h.registry.state("w:p1")).toBeNull();
   });
 
+  it("puts the TUI back when the child cannot start after the quit", async () => {
+    let running = true;
+    const h = setup({
+      spawn: () => { throw new Error("no pi here"); },
+      runsPi: async () => { const seen = running; running = false; return seen; },
+    });
+    await expect(h.registry.takeover("w:p1")).rejects.toMatchObject({ code: "spawn_failed" });
+    expect(h.calls).toEqual(["quit:w:p1", `start:w:p1:${h.sessionFile}`]);
+    expect(h.registry.state("w:p1")).toBeNull();
+  });
+
   it("serialises two take-overs racing for one pane, so only one child starts", async () => {
     const h = setup();
     const outcomes = await Promise.allSettled([h.registry.takeover("w:p1"), h.registry.takeover("w:p1")]);
@@ -212,6 +244,26 @@ describe("PiNativeRegistry lost and hand-back", () => {
     const reloaded = new PiNativeRegistry(h.options);
     expect(reloaded.state("w:p1")).toMatchObject({ mode: "lost", sessionFile: h.sessionFile, isStreaming: false });
     expect(reloaded.paneOf("w:p1")?.mode).toBe("lost");
+  });
+
+  it("keeps the trust answer for a reconnect after a restart", async () => {
+    const h = setup();
+    await h.registry.takeover("w:p1", { trust: "approve" });
+    const reloaded = new PiNativeRegistry(h.options);
+    await expect(reloaded.reconnect("w:p1")).resolves.toMatchObject({ mode: "native" });
+    expect(h.spawned[1]?.args).toEqual(["--approve"]);
+  });
+
+  it("keeps a lost pane reconnectable when the new child exits before answering", async () => {
+    const h = setup();
+    await h.registry.takeover("w:p1");
+    h.children[0]!.exit();
+    h.failNextGetState.current = true;
+    await expect(h.registry.reconnect("w:p1")).rejects.toMatchObject({ code: "spawn_failed" });
+    expect(h.registry.paneOf("w:p1")?.mode).toBe("lost");
+    expect(h.registry.state("w:p1")).toMatchObject({ mode: "lost", sessionFile: h.sessionFile });
+    await expect(h.registry.reconnect("w:p1")).resolves.toMatchObject({ mode: "native" });
+    expect(h.spawned).toHaveLength(3);
   });
 
   it("aborts a streaming turn, closes the child and starts pi's TUI on the session", async () => {
