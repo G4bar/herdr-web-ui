@@ -1629,7 +1629,9 @@ export function App() {
   const piPane = selectedPane?.agent === "pi" ? selectedPane : null;
   const piMode = piLane.state?.mode ?? null;
   const piItems: RowMenuItem[] = piPane === null ? [] : piMode === null
-    ? [{ id: "pi-takeover", label: t("Take over in chat"), icon: MessageSquare, divider: true, title: t("Drive Pi from the chat instead of its terminal"), run: () => { void takeOverPi(piPane.pane_id, selectedMachineId).then((answer) => { if ("state" in answer) setView("chat"); }, () => undefined); } }]
+    // the chat reads the answer (its own state, a trust question, the server's refusal): the lens goes
+    // there first, so even a take-over the pane refuses shows its sentence where the notices are
+    ? [{ id: "pi-takeover", label: t("Take over in chat"), icon: MessageSquare, divider: true, title: t("Drive Pi from the chat instead of its terminal"), run: () => { setView("chat"); void takeOverPi(piPane.pane_id, selectedMachineId).catch(() => undefined); } }]
     : [
       { id: "pi-terminal", label: t("Open in terminal"), icon: SquareTerminal, divider: true, run: () => { void handBackPi(piPane.pane_id, selectedMachineId).then(() => setView("terminal"), () => undefined); } },
       ...(piMode === "lost" ? [{ id: "pi-reconnect", label: t("Reconnect"), icon: RefreshCw, run: () => { void reconnectPi(piPane.pane_id, selectedMachineId).catch(() => undefined); } }] : []),

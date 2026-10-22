@@ -176,7 +176,14 @@ export function usePiNative(paneId: string | null): PiNativeHandle {
     const offPush = socket?.onPiNativeState(paneId, (state) => piNativeLanes.publish(key, state)) ?? (() => {});
     const offReplay = socket?.onBeforeReplay(() => { piNativeLanes.reseed(key); seed(); }) ?? (() => {});
     seed();
-    return () => { current = false; offPush(); offReplay(); };
+    return () => {
+      current = false;
+      offPush();
+      offReplay();
+      // This chat is what hears the pushes, so a frame that came while it was away (a `removed`) is
+      // lost: the next mount reads the lane again instead of trusting the state it left.
+      piNativeLanes.reseed(key);
+    };
   }, [api, paneId, key, machineId, sessions]);
 
   const piRpc = useCallback((command: PiRpcCommand): Promise<unknown> => paneId === null

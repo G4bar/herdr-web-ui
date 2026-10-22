@@ -2925,11 +2925,14 @@ export function PaneTerminal({
   // a turn waiting on an approval (blocked) is still the same turn
   useEffect(() => { if (agentStatus !== "working" && agentStatus !== "blocked") hermesStopSentRef.current = false; }, [agentStatus]);
   useEffect(() => { hermesStopSentRef.current = false; hermesCtrlCAtRef.current = null; }, [paneId, agent]);
+  // a native Pi pane stops through Pi itself, not a key: the state's presence is what decides, and the
+  // two values are read out here so the Stop stays one callback across renders (lib/piNative.ts)
+  const nativePi = piNative.state !== null;
+  const piRpc = piNative.piRpc;
   const abortTurn = useCallback((): void | Promise<readonly string[]> => {
     // A pane the chat drives over RPC has no key to press: Stopping is Pi's own queue cleared, then the
     // turn aborted, and what the queue held goes back to the box (DS §4.4)
-    if (piNative.state !== null && paneRef.current !== null) {
-      const piRpc = piNative.piRpc;
+    if (nativePi && paneRef.current !== null) {
       return (async (): Promise<readonly string[]> => {
         const cleared = await piRpc({ type: "clear_queue" }).catch(() => null);
         await piRpc({ type: "abort" }).catch((error: unknown) => setInputError(error instanceof Error ? error.message : String(error)));
@@ -2958,7 +2961,7 @@ export function PaneTerminal({
     }
     stopKeyRef.current = true;
     try { term.input(key); } finally { stopKeyRef.current = false; }
-  }, [agent, piNative]);
+  }, [agent, nativePi, piRpc]);
 
   // While the agent runs, append to its held messages. Each requires an explicit send.
   // a question in Codex's queue leaves the composer alone: Codex keeps working, and a

@@ -33,6 +33,16 @@ it("reads a removed push as the hand-back it is", () => {
   expect(lanes.get("local:p").state).toBeNull();
 });
 
+it("reads the lane again for a chat that was away while a removed push came", () => {
+  const lanes = new PiNativeLanes();
+  // the chat unmounts without hearing Pi's hand-back, so its last state would stand: the next mount's
+  // read decides again (usePiNative reseeds on the way out and after a reconnect)
+  lanes.publish("local:p", native());
+  lanes.reseed("local:p");
+  lanes.seed("local:p", null);
+  expect(lanes.get("local:p").state).toBeNull();
+});
+
 it("keeps the trust question of a take-over until an answer, and tells subscribers of changes only", () => {
   const lanes = new PiNativeLanes();
   let changes = 0;
