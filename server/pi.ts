@@ -85,7 +85,7 @@ type PiTranscriptOptions = {
 };
 
 /** True for Pi's binary/script launch forms and the official npm bundle entry. */
-function isPiProcess(argv: readonly string[]): boolean {
+export function isPiProcess(argv: readonly string[]): boolean {
   return runsAgent(argv, PI_EXECUTABLE)
     || /(^|[\\/])(?:bun|node)(?:\.exe)?$/i.test(argv[0] ?? "") && PI_NPM_ENTRY.test(argv[1] ?? "");
 }
@@ -95,6 +95,19 @@ function processArgv(pid: number): readonly string[] | null {
   if (process.platform !== "linux") return null;
   try { return readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").filter(Boolean); }
   catch { return null; }
+}
+
+/**
+ * Whether the pane still runs pi in front: herdr's agent label, or a pi process among the pane's
+ * foreground processes. Taking a pane over quits one and waits for this to become false.
+ */
+export async function paneRunsPi(paneId: string): Promise<boolean> {
+  if ((await agentGet(paneId).catch(() => null))?.agent === "pi") return true;
+  const info = await paneProcessInfo(paneId).catch(() => undefined);
+  return (info?.foreground_processes ?? []).some((entry) => {
+    const argv = entry.argv?.length ? entry.argv : typeof entry.pid === "number" ? processArgv(entry.pid) : null;
+    return argv !== null && argv.length > 0 && isPiProcess(argv);
+  });
 }
 
 type PiStoreResolution = { kind: "default" } | { kind: "store"; path: string } | { kind: "reject" };

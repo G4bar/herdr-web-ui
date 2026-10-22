@@ -198,8 +198,8 @@ describe("PiRpc", () => {
     const { rpc } = start();
     await expect(rpc.call({ type: "respond-then-quit" })).resolves.toEqual({ ok: true });
     await until(() => rpc.state.mode === "lost");
-    // a record read after the exit cannot bring the state back to life
-    await Bun.sleep(50);
+    // the exit is handled only after both pipes are drained, so a record read after it cannot revive the state
+    await rpc.close();
     expect(rpc.state.mode).toBe("lost");
     expect(rpc.state.isStreaming).toBe(false);
   });

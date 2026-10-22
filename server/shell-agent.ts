@@ -58,27 +58,29 @@ export function shellCommandLine(shell: PaneShell, executable: string, args: rea
 interface ProcessInfo { process_info?: { shell_pid?: number; foreground_processes?: { pid: number; argv?: string[]; cwd?: string }[] } }
 const processInfo = (paneId: string) => herdrRpc<ProcessInfo>("pane.process_info", { pane_id: paneId }).catch(() => null);
 
+export interface StartShellAgentOptions {
+  /** the program to run, quoted as one word; unset, the PATH lookup of `kind` */
+  command?: string;
+  timeoutMs?: number;
+  /** the proof that the started program is in front, for a kind SHELL_AGENTS does not list (pi) */
+  isProcess?: (argv: readonly string[]) => boolean;
+}
+
 /**
  * Types the agent's absolute path and args into the pane's shell and resolves once
  * `kind` is its foreground process, with that process's pid; null on Windows, where it is
  * found among the shell's descendants and not in front. The path is the one `/api/agents`
  * discovered, so the offer and the start agree whatever the pane shell's PATH says.
  */
-export async function startShellAgent(kind: string, paneId: string, args: string[] = [], options: { command?: string; timeoutMs?: number } = {}): Promise<number | null> {
-  const isProcess = SHELL_AGENTS[kind];
+export async function startShellAgent(kind: string, paneId: string, args: string[] = [], options: StartShellAgentOptions = {}): Promise<number | null> {
+  const isProcess = options.isProcess ?? SHELL_AGENTS[kind];
   if (!isProcess) throw new Error(`${kind} is not a shell-started agent`);
+  const executable = options.command ?? shellAgentExecutable(kind);
+  if (!executable) throw new Error(`${kind} is not on this server's PATH`);
   const windows = process.platform === "win32";
-  if (options.command !== undefined || !windows) {
-    let command = options.command;
-    if (command === undefined) {
-      const executable = shellAgentExecutable(kind);
-      if (!executable) throw new Error(`${kind} is not on this server's PATH`);
-      command = quote(executable);
-    }
-    await herdrRpc("pane.send_text", { pane_id: paneId, text: `${[command, ...args.map(quote)].join(" ")}\n` });
+  if (!windows) {
+    await herdrRpc("pane.send_text", { pane_id: paneId, text: `${[quote(executable), ...args.map(quote)].join(" ")}\n` });
   } else {
-    const executable = shellAgentExecutable(kind);
-    if (!executable) throw new Error(`${kind} is not on this server's PATH`);
     const shell = paneShell((await processInfo(paneId))?.process_info?.foreground_processes?.[0]?.argv?.[0] ?? "powershell.exe");
     await herdrRpc("pane.send_text", { pane_id: paneId, text: shellCommandLine(shell, executable, args) });
     await herdrRpc("pane.send_keys", { pane_id: paneId, keys: ["Enter"] });
