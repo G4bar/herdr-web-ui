@@ -150,6 +150,24 @@ The glass tokens are expressions over the palette above, not colors of their own
 | Glass card | `--card-glass` | `color-mix(in srgb, var(--bg-elevated) 80%, transparent)` | same expression |
 | Glass blur | `--glass-blur` | `saturate(180%) blur(20px)` | same |
 
+The thinking ramp and the custom-message label are expressions over the palette too: a quiet step
+from the dim text to the palette's own meta hue, brighter with more effort, so a thinking level
+never borrows amber (chrome) or a state colour. Pi's `max` level draws as `--think-xhigh`.
+
+| Role | Token | Dark | Light |
+|------|-------|------|-------|
+| Thinking/off | `--think-off` | `var(--text-dim)` | same expression |
+| Thinking/minimal | `--think-minimal` | `color-mix(in srgb, var(--syntax-meta) 25%, var(--text-dim))` | same expression |
+| Thinking/low | `--think-low` | `color-mix(in srgb, var(--syntax-meta) 50%, var(--text-dim))` | same expression |
+| Thinking/medium | `--think-medium` | `color-mix(in srgb, var(--syntax-meta) 75%, var(--text-dim))` | same expression |
+| Thinking/high | `--think-high` | `var(--syntax-meta)` | same expression |
+| Thinking/extra high | `--think-xhigh` | `color-mix(in srgb, var(--syntax-meta) 70%, var(--text-strong))` | same expression |
+| Custom-message label | `--custom-label` | `var(--syntax-meta)` | same expression |
+
+Every level and `--custom-label` are at least 4.5:1 against `--bg`, `--bg-panel`, `--bg-elevated`
+and `--bg-input` in every entry (`src/lib/themeTokens.test.ts`); the level word and the pips carry
+the level, never the colour alone.
+
 `--pdf-page` is the one color with the same value in both columns, on purpose: a PDF page is
 paper, not UI, and the viewer (`.file-viewer-pdf`) must not tint it for the theme. It is named in
 `src/styles.css` under the same note and no theme or palette block overrides it.

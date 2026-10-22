@@ -101,6 +101,20 @@
   --syntax-variable: #e0c08f;
   --syntax-meta: #b49dd6;
 
+  /* Pi's thinking levels (the thinking chip, ChatView's thinking row): a quiet ramp from the dim
+     text to the palette's own violet/teal "meta" hue, brighter with more effort, so a level never
+     borrows amber (chrome) or a state colour. Pi's `max` level draws as --think-xhigh. Expressions
+     over the palette, so no theme or palette block declares them */
+  --think-off: var(--text-dim);
+  --think-minimal: color-mix(in srgb, var(--syntax-meta) 25%, var(--text-dim));
+  --think-low: color-mix(in srgb, var(--syntax-meta) 50%, var(--text-dim));
+  --think-medium: color-mix(in srgb, var(--syntax-meta) 75%, var(--text-dim));
+  --think-high: var(--syntax-meta);
+  --think-xhigh: color-mix(in srgb, var(--syntax-meta) 70%, var(--text-strong));
+  /* the label and rail of a custom (extension-originated) message, distinct from chrome: the same
+     meta hue, which passes AA on every surface in every palette */
+  --custom-label: var(--syntax-meta);
+
   /* type (comfortable density; compact overrides below) */
   --font-ui: "Pretendard Variable", Pretendard, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans KR", "Malgun Gothic", sans-serif;
   /* "JetBrains Mono Web" is the bundled face (fonts/fonts.css): after the icon font, which draws
@@ -700,7 +714,7 @@
   --status-blocked-tint: rgba(144, 0, 27, 0.12);
   --status-done-tint: rgba(54, 80, 19, 0.12);
   --danger-tint: rgba(144, 0, 27, 0.1);
-  --notice: #8c6c3e;
+  --notice: #68502e;
   --danger-text: #90001b;
   --scrim: rgba(39, 77, 171, 0.35);
   --term-bg: #e1e2e7;
@@ -810,7 +824,7 @@
   --status-blocked-tint: rgba(157, 0, 6, 0.12);
   --status-done-tint: rgba(93, 87, 0, 0.12);
   --danger-tint: rgba(157, 0, 6, 0.1);
-  --notice: #b57614;
+  --notice: #86570f;
   --danger-text: #9d0006;
   --scrim: rgba(60, 56, 54, 0.35);
   --term-bg: #fbf1c7;
@@ -920,7 +934,7 @@
   --status-blocked-tint: rgba(165, 17, 16, 0.12);
   --status-done-tint: rgba(1, 98, 11, 0.12);
   --danger-tint: rgba(165, 17, 16, 0.1);
-  --notice: #c18401;
+  --notice: #936401;
   --danger-text: #a51110;
   --scrim: rgba(56, 58, 66, 0.35);
   --term-bg: #fafafa;
@@ -983,7 +997,7 @@
   --status-blocked-tint: rgba(255, 188, 170, 0.14);
   --status-done-tint: rgba(194, 216, 93, 0.14);
   --danger-tint: rgba(255, 188, 170, 0.12);
-  --notice: #b58900;
+  --notice: #bc9417;
   --danger-text: #ffbcaa;
   --scrim: rgba(0, 43, 54, 0.5);
   --term-bg: #002b36;
@@ -1030,7 +1044,7 @@
   --status-blocked-tint: rgba(182, 0, 6, 0.12);
   --status-done-tint: rgba(83, 99, 0, 0.12);
   --danger-tint: rgba(182, 0, 6, 0.1);
-  --notice: #b58900;
+  --notice: #846400;
   --danger-text: #b60006;
   --scrim: rgba(85, 106, 114, 0.35);
   --term-bg: #fdf6e3;
@@ -1140,7 +1154,7 @@
   --status-blocked-tint: rgba(149, 0, 43, 0.12);
   --status-done-tint: rgba(59, 82, 23, 0.12);
   --danger-tint: rgba(149, 0, 43, 0.1);
-  --notice: #77713f;
+  --notice: #625d34;
   --danger-text: #95002b;
   --scrim: rgba(84, 84, 100, 0.35);
   --term-bg: #f2ecbc;
@@ -1250,7 +1264,7 @@
   --status-blocked-tint: rgba(135, 58, 82, 0.12);
   --status-done-tint: rgba(22, 90, 116, 0.12);
   --danger-tint: rgba(135, 58, 82, 0.1);
-  --notice: #ea9d34;
+  --notice: #8f6020;
   --danger-text: #873a52;
   --scrim: rgba(70, 66, 97, 0.35);
   --term-bg: #faf4ed;

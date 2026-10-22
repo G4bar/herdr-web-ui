@@ -307,6 +307,13 @@ export const OVERRIDES: readonly ThemeOverride[] = [
   {"theme":"rose-pine-dawn","mode":"light","role":"syntax-type","value":"#9e5600","dE":23.02522815963855,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
   {"theme":"rose-pine-dawn","mode":"light","role":"syntax-meta","value":"#33717c","dE":11.64373069428541,"reason":"AA lightness repair on serialized hex (target 4.6; chroma reduction at most 5%)"},
   {"theme":"rose-pine-dawn","mode":"light","role":"primary","value":"#7e659b","dE":6.5855528356763084,"reason":"AA lightness repair of the primary fill under primary-text (target 4.5)"},
+  {"theme":"tokyo-night-day","mode":"light","role":"notice","value":"#68502e","dE":10.57848613062342,"reason":"AA for warning text"},
+  {"theme":"gruvbox-light","mode":"light","role":"notice","value":"#86570f","dE":12.334894501809398,"reason":"AA for warning text"},
+  {"theme":"one-light","mode":"light","role":"notice","value":"#936401","dE":12.16397059842252,"reason":"AA for warning text"},
+  {"theme":"solarized","mode":"dark","role":"notice","value":"#bc9417","dE":3.128072444624847,"reason":"AA for warning text"},
+  {"theme":"solarized-light","mode":"light","role":"notice","value":"#846400","dE":13.599851460480966,"reason":"AA for warning text"},
+  {"theme":"kanagawa-lotus","mode":"light","role":"notice","value":"#625d34","dE":7.006258388918653,"reason":"AA for warning text"},
+  {"theme":"rose-pine-dawn","mode":"light","role":"notice","value":"#8f6020","dE":23.239333832430376,"reason":"AA for warning text"},
 ];
 
 /** Pure policy used by the test and by temporary-copy QA. A diagnostic always names entry/role. */
