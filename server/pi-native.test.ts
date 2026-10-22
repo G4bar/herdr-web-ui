@@ -52,6 +52,12 @@ class FakeChild implements PiNativeChild {
     this.notify();
   }
 
+  /** a session move (switch_session, new_session, fork, clone): the child holds another file from now on */
+  move(sessionFile: string): void {
+    this.state = { ...this.state, sessionFile };
+    this.notify();
+  }
+
   /** the child leaving on its own: not requested through hand-back */
   exit(code = 0): void {
     this.state = { ...this.state, mode: "lost" };
@@ -287,6 +293,40 @@ describe("PiNativeRegistry lost and hand-back", () => {
     expect(h.children[0]!.closed).toBe(true);
     const saved = JSON.parse(readFileSync(join(h.root, "state", "pi-native.json"), "utf8")) as unknown[];
     expect(saved).toEqual([]);
+  });
+
+  it("follows the session file the child moves to, for the transcript, a reconnect and a hand-back", async () => {
+    const h = setup();
+    await h.registry.takeover("w:p1");
+    expect(h.registry.sessionFile("w:p1")).toBe(h.sessionFile);
+    // `switch_session` is allowlisted: pi holds another file afterwards, and its own state says which
+    const moved = join(h.root, "moved.jsonl");
+    await h.registry.call("w:p1", { type: "switch_session", sessionPath: moved });
+    h.children[0]!.move(moved);
+    expect(h.registry.sessionFile("w:p1")).toBe(moved);
+    // the map keeps it, so a bridge restart reconnects to the session pi actually holds
+    const saved = JSON.parse(readFileSync(join(h.root, "state", "pi-native.json"), "utf8")) as { pane_id: string; session: string; cwd: string }[];
+    expect(saved).toEqual([{ pane_id: "w:p1", session: moved, cwd: h.project }]);
+    h.children[0]!.exit();
+    await expect(h.registry.reconnect("w:p1")).resolves.toMatchObject({ mode: "native" });
+    expect(h.spawned[1]?.sessionFile).toBe(moved);
+    const again = join(h.root, "again.jsonl");
+    h.children[1]!.move(again);
+    await h.registry.handBack("w:p1");
+    expect(h.calls).toEqual([`start:w:p1:${again}`]);
+  });
+
+  it("tells a watcher the last state of a pane it hands back or drops", async () => {
+    const h = setup();
+    const seen: { paneId: string; mode: string }[] = [];
+    h.registry.onState((paneId, state) => seen.push({ paneId, mode: state.mode }));
+    await h.registry.takeover("w:p1");
+    await h.registry.handBack("w:p1");
+    expect(seen.at(-1)).toEqual({ paneId: "w:p1", mode: "removed" });
+    await h.registry.takeover("w:p1");
+    seen.length = 0;
+    h.registry.prune([]);
+    expect(seen).toEqual([{ paneId: "w:p1", mode: "removed" }]);
   });
 
   it("refuses a hand-back for a pane it does not drive", async () => {

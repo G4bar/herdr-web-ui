@@ -56,4 +56,13 @@ describe("a native Pi pane's composer message", () => {
     const refused = submitter(native(nativeState(), sent, "no model selected"))("w:p1", "hello", "", Date.now()).catch((error: unknown) => error);
     expect(pendingFault(await refused)).toEqual({ code: "submit_failed", message: "no model selected" });
   });
+
+  it("takes Pi's refusal of a send read as idle as the submit's own failure", async () => {
+    // the turn began between the state read and the write: pi refuses a plain prompt, and nothing is lost from the chat
+    const sent: Sent = [];
+    const error = await submitter(native(nativeState(), sent, "a turn is running; pass streamingBehavior"))("w:p1", "hello", "", Date.now())
+      .catch((error: unknown) => error);
+    expect(sent).toEqual([{ type: "prompt", message: "hello" }]);
+    expect(pendingFault(error)).toEqual({ code: "submit_failed", message: "a turn is running; pass streamingBehavior" });
+  });
 });

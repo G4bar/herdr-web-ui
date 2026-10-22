@@ -792,8 +792,9 @@ export interface PiNativeRetry {
  * A new object per change, small enough to send on every record.
  */
 export interface PiNativeState {
-  /** `connecting` until pi answers once, `lost` once the child exited */
-  mode: "connecting" | "native" | "lost";
+  /** `connecting` until pi answers once, `lost` once the child exited, and `removed` as the last state a
+   * watcher is sent: the chat handed the pane back or herdr no longer lists it, so no state follows */
+  mode: "connecting" | "native" | "lost" | "removed";
   model: PiNativeModel | null;
   thinkingLevel: string;
   isStreaming: boolean;

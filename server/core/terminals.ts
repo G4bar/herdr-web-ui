@@ -70,9 +70,7 @@ export function createNativeStatePush({ clients, state, intervalMs = NATIVE_PUSH
   /** the panes whose push waits on their interval */
   const waiting = new Map<string, ReturnType<typeof setTimeout>>();
 
-  function push(paneId: string): void {
-    const current = state(paneId);
-    if (!current) return;
+  function push(paneId: string, current: PiNativeState): void {
     sent.set(paneId, current);
     for (const client of clients) {
       if (connectionOf(client).closing || client.readyState !== WebSocket.OPEN) continue;
@@ -84,19 +82,28 @@ export function createNativeStatePush({ clients, state, intervalMs = NATIVE_PUSH
 
   return {
     changed(paneId: string, next: PiNativeState): void {
+      // the state as it changed, never a fresh read: a `removed` pane has none left to read
       if (sent.get(paneId)?.mode !== next.mode) {
         clearTimeout(waiting.get(paneId));
         waiting.delete(paneId);
-        push(paneId);
+        push(paneId, next);
         return;
       }
       if (waiting.has(paneId)) return;
-      const timer = setTimeout(() => { waiting.delete(paneId); push(paneId); }, intervalMs);
+      const timer = setTimeout(() => {
+        waiting.delete(paneId);
+        // the newest state at the trailing edge; a pane that lost its state meanwhile sends nothing
+        const current = state(paneId);
+        if (current) push(paneId, current);
+      }, intervalMs);
       timer.unref();
       waiting.set(paneId, timer);
     },
     /** once, for a connection that has just started watching the pane */
-    watch(paneId: string): void { push(paneId); },
+    watch(paneId: string): void {
+      const current = state(paneId);
+      if (current) push(paneId, current);
+    },
     /** a pane with no attachment left sends nothing more */
     forget(paneId: string): void {
       clearTimeout(waiting.get(paneId));

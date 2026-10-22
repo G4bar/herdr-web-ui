@@ -115,3 +115,16 @@ it("pushes a native pane's state to the clients watching it, throttled, with a m
   expect(watcher.frames[2]).toMatchObject({ state: { mode: "lost" } });
   push.forget("p");
 });
+
+it("pushes a handed-back pane's last state as removed, though the registry holds none afterwards", async () => {
+  const watcher = watching(true);
+  let held: PiNativeState | null = { ...initialPiNativeState(), mode: "native" };
+  const push = createNativeStatePush({ clients: new Set([watcher.client]), state: () => held, intervalMs: 10 });
+  push.watch("p");
+  expect(watcher.frames).toHaveLength(1);
+  // the registry deletes the pane and then sends its last state: a push that read the state again would drop it
+  const removed: PiNativeState = { ...held, mode: "removed" };
+  held = null;
+  push.changed("p", removed);
+  expect(watcher.frames.at(-1)).toMatchObject({ type: "pi-native-state", pane_id: "p", state: { mode: "removed" } });
+});

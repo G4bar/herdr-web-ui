@@ -179,7 +179,9 @@ function storedPane(value: unknown): { pane_id: string; session: string; cwd: st
 class Entry implements PiNativePane {
   constructor(
     readonly paneId: string,
-    readonly sessionFile: string,
+    /** the session file the pane's child holds: a session move (switch_session, new_session, fork, clone)
+     * changes it, and the child's own state says which one it holds now */
+    public sessionFile: string,
     readonly cwd: string,
     readonly trust: PiTrust | undefined,
     readonly rpc: PiNativeChild | null,
@@ -250,9 +252,10 @@ export class PiNativeRegistry implements PiNativeControl {
     return this.panes.get(paneId) ?? null;
   }
 
-  /** The session file a native pane's child holds; a pane the chat does not drive has none. */
+  /** The session file a native pane's child holds now; a pane the chat does not drive has none. */
   sessionFile(paneId: string): string | null {
-    return this.panes.get(paneId)?.sessionFile ?? null;
+    const entry = this.panes.get(paneId);
+    return entry === undefined ? null : this.liveSession(entry);
   }
 
   /** One command over the pane's child. A lost child has nothing to answer it, so typists reconnect first. */
@@ -278,6 +281,8 @@ export class PiNativeRegistry implements PiNativeControl {
       if (live.has(paneId)) continue;
       if (entry.rpc !== null) void entry.rpc.close().catch((error: unknown) => this.log(`closing ${paneId}: ${describe(error)}`));
       this.panes.delete(paneId);
+      // the pane's chat is gone with it: a watcher is told so in its own last state
+      this.emit(paneId, { ...entry.state, mode: "removed" });
       changed = true;
     }
     if (changed) this.save();
@@ -330,7 +335,9 @@ export class PiNativeRegistry implements PiNativeControl {
       }
       this.panes.delete(paneId);
       this.save();
-      try { await this.startTui(paneId, entry.sessionFile); }
+      // the chat no longer drives the pane: its watchers take the last state and stop asking for one
+      this.emit(paneId, { ...entry.state, mode: "removed" });
+      try { await this.startTui(paneId, this.liveSession(entry)); }
       catch (error) { throw new PiNativeError("handback_failed", `pi could not be started in the pane: ${describe(error)}`, 502); }
     });
   }
@@ -340,7 +347,7 @@ export class PiNativeRegistry implements PiNativeControl {
       const entry = this.panes.get(paneId);
       if (entry === undefined) throw new PiNativeError("not_native", "this pane is not driven by the chat", 404);
       if (entry.mode !== "lost") throw new PiNativeError("not_lost", "pi in this pane is still connected", 409);
-      return (await this.start(paneId, entry.sessionFile, entry.cwd, entry.trust, entry)).state;
+      return (await this.start(paneId, this.liveSession(entry), entry.cwd, entry.trust, entry)).state;
     });
   }
 
@@ -365,7 +372,15 @@ export class PiNativeRegistry implements PiNativeControl {
     const entry = new Entry(paneId, sessionFile, cwd, trust, rpc);
     this.panes.set(paneId, entry);
     const mine = (): boolean => this.panes.get(paneId) === entry;
-    rpc.onState((state) => { if (mine()) this.emit(paneId, state); });
+    rpc.onState((state) => {
+      if (!mine()) return;
+      // a session move leaves a new file behind: the map keeps it, so a restart reconnects to the session pi holds
+      if (state.sessionFile !== null && state.sessionFile !== entry.sessionFile) {
+        entry.sessionFile = state.sessionFile;
+        this.save();
+      }
+      this.emit(paneId, state);
+    });
     // a child that left on its own is lost, not gone: the session file is still there to reconnect to
     rpc.onExit(() => { if (mine()) this.emit(paneId, entry.state); });
     try {
@@ -409,6 +424,11 @@ export class PiNativeRegistry implements PiNativeControl {
     for (const listener of this.listeners) {
       try { listener(paneId, state); } catch (error) { this.log(`state listener: ${describe(error)}`); }
     }
+  }
+
+  /** The session file the pane's child holds now: a lost child keeps the last one it reported. */
+  private liveSession(entry: Entry): string {
+    return entry.rpc?.state.sessionFile ?? entry.sessionFile;
   }
 
   private load(): void {
