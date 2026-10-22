@@ -724,6 +724,99 @@ export interface ConversationResponse {
   abandoned?: { count: number; branches: number; summary: string | null };
 }
 
+/** A pi model, cut to what the chat shows: pi's own registry states the rest. */
+export interface PiNativeModel {
+  provider: string;
+  id: string;
+  name: string;
+  /** the window pi compacts against; null when the model names none */
+  contextWindow: number | null;
+  /** whether the model takes a thinking level at all */
+  reasoning: boolean;
+}
+
+/**
+ * `get_session_stats`, kept whole enough for the stats popover and the composer's context ring.
+ * `tokens` and `cost` are the session's own totals, so a run only adds to them.
+ */
+export interface PiNativeStats {
+  userMessages: number;
+  assistantMessages: number;
+  toolCalls: number;
+  totalMessages: number;
+  tokens: { input: number; output: number; cacheRead: number; cacheWrite: number; total: number };
+  cost: number;
+  /** absent when pi knows no window; tokens and percent are null right after compaction */
+  contextUsage: { tokens: number | null; contextWindow: number; percent: number | null } | null;
+}
+
+/** The one extension dialog pi is waiting on; the answer goes back as `extension_ui_response`. */
+export interface PiNativeUiRequest {
+  id: string;
+  method: "select" | "confirm" | "input" | "editor";
+  title: string;
+  /** `confirm`'s question under the title */
+  message?: string;
+  /** `select`'s choices */
+  options?: string[];
+  /** `input`'s hint */
+  placeholder?: string;
+  /** `editor`'s starting text */
+  prefill?: string;
+  /** pi gives up after this many milliseconds on its own; the client tracks nothing */
+  timeout?: number;
+}
+
+/** One fire-and-forget `notify`, capped in the state and dropped oldest first. */
+export interface PiNativeNotice {
+  id: string;
+  type: "info" | "warning" | "error";
+  message: string;
+}
+
+/** The assistant-turn retry pi is in, from `auto_retry_start` until its `auto_retry_end`. */
+export interface PiNativeRetry {
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
+  errorMessage: string;
+}
+
+/**
+ * The live state of one pi pane driven over RPC (`server/pi-rpc.ts`), reduced on the server from
+ * pi's event stream and pushed whole. It is not the transcript: that stays the session JSONL pi
+ * writes, and this says only what a file cannot — the model, the queue, the dialog pi waits on.
+ * A new object per change, small enough to send on every record.
+ */
+export interface PiNativeState {
+  /** `connecting` until pi answers once, `lost` once the child exited */
+  mode: "connecting" | "native" | "lost";
+  model: PiNativeModel | null;
+  thinkingLevel: string;
+  isStreaming: boolean;
+  isCompacting: boolean;
+  steeringMode: "all" | "one-at-a-time";
+  followUpMode: "all" | "one-at-a-time";
+  /** the messages pi holds while a turn runs, as `queue_update` last reported them */
+  queue: { steering: string[]; followUp: string[] };
+  stats: PiNativeStats | null;
+  /** the retry in flight, null outside one */
+  retry: PiNativeRetry | null;
+  uiRequest: PiNativeUiRequest | null;
+  /** extension status lines by key. `herdsman` is the roster's own and is never drawn as one */
+  statuses: Record<string, string>;
+  /** extension widgets by key, each its own lines */
+  widgets: Record<string, string[]>;
+  /** newest last, capped */
+  notices: PiNativeNotice[];
+  /** `set_editor_text`'s prefill, taken once and then cleared (`consumeEditorText`) */
+  editorText: string | null;
+  /** a running tool call's last output lines by tool-call id (a direct bash by its command id) */
+  toolTails: Record<string, string[]>;
+  sessionFile: string | null;
+  sessionName: string | null;
+}
+
 /** Where a plugin manifest says an action applies. herdr may add more, so it stays open. */
 export type PluginActionContext = "global" | "workspace" | "tab" | "pane" | "selection" | (string & {});
 
