@@ -11,7 +11,7 @@ import { herdrRpc, workspaceClose, workspaceCreate } from "../server/herdr/clien
 import { chromePath } from "./chrome-path.ts";
 
 const repo = resolve(import.meta.dir, "..");
-const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-pwa-"));
+const root = mkdtempSync(join(tmpdir(), "ovis-pwa-"));
 const app = join(root, "app");
 const baseline = join(root, "baseline");
 const current = join(repo, "dist");
@@ -24,7 +24,8 @@ let server: ReturnType<typeof import("../server/index.ts").createServer> | undef
 let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
 
 function entryScript(html: string): string {
-  const entry = html.match(/<script\b[^>]*\bsrc="([^"]+)"/)?.[1];
+  // the module entry, not the classic theme boot script ahead of it (scripts/theme-bootstrap-build.ts)
+  const entry = html.match(/<script\b(?=[^>]*\btype="module")[^>]*\bsrc="([^"]+)"/)?.[1];
   assert.ok(entry, "the real built shell has a module entry");
   return entry;
 }
@@ -122,7 +123,7 @@ try {
   const standIn = join(root, "codex");
   writeFileSync(standIn, `#!/bin/sh\nprintf ready > "${join(root, "ready")}"\nwhile IFS= read -r line; do :; done\n`);
   chmodSync(standIn, 0o755);
-  const created = await workspaceCreate({ cwd: root, label: "herdr-web-ui-test-pwa" });
+  const created = await workspaceCreate({ cwd: root, label: "ovis-test-pwa" });
   workspace = created.workspace.workspace_id;
   const pane = created.root_pane.pane_id;
   const processReady = new Promise<void>((resolveReady, reject) => {
@@ -161,7 +162,7 @@ try {
     };
     await page.goto(`${origin}/?pane=${encodeURIComponent(pane)}&view=chat`);
     await page.locator(".conn-live").waitFor();
-    await page.locator(".composer textarea").waitFor();
+    await page.locator(".composer-text").waitFor();
     await page.evaluate(() => new Promise<void>((resolveControlled, reject) => {
       const controlled = () => {
         clearTimeout(deadline);
@@ -179,11 +180,11 @@ try {
     await cdp.send("Storage.trackCacheStorageForOrigin", { origin });
     const cachedOld = cachedBuild(cdp, origin, oldEntry);
     try { await Promise.all([cachedOld.ready, page.reload()]); } finally { cachedOld.stop(); }
-    await page.locator(".composer textarea").waitFor();
+    await page.locator(".composer-text").waitFor();
     await page.getByText("PWA update fixture is ready.", { exact: true }).waitFor();
     const draft = `Unsent PWA draft ${width} 한글`;
-    await page.locator(".composer textarea").fill(draft);
-    assert.equal(await page.locator(".composer textarea").inputValue(), draft);
+    await page.locator(".composer-text").fill(draft);
+    assert.equal(await page.locator(".composer-text").inputValue(), draft);
     await capture("baseline");
     const offlineShell = async (entry: string) => {
       await context.setOffline(true);
@@ -201,7 +202,7 @@ try {
       await placeholder.waitFor();
       assert.ok((await placeholder.textContent())?.trim(), "the cached app draws its connection state, not a blank root");
       assert.equal(await page.locator('script[type="module"][src]').getAttribute("src"), entry);
-      assert.equal(await page.evaluate((key) => localStorage.getItem(key), `herdr-web-ui:composer-draft:${pane}`), draft,
+      assert.equal(await page.evaluate((key) => localStorage.getItem(key), `ovis:composer-draft:${pane}`), draft,
         "the draft survives while the offline composer is unmounted");
       assert.ok(requests.some((request) => request.phase === phase && request.url === new URL(entry, origin).href && request.status === 200 && request.fromWorker),
         "the entry really loads from the service worker while offline");
@@ -213,20 +214,20 @@ try {
     await context.setOffline(false);
     await page.reload();
     await page.locator(".conn-live").waitFor();
-    await page.locator(".composer textarea").waitFor();
-    assert.equal(await page.locator(".composer textarea").inputValue(), draft, "the baseline also restores the draft when online");
+    await page.locator(".composer-text").waitFor();
+    assert.equal(await page.locator(".composer-text").inputValue(), draft, "the baseline also restores the draft when online");
     await page.getByText("PWA update fixture is ready.", { exact: true }).waitFor();
 
     renameSync(join(app, "dist"), join(app, "old-dist"));
     cpSync(current, join(app, "dist"), { recursive: true });
-    assert.equal(await page.locator(".composer textarea").inputValue(), draft, "changing the served build does not reload the open draft");
+    assert.equal(await page.locator(".composer-text").inputValue(), draft, "changing the served build does not reload the open draft");
     phase = "updated";
     const cachedNew = cachedBuild(cdp, origin, newEntry);
     try { await Promise.all([cachedNew.ready, page.reload()]); } finally { cachedNew.stop(); }
     await page.locator(".conn-live").waitFor();
-    await page.locator(".composer textarea").waitFor();
+    await page.locator(".composer-text").waitFor();
     assert.equal(await page.locator('script[type="module"][src]').getAttribute("src"), newEntry);
-    assert.equal(await page.locator(".composer textarea").inputValue(), draft, "online update preserves the draft");
+    assert.equal(await page.locator(".composer-text").inputValue(), draft, "online update preserves the draft");
     await page.getByText("PWA update fixture is ready.", { exact: true }).waitFor();
     await page.evaluate(() => document.fonts.ready.then(() => undefined));
     await capture("updated");
@@ -239,8 +240,8 @@ try {
     await context.setOffline(false);
     await page.reload();
     await page.locator(".conn-live").waitFor();
-    await page.locator(".composer textarea").waitFor();
-    assert.equal(await page.locator(".composer textarea").inputValue(), draft);
+    await page.locator(".composer-text").waitFor();
+    assert.equal(await page.locator(".composer-text").inputValue(), draft);
     await page.getByText("PWA update fixture is ready.", { exact: true }).waitFor();
     await capture("recovered");
     assert.deepEqual(errors, [], "the app never raises a page error during the transition");

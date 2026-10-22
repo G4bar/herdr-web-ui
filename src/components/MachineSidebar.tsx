@@ -9,12 +9,12 @@ import type { AppActions } from "../lib/actions.ts";
 import { useInstallPrompt } from "../lib/install.ts";
 import { Sidebar } from "./Sidebar.tsx";
 import { AgentSidebar } from "./AgentSidebar.tsx";
-import { SidebarActivityProvider, useSidebarActivityState } from "../lib/sidebarActivity.tsx";
+import { SidebarActivityProvider, type SidebarActivity } from "../lib/sidebarActivity.tsx";
 import { UsageMeters } from "./UsageMeters.tsx";
 import "./Machines.css";
 import { useT } from "../lib/i18n.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
-import { saysHerdrAway } from "../lib/userError.ts";
+import { machineErrorText, saysHerdrAway } from "../lib/userError.ts";
 
 /** The PC header's state word; "connected" is the quiet default and shows as a dot alone, every other state also writes its word under the name. */
 export const STATE_WORD: Readonly<Record<MachineState, string>> = {
@@ -25,13 +25,13 @@ export const STATE_WORD: Readonly<Record<MachineState, string>> = {
   error: "Connection error",
 };
 
-interface Props { machines: Machine[]; selectedMachineId: string; selectedPaneId: string | null; actions: AppActions; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void }
+/** `activity`: App's live counters per PC and finishes looked at here; both sidebar lists draw from it */
+interface Props { machines: Machine[]; selectedMachineId: string; selectedPaneId: string | null; activity: SidebarActivity; actions: AppActions; watching?: boolean; onSelect(machineId: string, paneId: string | null): void; onNew(machineId: string): void; onSetup(machine: Machine, update?: boolean): void }
 export function MachineSidebar(props: Props) {
   const t = useT();
   const { canInstall, installed, install, help } = useInstallPrompt();
   const [installHelpOpen, setInstallHelpOpen] = useState(false);
-  // both lists draw from it: live counters per PC (lib/sidebarActivity.tsx)
-  const activity = useSidebarActivityState(props.machines);
+  const activity = props.activity;
   // the roster's wait is a live region that is in the list from its first render, clipped while empty (never
   // display: none), and its words land a frame after it (lib/useAnnouncedText.ts)
   const loadingWords = useAnnouncedText(props.machines.length === 0 ? t("Loading PCs…") : null);
@@ -56,7 +56,7 @@ export function MachineSidebar(props: Props) {
 
 function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
   const t = useT();
-  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem(`herdr-web-ui:pc-collapsed:${machine.id}`) === "1"; } catch { return false; } });
+  const [collapsed, setCollapsed] = useState(() => { try { return localStorage.getItem(`ovis:pc-collapsed:${machine.id}`) === "1"; } catch { return false; } });
   const [editing, setEditing] = useState(false);
   const [name, setName] = useState(machine.name);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -72,14 +72,15 @@ function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
   // that PC, not in this browser, so it follows the words
   const nextStep = !noticed && machine.kind === "local" && machine.error !== null && saysHerdrAway(machine.error) ? t("Start herdr on this PC, or check HERDR_SOCKET.") : null;
   // one request at a time: a double-clicked Disconnect/Connect can otherwise race and leave this
-  // UI's idea of the state opposite the server's until the next refetch
-  const [busy, setBusy] = useState(false);
+  // UI's idea of the state opposite the server's until the next refetch. The method in flight is
+  // kept so only a removal marks Remove PC busy (Machines.css dims that one less)
+  const [busy, setBusy] = useState<string | null>(null);
   // the state disables the buttons; the ref refuses a second click that lands before that render
   const inFlight = useRef(false);
   const mutate = async (method: string, body?: unknown) => {
     if (inFlight.current) return;
     inFlight.current = true;
-    setBusy(true);
+    setBusy(method);
     // The selected PC moves to this one before it is removed: the server tells every tab the
     // roster without it before it answers, and a selection on a PC the roster has dropped reads
     // as one removed elsewhere ("That link's PC is not set up here"). A failure puts it back.
@@ -87,12 +88,12 @@ function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
     if (leaving) props.onSelect("local", null);
     try { await machineRequest(`/${machine.id}`, method, body); setError(null); }
     catch (e) { setError(e instanceof Error ? e.message : String(e)); if (leaving) props.onSelect(machine.id, leaving.pane); }
-    finally { inFlight.current = false; setBusy(false); }
+    finally { inFlight.current = false; setBusy(null); }
   };
   const actions: AppActions = { ...props.actions, selectPane: (id) => props.onSelect(machine.id, id), openNewSession: () => props.onNew(machine.id) };
   const toggle = () => {
     setCollapsed(!collapsed);
-    try { localStorage.setItem(`herdr-web-ui:pc-collapsed:${machine.id}`, collapsed ? "0" : "1"); } catch {}
+    try { localStorage.setItem(`ovis:pc-collapsed:${machine.id}`, collapsed ? "0" : "1"); } catch {}
   };
   // the PC's name is the head of its workspaces, and the caret beside its + the one fold over them
   return <section className={`machine-group${props.selectedMachineId === machine.id ? " is-current" : ""}${online ? "" : " is-offline"}`} aria-label={t("PC {name}", { name: machine.name })}>
@@ -111,25 +112,25 @@ function MachineGroup({ machine, ...props }: Props & { machine: Machine }) {
     </header>
     {/* connected is the norm and says nothing new; every other state is spelled out */}
     {noticed && <MachineActionNotice machine={machine} onSetup={props.onSetup} />}
-    <p className={`machine-state is-${machine.state}${online || stateWord === null ? " visually-hidden" : ""}`} role="status" title={noticed ? undefined : machine.error ?? undefined}>
+    <p className={`machine-state is-${machine.state}${online || stateWord === null ? " visually-hidden" : ""}`} role="status" title={noticed || machine.error === null ? undefined : machineErrorText(machine.error, t)}>
       <span className="machine-state-word">{stateWord}</span>
-      {!noticed && machine.error && <span className="machine-state-detail">{machine.error}</span>}
+      {!noticed && machine.error && <span className="machine-state-detail">{machineErrorText(machine.error, t)}</span>}
       {nextStep !== null && <span className="machine-state-next">{nextStep}</span>}
     </p>
     {editing && <div className="machine-controls">
-      {machine.herdr_profile_id ? <p className="field-hint">{t("Managed by herdr. Rename, disable or remove it there.")}</p> : <form onSubmit={(e) => { e.preventDefault(); void mutate("PATCH", { name }); }}><label className="field"><span className="field-label">{t("PC name")}</span><input className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} /></label><button className="btn" type="submit" disabled={busy}>{t("Rename")}</button></form>}
+      {machine.herdr_profile_id ? <p className="field-hint">{t("Managed by herdr. Rename, disable or remove it there.")}</p> : <form onSubmit={(e) => { e.preventDefault(); void mutate("PATCH", { name }); }}><label className="field"><span className="field-label">{t("PC name")}</span><input className="input" value={name} maxLength={100} onChange={(e) => setName(e.target.value)} /></label><button className="btn" type="submit" disabled={busy !== null}>{t("Rename")}</button></form>}
       {/* The first removal click only arms the action; the second is destructive. */}
       <div className="machine-control-buttons">
-        {!machine.herdr_profile_id && <button className="btn" disabled={busy} onClick={() => void mutate("PATCH", { enabled: !machine.enabled })}>{t(machine.enabled ? "Disconnect" : "Connect")}</button>}
+        {!machine.herdr_profile_id && <button className="btn" disabled={busy !== null} onClick={() => void mutate("PATCH", { enabled: !machine.enabled })}>{t(machine.enabled ? "Disconnect" : "Connect")}</button>}
         {!["setup", "connect"].includes(machine.action_required ?? "") && <button className="btn" disabled={!machine.enabled || !machine.target} onClick={() => props.onSetup(machine)}>{t("Reconnect / setup")}</button>}
         {machine.action_required !== "connect" && <button className="btn" disabled={!machine.enabled || !machine.target} onClick={() => props.onSetup(machine, true)}>{t("Update bridge…")}</button>}
-        {!machine.herdr_profile_id && <button className={confirmDelete ? "btn btn-danger" : "btn btn-ghost"} disabled={busy} onClick={() => { if (confirmDelete) void mutate("DELETE"); else setConfirmDelete(true); }}>{t(confirmDelete ? "Confirm remove PC" : "Remove PC")}</button>}
+        {!machine.herdr_profile_id && <button className="btn btn-danger" disabled={busy !== null} aria-busy={busy === "DELETE" || undefined} onClick={() => { if (confirmDelete) void mutate("DELETE"); else setConfirmDelete(true); }}>{t(confirmDelete ? "Confirm remove PC" : "Remove PC")}</button>}
       </div>
       {confirmDelete && <p className="field-hint">{t("Removes this registration. Remote sessions keep running.")}</p>}
     </div>}
     {error && <p className="machine-error" role="alert">{error}</p>}
     {!collapsed && <div className={online ? "" : "machine-offline"} inert={!online}>
-      {!online && !machine.snapshot ? <p className="tree-state machine-empty" role="status">{t("No saved sessions")}</p> : <MachineContext.Provider value={machine.id}><Sidebar snapshot={machine.snapshot} online={online} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} /></MachineContext.Provider>}
+      {!online && !machine.snapshot ? <p className="tree-state machine-empty" role="status">{t("No saved sessions")}</p> : <MachineContext.Provider value={machine.id}><Sidebar snapshot={machine.snapshot} online={online} selectedPaneId={props.selectedMachineId === machine.id ? props.selectedPaneId : null} actions={actions} watching={props.watching} /></MachineContext.Provider>}
     </div>}
   </section>;
 }
@@ -183,16 +184,16 @@ function MachineActionNotice({ machine, onSetup }: { machine: Machine; onSetup(m
   // another app's bridge runs on this PC: neither an update from here nor an approval fixes that,
   // so it is named as what it is, with the server's reason and a plain reconnect
   if (machine.action_required === "bridge_conflict") return <div className="machine-action" role="alert">
-    <p className="machine-action-text"><strong>{t("Bridge connection conflict")}</strong><span>{t("Update the apps connected to this PC to the same version, or disconnect the other app, then reconnect here. Sessions keep running.")}</span>{machine.error && <span className="machine-action-reason">{machine.error}</span>}</p>
+    <p className="machine-action-text"><strong>{t("Bridge connection conflict")}</strong><span>{t("Update the apps connected to this PC to the same version, or disconnect the other app, then reconnect here. Sessions keep running.")}</span>{machine.error && <span className="machine-action-reason">{machineErrorText(machine.error, t)}</span>}</p>
     <button type="button" className="btn btn-primary" onClick={() => onSetup(machine, false)}>{t("Reconnect")}</button>
   </div>;
   const update = machine.action_required === "update_bridge";
   return <div className={`machine-action${update ? "" : " is-setup"}`} role={update ? "alert" : "status"}>
     <p className="machine-action-text">
       <strong>{t(update ? "Bridge update needed" : "Setup needed")}</strong>
-      <span>{t(update ? "This PC runs a bridge from a different version of herdr web ui. Update it to reconnect; herdr sessions keep running." : "Browser access uses a bridge on this PC. Review any installation or startup changes before connecting.")}</span>
+      <span>{t(update ? "This PC runs a bridge from a different version of Ovis. Update it to reconnect; herdr sessions keep running." : "Browser access uses a bridge on this PC. Review any installation or startup changes before connecting.")}</span>
       {/* the two generic reasons only repeat the sentence above */}
-      {machine.error && !/different version|setup needs approval/.test(machine.error) && <span className="machine-action-reason">{machine.error}</span>}
+      {machine.error && !/different version|setup needs approval/.test(machine.error) && <span className="machine-action-reason">{machineErrorText(machine.error, t)}</span>}
     </p>
     {update ? <div className="machine-action-buttons">
       {/* a PC saved in herdr that has not connected yet is refused a direct update: its dialog connects first */}

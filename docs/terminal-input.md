@@ -23,6 +23,14 @@ acknowledgement removes only an unchanged sent prefix; replacement text stays ev
 to equal the text sent before it. Editing remains available while disconnected; sending does not.
 Passwords continue to use the separate non-persistent secret-input path.
 
+The terminal's inputs (the input line and xterm's helper textarea) turn off autocorrect,
+autocapitalize and spell-check, and also say `autocomplete="off"`, the one attribute Chrome on
+Android turns into the keyboard's `TYPE_TEXT_FLAG_NO_SUGGESTIONS` (`ImeUtils.computeEditorInfo`
+reads `WebTextInputFlags.AUTOCOMPLETE_OFF`, which Blink's `InputMethodController::TextInputFlags`
+sets from that attribute alone). That asks the keyboard for no word suggestions, and a keyboard
+that honors the request hides its suggestion strip. Gboard 18.4 (tested on Chrome 133, 2026-10-22)
+ignores it and keeps the strip. The chat composer keeps its suggestions.
+
 Chat Send during work asks a `pending-input` bridge to retain an identified message until the
 current response ends. The same server ID is claimed by automatic delivery or a pending row's
 explicit send-now action. The bridge checks its original connection, attachment, agent and
@@ -208,6 +216,40 @@ to the newly selected pane. This pane-change case has not been repeated with the
 and iPadOS Safari has not been tested. The older remote shell/Codex/omp matrix from #432 was
 not rerun, so this evidence is limited to the local owned raw-mode PTY path.
 
+#### Safari 27.0.1: input-source switching and Backspace (#432)
+
+Updated: 2026-10-19
+
+On a MacBook Air with macOS 27.0.1 and Safari 27.0.1, `scripts/terminal-ime-diagnostic.ts` traced
+an owned raw-mode PTY while macOS keyboard events went through the Korean 2-set input method
+(posted at the HID event tap, the terminal focused through Accessibility). This Safari used the
+replacement path above (`insertText` then `insertReplacementText`, keydown 229 after each edit, no
+composition events), not the composition events Safari 27.2 used. Switching from ABC with
+Control+Space or the input menu, the PTY received `abc한글 `, `abc 안녕하세요\r`, `한글abc `,
+`갑사 `, `한\r` and, with one Backspace inside the syllable, `한 `; `onData`, outgoing WS text and
+the PTY bytes agreed. Caps Lock was not tested: a synthesized Caps Lock does not trigger the
+"switch to and from ABC" toggle, which only a physical key does. Selecting the source with
+`TISSelectInputSource` from an SSH process sometimes left the next keys in ABC in a plain textarea
+too, so it is not a reliable harness.
+
+Backspace lost a press. Once 한 was down to ㅎ, the third Backspace made Safari send an unchanged
+`insertReplacementText("ㅎ")` (the input method committing the jamo) and then a keydown with
+`keyCode` 8, whose default deletes it. The patch read the unchanged replacement as an edit Safari
+had already applied for that key and cancelled the keydown, so 한 and four Backspaces sent
+nothing to the pane where a plain textarea deleted one more character. An unchanged replacement
+no longer counts as an applied edit: the same keys now send one DEL (`한` + four Backspaces +
+Space delivered `\x7f\x20`, before the change `\x20`; `한글` + four delivered `한\x7f\x20`). The
+Safari replay covers it with the recorded order.
+
+When blur or paste commits an active replacement before its keydown arrives, that commit also
+clears the pending-edit key marker, so the next real Backspace/Delete is not swallowed. This
+does not clear the marker when deletion already emptied the preedit: its following keydown
+must still be cancelled. Normal Safari ordering is unchanged: each edit's keydown consumes the
+marker before the next key's beforeinput.
+
+The remote-PC relay (`server/machine-relay.ts`) forwards a browser's input frames unchanged, so
+these local results apply to a remote pane's client side; the remote path itself was not rerun.
+
 #### Before/after PTY screenshots
 
 Updated: 2026-10-07
@@ -261,7 +303,7 @@ events do not exercise the input-source transition. Record the input-source swit
 (Caps Lock, Control+Space or the input menu) with the result. Chrome is a useful control.
 
 The command builds the real client into a temporary directory with diagnostic-only hooks. It
-creates a raw-byte capture process in an isolated `herdr-web-ui-test-ime` workspace; it never
+creates a raw-byte capture process in an isolated `ovis-test-ime` workspace; it never
 attaches to a user's pane. `HERDR_TEST_SESSION` may select another isolated session and
 `HERDR_TEST_LIVE=1` is refused. The ordinary app build has no trace hooks or recording endpoint.
 
@@ -270,7 +312,7 @@ textarea values and selections, xterm `onData`, and outgoing WS `input` frames),
 (the bytes delivered to the owned local PTY), and `run.json`. Ctrl+C or the 15-minute deadline
 closes the owned workspace and servers and writes `summary.json`, comparing `onData`, WS text
 and received bytes. Artifacts are retained for inspection. The test herdr session can then be
-stopped with `herdr --session herdr-web-ui-test-ime server stop` (use the override if set).
+stopped with `herdr --session ovis-test-ime server stop` (use the override if set).
 
 Compare the intended text with every boundary, not just the final equality flags: all three
 boundaries can agree on already-corrupted input. Mouse reports and bracketed-paste delimiters

@@ -1,10 +1,10 @@
-# Native Windows install: irm https://herdrweb.dev/install.ps1 | iex
-param([string]$Ref = $env:HERDR_WEB_UI_REF)
+# Native Windows install: irm https://ovis.sh/install.ps1 | iex
+param([string]$Ref = $(if ($env:OVIS_REF) { $env:OVIS_REF } else { $env:HERDR_WEB_UI_REF }))
 
 & {
 $ErrorActionPreference = 'Stop'
 if ($env:OS -ne 'Windows_NT' -or $env:PROCESSOR_ARCHITECTURE -ne 'AMD64') {
-    throw 'herdr web ui supports Windows x64. Use install.sh on Linux or macOS.'
+    throw 'Ovis supports Windows x64. Use install.sh on Linux or macOS.'
 }
 
 function Run-Tool([string]$Tool, [string[]]$Arguments) {
@@ -24,7 +24,7 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     throw 'Install Git for Windows (https://git-scm.com/download/win), then run this again.'
 }
 if (-not (Get-Command herdr -ErrorAction SilentlyContinue)) {
-    Write-Host 'herdr web ui: installing herdr for your user'
+    Write-Host 'Ovis: installing herdr for your user'
     $installer = Join-Path ([IO.Path]::GetTempPath()) ([IO.Path]::GetRandomFileName() + '.cmd')
     try {
         Invoke-WebRequest 'https://herdr.dev/install.cmd' -UseBasicParsing -OutFile $installer
@@ -32,7 +32,7 @@ if (-not (Get-Command herdr -ErrorAction SilentlyContinue)) {
         $download = 'curl: \(\d+\)|Failed to download'
         $output = @(Run-HerdrInstaller $installer)
         if ($LASTEXITCODE -ne 0 -and ($output -match $download)) {
-            Write-Host "herdr web ui: herdr's download did not finish; trying once more"
+            Write-Host "Ovis: herdr's download did not finish; trying once more"
             $output = @(Run-HerdrInstaller $installer)
         }
         if ($LASTEXITCODE -ne 0) {
@@ -49,7 +49,7 @@ if ([version]$herdrVersion -lt [version]'0.9.0') {
 
 $bun = Get-Command bun -ErrorAction SilentlyContinue
 if (-not $bun -or [version]((Run-Tool bun @('--version')) -replace '-.*$', '') -lt [version]'1.4.0') {
-    Write-Host 'herdr web ui: installing Bun 1.4.2 for your user'
+    Write-Host 'Ovis: installing Bun 1.4.2 for your user'
     # The same stable runtime as CI; use Bun's official installer rather than a second downloader.
     # It leaves this session with the user's PATH alone: without the machine's, neither this script nor herdr finds git.
     $path = $env:PATH
@@ -60,10 +60,21 @@ if (-not (Get-Command bun -ErrorAction SilentlyContinue)) { throw 'Bun did not i
 $bunVersion = Run-Tool bun @('--version')
 if ([version]($bunVersion -replace '-.*$', '') -lt [version]'1.4.0') { throw "Needs Bun 1.4 or newer; this is $bunVersion." }
 
-$pluginId = 'devswha.herdr-web-ui'
-function Find-Plugin {
+$pluginId = 'devswha.ovis'
+# the id before the rename: an install under it moves to $pluginId, keeping its config
+$legacyId = 'devswha.herdr-web-ui'
+function Find-Plugin([string]$Id = $pluginId) {
     (Run-Tool herdr @('plugin', 'list', '--json') | ConvertFrom-Json).result.plugins |
-        Where-Object { $_.plugin_id -eq $pluginId } | Select-Object -First 1
+        Where-Object { $_.plugin_id -eq $Id } | Select-Object -First 1
+}
+$legacy = Find-Plugin $legacyId
+if ($legacy) {
+    Write-Host "Ovis: moving the installed plugin to its Ovis id; its settings and token come along"
+    # stopped first: under both ids, each would start a server on herdr's next start
+    & bun (Join-Path $legacy.plugin_root 'scripts\plugin.ts') stop | Out-Null
+    # removed with its server up, the old checkout would keep serving, and the new id's start would
+    # find the port answering and leave it
+    if ($LASTEXITCODE -ne 0) { throw "Could not stop the server of the old id, so nothing was moved. Stop it (herdr plugin action invoke $legacyId.stop, or restart herdr), then run this again." }
 }
 function Test-WindowsPlugin($Plugin) {
     $Plugin.plugin_root -and (Test-Path -LiteralPath (Join-Path $Plugin.plugin_root 'scripts\plugin.ps1'))
@@ -72,25 +83,40 @@ $plugin = Find-Plugin
 $newInstall = $false
 if ($plugin -and -not (Test-WindowsPlugin $plugin)) {
     # A copy from a release older than Windows support never starts here, so no in-app update reaches it.
-    Write-Host 'herdr web ui: replacing an installed copy that has no Windows support'
+    Write-Host 'Ovis: replacing an installed copy that has no Windows support'
     Run-Tool herdr @('plugin', 'uninstall', $pluginId) | Out-Null
     $plugin = $null
 }
 if (-not $plugin) {
     if (-not $Ref) {
-        $Ref = Run-Tool git @('ls-remote', '--tags', '--refs', 'https://github.com/devswha/herdr-web-ui.git', 'v*') |
+        $Ref = Run-Tool git @('ls-remote', '--tags', '--refs', 'https://github.com/devswha/ovis.git', 'v*') |
             ForEach-Object { if ($_ -match 'refs/tags/(v\d+\.\d+\.\d+)$') { $Matches[1] } } |
             Sort-Object { [version]$_.Substring(1) } | Select-Object -Last 1
     }
     if (-not $Ref) { throw 'Could not find the latest app release on GitHub. Check your connection and run this again.' }
-    Write-Host "herdr web ui: installing the plugin at $Ref"
-    Run-Tool herdr @('plugin', 'install', 'devswha/herdr-web-ui', '--ref', $Ref, '--yes')
+    Write-Host "Ovis: installing the plugin at $Ref"
+    Run-Tool herdr @('plugin', 'install', 'devswha/ovis', '--ref', $Ref, '--yes')
     $newInstall = $true
     $plugin = Find-Plugin
     if (-not $plugin.plugin_root) { throw 'herdr does not list the plugin after installing it. See: herdr plugin list' }
     # herdr installs a release without Windows build steps as a success that cannot start.
-    if (-not (Test-WindowsPlugin $plugin)) { throw "herdr web ui $Ref does not support Windows yet. Run this again after the next release." }
-} else { Write-Host 'herdr web ui: already installed; Settings > Updates keeps it current' }
+    if (-not (Test-WindowsPlugin $plugin)) { throw "Ovis $Ref does not support Windows yet. Run this again after the next release." }
+} else { Write-Host 'Ovis: already installed; Settings > Updates keeps it current' }
+if ($legacy) {
+    # herdr keeps a plugin's config by its id: the old id's env files (the token among them) go to the new id's dir unless it has its own
+    $oldConfig = Run-Tool herdr @('plugin', 'config-dir', $legacyId)
+    $newConfig = Run-Tool herdr @('plugin', 'config-dir', $pluginId)
+    if (-not (Test-Path -LiteralPath (Join-Path $newConfig 'env')) -and -not (Test-Path -LiteralPath (Join-Path $newConfig '.env'))) {
+        foreach ($name in 'env', '.env') {
+            $from = Join-Path $oldConfig $name
+            if (Test-Path -LiteralPath $from) {
+                New-Item -ItemType Directory -Force -Path $newConfig | Out-Null
+                Copy-Item -LiteralPath $from -Destination (Join-Path $newConfig $name)
+            }
+        }
+    }
+    Run-Tool herdr @('plugin', 'uninstall', $legacyId) | Out-Null
+}
 
 $server = Run-Tool herdr @('status', 'server', '--json') | ConvertFrom-Json
 if ($server.running) {
@@ -116,12 +142,12 @@ if ($server.running) {
     $origin = [regex]::Match(($status | Where-Object { $_ -match '^running ' } | Select-Object -First 1), '^running (\S+)').Groups[1].Value
     $opened = $false
     if ($newInstall -and $origin -match '^https?://(127\.0\.0\.1|localhost)(:\d+)?(?:/|$)' -and
-        -not $env:CI -and -not $env:HERDR_WEB_NO_OPEN -and -not $env:SSH_CONNECTION -and
+        -not $env:CI -and -not $env:OVIS_NO_OPEN -and -not $env:HERDR_WEB_NO_OPEN -and -not $env:SSH_CONNECTION -and
         [Environment]::UserInteractive) {
         try {
             Start-Process $origin
             $opened = $true
-            Write-Host "herdr web ui: opened $origin in your browser: click Install in the address bar to add the app"
+            Write-Host "Ovis: opened $origin in your browser: click Install in the address bar to add the app"
         } catch { }
     }
     if ($newInstall -and -not $opened) {
@@ -131,16 +157,16 @@ if ($server.running) {
                 $scheme = [regex]::Match($origin, '^https?://').Value
                 $port = if ($scheme -eq 'https://') { '443' } else { '80' }
             }
-            Write-Host "herdr web ui: from your own computer, run: ssh -L ${port}:127.0.0.1:${port} <this-pc>, then open http://127.0.0.1:${port} and click Install in the address bar"
-            Write-Host 'herdr web ui: Phone setup in herdr shows the Tailscale address when there is one'
+            Write-Host "Ovis: from your own computer, run: ssh -L ${port}:127.0.0.1:${port} <this-pc>, then open http://127.0.0.1:${port} and click Install in the address bar"
+            Write-Host 'Ovis: Phone setup in herdr shows the Tailscale address when there is one'
         } elseif ($origin -match '^https?://(127\.0\.0\.1|localhost)(:\d+)?(?:/|$)') {
-            Write-Host "herdr web ui: open $origin in your browser and click Install in the address bar"
+            Write-Host "Ovis: open $origin in your browser and click Install in the address bar"
         } else {
-            Write-Host "herdr web ui: open $origin in your browser"
+            Write-Host "Ovis: open $origin in your browser"
         }
     }
-} else { Write-Host 'herdr web ui: starts with herdr. Open a new terminal and run: herdr' }
-Write-Host 'herdr web ui: open Phone setup in herdr for phone access.'
+} else { Write-Host 'Ovis: starts with herdr. Open a new terminal and run: herdr' }
+Write-Host 'Ovis: open Phone setup in herdr for phone access.'
 
 # One gh api call: gh's exit code and the HTTP status GitHub answered with, or nothing when gh is
 # not there or does not answer in 10 seconds. A gh that hangs must not hold up an install that is done:
@@ -377,17 +403,17 @@ function Read-Answer {
 # GitHub says the account has not (404), only at a terminal, and stars only on "y".
 if ($newInstall) {
     try {
-        $starred = Invoke-GhApi 'user/starred/devswha/herdr-web-ui'
+        $starred = Invoke-GhApi 'user/starred/devswha/ovis'
         if (-not $starred -or $starred.status -ne '204') {
             Write-Host ''
-            Write-Host 'herdr web ui: if it helps you, a GitHub star helps other herdr users find it: https://github.com/devswha/herdr-web-ui'
+            Write-Host 'Ovis: if it helps you, a GitHub star helps other herdr users find it: https://github.com/devswha/ovis'
             if ($starred -and $starred.status -eq '404' -and (Test-Terminal)) {
-                Write-Host -NoNewline 'herdr web ui: star it now with the GitHub account gh is signed in to? [y/N] '
+                Write-Host -NoNewline 'Ovis: star it now with the GitHub account gh is signed in to? [y/N] '
                 $answer = Read-Answer
                 if ("$answer".Trim() -match '^(y|yes)$') {
-                    $given = Invoke-GhApi '--method PUT user/starred/devswha/herdr-web-ui'
-                    if ($given -and $given.code -eq 0) { Write-Host 'herdr web ui: starred. Thank you!' }
-                    else { Write-Host 'herdr web ui: gh could not star it; the page above can' }
+                    $given = Invoke-GhApi '--method PUT user/starred/devswha/ovis'
+                    if ($given -and $given.code -eq 0) { Write-Host 'Ovis: starred. Thank you!' }
+                    else { Write-Host 'Ovis: gh could not star it; the page above can' }
                 }
             }
         }

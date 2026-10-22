@@ -1,8 +1,8 @@
-id = "devswha.herdr-web-ui"
-name = "herdr web ui"
-version = "0.4.12"
+id = "devswha.ovis"
+name = "Ovis"
+version = "0.4.13"
 min_herdr_version = "0.9.0"
-description = "Browser and phone client for herdr: chat and live terminal for every agent pane, remote PCs over SSH, web push alerts"
+description = "Ovis, the browser and phone client for herdr: chat and live terminal for every agent pane, remote PCs over SSH, web push alerts"
 platforms = ["linux", "macos", "windows"]
 
 # what is missing, in one line, before `bun install` would fail some steps later
@@ -41,42 +41,42 @@ platforms = ["windows"]
 
 [[actions]]
 id = "start"
-title = "Start herdr web ui"
+title = "Start Ovis"
 contexts = ["workspace"]
 command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "start"]
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "start-windows"
-title = "Start herdr web ui"
+title = "Start Ovis"
 contexts = ["workspace"]
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "start"]
 platforms = ["windows"]
 
 [[actions]]
 id = "stop"
-title = "Stop herdr web ui"
+title = "Stop Ovis"
 contexts = ["workspace"]
 command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "stop"]
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "stop-windows"
-title = "Stop herdr web ui"
+title = "Stop Ovis"
 contexts = ["workspace"]
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "stop"]
 platforms = ["windows"]
 
 [[actions]]
 id = "status"
-title = "herdr web ui status"
+title = "Ovis status"
 contexts = ["workspace"]
 command = ["sh", "scripts/with-bun.sh", "scripts/plugin.ts", "status"]
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "status-windows"
-title = "herdr web ui status"
+title = "Ovis status"
 contexts = ["workspace"]
 command = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "scripts/plugin.ps1", "status"]
 platforms = ["windows"]
@@ -99,12 +99,12 @@ platforms = ["windows"]
 id = "phone"
 title = "Phone setup"
 contexts = ["workspace"]
-command = ["herdr", "plugin", "pane", "open", "--plugin", "devswha.herdr-web-ui", "--entrypoint", "phone", "--placement", "zoomed", "--focus"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "devswha.ovis", "--entrypoint", "phone", "--placement", "zoomed", "--focus"]
 platforms = ["linux", "macos"]
 
 [[actions]]
 id = "phone-windows"
 title = "Phone setup"
 contexts = ["workspace"]
-command = ["herdr", "plugin", "pane", "open", "--plugin", "devswha.herdr-web-ui", "--entrypoint", "phone-windows", "--placement", "zoomed", "--focus"]
+command = ["herdr", "plugin", "pane", "open", "--plugin", "devswha.ovis", "--entrypoint", "phone-windows", "--placement", "zoomed", "--focus"]
 platforms = ["windows"]

@@ -15,7 +15,7 @@ import { PtySession } from "./pty/session.ts";
  * other runs under the name `claude` and is reported as that agent (herdr's
  * agent.prompt path).
  */
-const root = mkdtempSync(join(tmpdir(), "herdr-web-ui-submit-"));
+const root = mkdtempSync(join(tmpdir(), "ovis-submit-"));
 let server: { port: number; stop: () => void };
 const workspaces: string[] = [];
 
@@ -38,6 +38,7 @@ let codex: Recorder;
 let codexApproval: Recorder;
 let claudeQueue: Recorder;
 let hermes: Recorder;
+let omp: Recorder;
 
 const chunks = (recorder: Recorder): Chunk[] =>
   readFileSync(recorder.log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as Chunk);
@@ -54,7 +55,7 @@ async function received(recorder: Recorder, from: number, count: number): Promis
 
 async function recorder(label: string, program: string, screen = ""): Promise<Recorder> {
   const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>(
-    "workspace.create", { label: `herdr-web-ui-test-submit-${label}`, cwd: root, focus: false },
+    "workspace.create", { label: `ovis-test-submit-${label}`, cwd: root, focus: false },
   );
   workspaces.push(created.workspace.workspace_id);
   const log = join(root, `${label}.jsonl`);
@@ -160,6 +161,8 @@ beforeAll(async () => {
   chmodSync(join(root, "codex"), 0o755);
   copyFileSync(process.execPath, join(root, "hermes"));
   chmodSync(join(root, "hermes"), 0o755);
+  copyFileSync(process.execPath, join(root, "omp"));
+  chmodSync(join(root, "omp"), 0o755);
   shell = await recorder("shell", process.execPath);
   agent = await recorder("agent", join(root, "claude"));
   await herdrRpc("pane.report_agent", { pane_id: agent.pane, source: "manual", agent: "claude", state: "idle" });
@@ -175,6 +178,11 @@ beforeAll(async () => {
   await herdrRpc("pane.report_agent", { pane_id: claudeQueue.pane, source: "manual", agent: "claude", state: "blocked" });
   hermes = await recorder("hermes", join(root, "hermes"));
   await herdrRpc("pane.report_agent", { pane_id: hermes.pane, source: "manual", agent: "hermes", state: "idle" });
+  omp = await recorder("omp", join(root, "omp"));
+  await herdrRpc("pane.report_agent", { pane_id: omp.pane, source: "manual", agent: "omp", state: "idle" });
+  // an omp with herdr's integration reports its session once it takes input; a send waits for that
+  await herdrRpc("pane.report_agent_session", { pane_id: omp.pane, source: "herdr:omp", agent: "omp", seq: Date.now() * 1000,
+    agent_session_path: join(root, "omp-session.jsonl"), session_start_source: "startup" });
 }, 30_000);
 
 afterAll(async () => {
@@ -451,6 +459,27 @@ describe("WebSocket submit", () => {
       expect(read.slice(0, enter).map((chunk) => chunk.data).join("")).toBe(paste("line one\nline two"));
       expect(read[enter]!.data).toBe("\r");
       expect(read[enter]!.at - read[enter - 1]!.at).toBeGreaterThanOrEqual(SUBMIT_DELAY_MS);
+    } finally {
+      socket.close();
+    }
+  }, 30_000);
+
+  it("sends omp a bare /model as /switch, whose picker is the session's alone, and anything else as written", async () => {
+    const socket = await Socket.connect();
+    try {
+      let from = chunks(omp).length;
+      socket.send({ type: "submit", id: 3, pane_id: omp.pane, text: "/model", payload: "/model" });
+      expect(await socket.result(3)).toMatchObject({ ok: true });
+      expect((await received(omp, from, 1)).map((chunk) => chunk.data).join("")).toBe(`${paste("/switch")}\r`);
+      from = chunks(omp).length;
+      socket.send({ type: "submit", id: 4, pane_id: omp.pane, text: "/model gpt-6-sol", payload: "/model gpt-6-sol" });
+      expect(await socket.result(4)).toMatchObject({ ok: true });
+      expect((await received(omp, from, 1)).map((chunk) => chunk.data).join("")).toBe(`${paste("/model gpt-6-sol")}\r`);
+      // Claude's own /model is its own list, picked for the session by its card
+      from = chunks(agent).length;
+      socket.send({ type: "submit", id: 5, pane_id: agent.pane, text: "/model", payload: "/model" });
+      expect(await socket.result(5)).toMatchObject({ ok: true });
+      expect((await received(agent, from, 1)).map((chunk) => chunk.data).join("")).toBe(`${paste("/model")}\r`);
     } finally {
       socket.close();
     }
@@ -1418,7 +1447,7 @@ describe("a herdr without terminal attach (Windows)", () => {
 
   it("mirrors the pane's screen: the pane's own grid first, then each changed screen, until the pane ends", async () => {
     const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>(
-      "workspace.create", { label: "herdr-web-ui-test-submit-mirror", cwd: root, focus: false },
+      "workspace.create", { label: "ovis-test-submit-mirror", cwd: root, focus: false },
     );
     workspaces.push(created.workspace.workspace_id);
     const pane = created.root_pane.pane_id;
@@ -1455,7 +1484,7 @@ describe("a herdr without terminal attach (Windows)", () => {
 
   it("hands several lines for an agent on a mirrored pane over as one paste, typed or sent, and bare where no agent is", async () => {
     const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>(
-      "workspace.create", { label: "herdr-web-ui-test-submit-mirror-paste", cwd: root, focus: false },
+      "workspace.create", { label: "ovis-test-submit-mirror-paste", cwd: root, focus: false },
     );
     workspaces.push(created.workspace.workspace_id);
     const pane = created.root_pane.pane_id;
@@ -1688,7 +1717,7 @@ describe("typing without terminal attach, at the edges", () => {
       const script = join(root, `${label}.sh`);
       writeFileSync(script, `printf 'Password:'; read -s p; printf '%s' "$p" | od -An -tx1 | tr -d '[:space:]' > '${output}'\n`);
       const created = await herdrRpc<{ workspace: { workspace_id: string }; root_pane: { pane_id: string } }>(
-        "workspace.create", { label: `herdr-web-ui-test-${label}`, cwd: root, focus: false },
+        "workspace.create", { label: `ovis-test-${label}`, cwd: root, focus: false },
       );
       workspaces.push(created.workspace.workspace_id);
       const pane = created.root_pane.pane_id;

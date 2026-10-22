@@ -12,17 +12,19 @@ import {
   type ReactNode,
 } from "react";
 import { flushSync } from "react-dom";
-import { ArrowUp, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, Minimize2, Package, Plus, Puzzle, Square, TriangleAlert, UserRound, X, type LucideIcon } from "lucide-react";
+import { ArrowUp, FileText, Folder, FolderGit2, GitBranch, LoaderCircle, MessageSquarePlus, Minimize2, Package, Plus, Puzzle, Square, TriangleAlert, UserRound, X, type LucideIcon } from "lucide-react";
 
 import "./Composer.css";
 
-import type { AgentStatus, ConversationMetadata, PlanSummary, SlashCommand } from "../../shared/protocol.ts";
+import type { AgentStatus, ClientRole, ConversationMetadata, PlanSummary, SlashCommand } from "../../shared/protocol.ts";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { composerDrafts } from "../lib/composerDraft.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import {
   agentDisplayLabel,
+  atSkillCommands,
+  atSkillReplacement,
   briefDescription,
   COMMAND_GROUPS,
   commandGroup,
@@ -41,7 +43,8 @@ import {
   rankSlashCommands,
   slashCommandReplacement,
   submitNote,
-  terminalOnlyCommand,
+  terminalCommand,
+  typedTerminalCommand,
 } from "../lib/compose.ts";
 import { compactCommandText } from "../lib/compactContext.ts";
 import { composerStrip } from "../lib/composerStrip.ts";
@@ -58,7 +61,7 @@ import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent
 import { AgentMark } from "./AgentMark.tsx";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
-import { cachedPaneCommands } from "../lib/paneCommandCache.ts";
+import { usePaneCommands } from "../lib/usePaneCommands.ts";
 import { useT } from "../lib/i18n.ts";
 import { offersRetry, userFailure, type UserFailure } from "../lib/userError.ts";
 import { AttachmentTooLargeError } from "../lib/api.ts";
@@ -92,6 +95,15 @@ export interface ComposerProps {
   greeting?: ReactNode;
   /** the pane's notices over the input card (PaneTerminal builds them): rows of its own, above the replies */
   notices?: ReactNode;
+  /** the connection's confirmed role; PaneTerminal mounts no composer for observers */
+  role?: ClientRole;
+  /** a terminal command's peek has the pane: the composer stays, with its draft, but takes no input */
+  inert?: boolean;
+  /** opens the folder's earlier sessions instead of submitting /resume */
+  onOpenHistory?: () => void;
+  /** opens the New tab dialog on this pane's workspace, to start another agent with its model, effort, skills
+   * and first message (NewSessionDialog); none: the pane has no workspace to add a tab to */
+  onOpenNewSession?: () => void;
   /** the pane's working folder, named in the strip tucked under the card; nothing is drawn for it while absent */
   cwd?: string | null;
   /** the pane's branch, beside the folder in that strip; nothing is drawn for it while absent */
@@ -115,7 +127,7 @@ const ATTACH_LIMIT = 100;
  * and the message mentions its path. These image types also get a thumbnail.
  */
 const PREVIEW_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "image/svg+xml"] as const;
-const SLASH_USAGE_KEY = "herdr-web-ui:slash-usage";
+const SLASH_USAGE_KEY = "ovis:slash-usage";
 /** How long a Send tapped mid-composition waits for the keyboard to commit the word (as in TerminalInput). */
 const COMMIT_WAIT_MS = 300;
 export const SOURCE_LABEL: Record<SlashCommand["source"], string> = {
@@ -234,6 +246,10 @@ export function Composer({
   restored = null,
   greeting = null,
   notices = null,
+  role = "interact",
+  inert = false,
+  onOpenHistory,
+  onOpenNewSession,
   cwd = null,
   branch = null,
   worktreeRepo = null,
@@ -245,7 +261,7 @@ export function Composer({
   const activeRef = useRef(active);
   activeRef.current = active;
   const machineId = useMachineId();
-  const { fetchPaneCommands, fetchPaneFiles } = useMachineApi();
+  const { fetchPaneFiles } = useMachineApi();
   const { settings } = useSettings();
   const mobile = useMediaQuery("(max-width: 640px), (pointer: coarse)");
   const usageEnabled = settings.showUsage && !mobile && machineId === "local" && providerForAgent(agent) !== null;
@@ -254,6 +270,7 @@ export function Composer({
   const usageWindows = usage === undefined ? [] : statusWindows(usage);
   const usageLimit = usageWindows[0];
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const measurementRef = useRef<HTMLTextAreaElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const statusRef = useRef<HTMLDivElement | null>(null);
   const hintRef = useRef<HTMLSpanElement | null>(null);
@@ -271,7 +288,7 @@ export function Composer({
   const attachmentsRef = useRef<Attachment[]>([]);
   const removedAttachments = useRef(new Set<number>());
   const fileRequest = useRef(0);
-  const draftKey = `herdr-web-ui:composer-draft:${paneStorageId(machineId, paneId)}`;
+  const draftKey = `ovis:composer-draft:${paneStorageId(machineId, paneId)}`;
   const { text, sending } = useSyncExternalStore(composerDrafts.subscribe, () => composerDrafts.read(draftKey));
   const setText = useCallback((value: string | ((previous: string) => string)) => composerDrafts.set(draftKey, value), [draftKey]);
   const mounted = useRef(true);
@@ -280,7 +297,7 @@ export function Composer({
   const caretRef = useRef(caret);
   /** the restored text the box was filled with: only that fill is ever cleared, never the user's own typing */
   const filledFrom = useRef<string | null>(null);
-  const [commands, setCommands] = useState<SlashCommand[]>([]);
+  const commands = usePaneCommands(paneId, agent);
   const [files, setFiles] = useState<string[]>([]);
   /** the file list could not be read: said in the menu, never drawn as "no matches" */
   const [filesFailed, setFilesFailed] = useState(false);
@@ -319,9 +336,11 @@ export function Composer({
   textRef.current = text;
   caretRef.current = caret;
   const syntax = skillSyntax(agent);
-  const trigger = useMemo(() => activeTrigger(text, caret, { skills: syntax.skillTriggers.includes("$"), namespaced: syntax.namespaced }), [syntax, caret, text]);
-  /** a command the agent runs but the chat cannot finish, while it is what the box holds */
-  const terminalOnly = useMemo(() => terminalOnlyCommand(agent, text), [agent, text]);
+  /** the pane's `@` skills (OpenCode v2), listed with the files; a pane without them keeps the file menu alone */
+  const atSkills = useMemo(() => atSkillCommands(commands), [commands]);
+  const trigger = useMemo(() => activeTrigger(text, caret, { skills: syntax.skillTriggers.includes("$"), namespaced: syntax.namespaced, atSkills: atSkills.length > 0 }), [atSkills, syntax, caret, text]);
+  /** /resume retains the session picker instead of being sent to the terminal. */
+  const terminalTyped = useMemo(() => typedTerminalCommand(commands, text), [commands, text]);
   const uploading = attachments.some((attachment) => attachment.state === "uploading");
   /** a finished upload whose path waits for the message to be shortened: Send waits with it */
   const roomless = attachments.find((attachment) => attachment.state === "no-room");
@@ -355,20 +374,6 @@ export function Composer({
     }
     filledFrom.current = null;
   }, [restored]);
-
-  useEffect(() => {
-    let live = true;
-    void cachedPaneCommands(paneId, machineId, agent, fetchPaneCommands)
-      .then((next) => {
-        if (live) setCommands(next);
-      })
-      .catch(() => {
-        if (live) setCommands([]);
-      });
-    return () => {
-      live = false;
-    };
-  }, [paneId, agent]);
 
   useEffect(() => {
     const request = ++fileRequest.current;
@@ -410,13 +415,13 @@ export function Composer({
 
   const sizeTextarea = useCallback(() => {
     const element = textareaRef.current;
-    if (!element) return;
-    element.style.height = "auto";
-    element.style.height = `${element.scrollHeight}px`;
+    const measurement = measurementRef.current;
+    if (!element || !measurement) return;
+    // Measuring the live field at auto height enlarges the transcript and clamps its scroll.
+    element.style.height = `${measurement.scrollHeight}px`;
   }, []);
 
   // A suggestion or prompt hint changes only the placeholder of a populated draft.
-  // Collapsing it to measure unused placeholder text can scroll iOS's focused caret.
   useLayoutEffect(sizeTextarea, [sizeTextarea, text, text.length === 0 ? placeholder : null, boxWidth, facesLoaded]);
 
   // SettingsProvider writes --chat-scale in a passive effect. Measure on the next frame,
@@ -536,15 +541,18 @@ export function Composer({
     () => groupedBySource ? COMMAND_GROUPS.flatMap((group) => filteredCommands.filter((command) => commandGroup(command) === group)) : filteredCommands,
     [filteredCommands, groupedBySource],
   );
-  const choices: readonly (SlashCommand | string)[] = trigger?.kind === "slash" ? orderedCommands : files;
+  // the `@` skills the typed mention names, before the files: a path never names one (prefixOnly)
+  const atChoices = useMemo(
+    () => (trigger?.kind === "file" ? rankSlashCommands(atSkills, trigger.query, slashUsage, true) : []),
+    [atSkills, slashUsage, trigger],
+  );
+  const choices: readonly (SlashCommand | string)[] = trigger?.kind === "slash" ? orderedCommands : [...atChoices, ...files];
   const menuOpen = !menuDismissed && trigger !== null && choices.length > 0;
-  // a failed listing opens the menu on its one line, which no key picks
-  const filesFailedShown = !menuDismissed && trigger?.kind === "file" && filesFailed && files.length === 0;
+  // a failed listing opens the menu on its one line, which no key picks; beside listed skills it is a line of theirs
+  const filesFailedShown = !menuDismissed && trigger?.kind === "file" && filesFailed && files.length === 0 && !menuOpen;
   // clamped as the list is drawn, not by an effect after it: a Tab or Enter typed before that
   // effect's render found no row at the old index and did nothing
-  const choiceIds = choices.map((choice) => trigger?.kind === "slash"
-    ? `${(choice as SlashCommand).source}:${(choice as SlashCommand).name}`
-    : choice as string);
+  const choiceIds = choices.map((choice) => typeof choice === "string" ? `file:${choice}` : `${choice.source}:${choice.name}`);
   const activeItemId = resolveComposerMenuActiveItemId({
     items: choiceIds.map((id) => ({ id })),
     highlightedItemId: searchKey === null ? null : highlightedItemId.current,
@@ -560,10 +568,12 @@ export function Composer({
     highlightedSearchKey.current = searchKey;
   }
 
-  // dictation lands at the caret without taking focus (a phone's keyboard stays as it was)
+  // dictation lands at the caret without taking focus (a phone's keyboard stays as it was). An inert
+  // box (under a peek) is no dictation target: Mod+Shift+Space and the Escape that cancels a
+  // recording stay the terminal's
   const dictation = useDictation({
     mode: "chat",
-    active,
+    active: active && !inert,
     connected,
     phone: mobile,
     polish: settings.voicePolishChat,
@@ -682,12 +692,14 @@ export function Composer({
 
   const selectCompletion = useCallback(
     (choice: SlashCommand | string, currentTrigger: ActiveTrigger) => {
-      const replacement = currentTrigger.kind === "slash" ? slashCommandReplacement(choice as SlashCommand, agent, currentTrigger) : `@${choice as string} `;
+      const replacement = typeof choice === "string" ? `@${choice} `
+        : currentTrigger.kind === "slash" ? slashCommandReplacement(choice, agent, currentTrigger) : atSkillReplacement(choice);
       const completed = applyCompletion(text, currentTrigger, replacement);
       setTextAndCaret(completed.text, completed.caret);
       setMenuDismissed(true);
-      if (currentTrigger.kind === "slash") {
-        const name = (choice as SlashCommand).name;
+      if (typeof choice !== "string") {
+        if (terminalCommand(choice) && choice.name === "resume") onOpenHistory?.();
+        const name = choice.name;
         setSlashUsage((current) => {
           const next = { ...current, [name]: (current[name] ?? 0) + 1 };
           try {
@@ -699,7 +711,7 @@ export function Composer({
         });
       }
     },
-    [agent, setTextAndCaret, text],
+    [agent, onOpenHistory, setTextAndCaret, text],
   );
 
   const pumpUploads = useCallback(() => {
@@ -798,10 +810,11 @@ export function Composer({
   }, [placeWaitingMentions]);
 
   /** `clearDraft`: the terminal draft a DraftRefusal named, which the user asked to clear and send over;
-   * `sendAnyway`: the user saw the box a DraftRefusal showed and sends over it. False: nothing went out */
+   * `sendAnyway`: the user saw the box a DraftRefusal showed and sends over it. */
   const send = useCallback((clearDraft?: string, sendAnyway = false): boolean => {
     if (composingRef.current) return false;
-    if (!connected || uploading || roomless || sending || text.trim().length === 0) return false;
+    if (role === "observe" || !connected || uploading || roomless || sending || text.trim().length === 0) return false;
+    if (terminalTyped?.name === "resume" && onOpenHistory) { setMenuDismissed(true); onOpenHistory(); return true; }
     const sent = text;
     const sentAttachments = attachments;
     const settle = (result: boolean | string | DraftRefusal): void => {
@@ -831,7 +844,7 @@ export function Composer({
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
     return true;
-  }, [attachments, connected, dictation.forget, draftKey, onSend, roomless, sending, text, uploading]);
+  }, [attachments, connected, dictation.forget, draftKey, onOpenHistory, onSend, role, roomless, sending, terminalTyped, text, uploading]);
   const sendRef = useRef(send);
   sendRef.current = send;
   const connectedRef = useRef(connected);
@@ -901,7 +914,9 @@ export function Composer({
     setNote(null);
     // a quick reply is not the box's text, so its note offers no send over a draft
     const settle = (result: boolean | string | DraftRefusal): void => {
-      if (mounted.current && typeof result !== "boolean") setNote(typeof result === "string" ? result : submitNote("input_draft", result.note));
+      if (mounted.current && typeof result !== "boolean") {
+        setNote(typeof result === "string" ? result : "plain" in result && result.plain === true ? result.note : submitNote("input_draft", result.note));
+      }
     };
     if (!composerDrafts.begin(draftKey)) return;
     try {
@@ -1048,7 +1063,7 @@ export function Composer({
   }, [menuOpen, menuId, selectedIndex, choices]);
 
   return (
-    <div className={`composer${notices ? " has-notices" : ""}`} role="group" aria-label={t("Message composer")} data-dictating={dictation.voice.state !== "idle" ? "" : undefined}>
+    <div className={`composer${notices ? " has-notices" : ""}`} role="group" aria-label={t("Message composer")} data-dictating={dictation.voice.state !== "idle" ? "" : undefined} inert={inert || undefined}>
       {greeting}
       {notices}
       {/* no Tab key on a phone: the suggestion can be a chip there that fills the box, when Settings asks for it */}
@@ -1115,18 +1130,19 @@ export function Composer({
         {menuOpen && trigger && (
           <div className="menu composer-menu">
             {menuClose}
-            <div id={menuId} className="composer-menu-list" role="listbox" aria-label={t(trigger.kind === "slash" ? "Slash commands" : "Files")}>
-            {trigger.kind === "slash" ? (
-              (() => {
+            <div id={menuId} className="composer-menu-list" role="listbox" aria-label={t(trigger.kind === "slash" ? "Slash commands" : atSkills.length > 0 ? "Skills and files" : "Files")}>
+            {(() => {
                 // a row says what a command does in one sentence (the full text is the row's
                 // tooltip), and a skill's icon says where it comes from: yours, this project's,
-                // one that came with the agent, or one of its plugins'
+                // one that came with the agent, or one of its plugins'; a command that runs in the
+                // terminal carries a Terminal badge wherever it is listed
                 const groupLabel = (group: ReturnType<typeof commandGroup>): string => {
                   switch (group) {
                     case "skill-user": return t("Your skills");
                     case "skill-project": return t("Project skills");
                     case "skill-bundled": return t("Built-in skills");
                     case "skill-plugin": return t("Plugin skills");
+                    case "terminal": return t("Terminal commands");
                     default: return t(SOURCE_LABEL[group]);
                   }
                 };
@@ -1138,8 +1154,7 @@ export function Composer({
                     case "plugin": return t("Plugin skill");
                   }
                 };
-                const row = (command: SlashCommand, withSource: boolean) => {
-                  const index = orderedCommands.indexOf(command);
+                const row = (command: SlashCommand, index: number, prefix: string, withSource: boolean) => {
                   const description = briefDescription(command.description);
                   const owner = command.origin === undefined ? null : ownerLabel(command.origin);
                   const Owner = command.origin === undefined ? null : ORIGIN_ICON[command.origin];
@@ -1152,48 +1167,63 @@ export function Composer({
                       role="option"
                       aria-selected={index === selectedIndex}
                       data-origin={command.origin}
+                      data-terminal={terminalCommand(command) ? "" : undefined}
                       title={command.description.trim() !== "" ? command.description : undefined}
                       onMouseDown={(event) => event.preventDefault()}
                       onClick={() => selectCompletion(command, trigger)}
                     >
                       {Owner !== null && <Owner aria-hidden="true" />}
-                      <span className="menu-item-main">{syntax.skillTriggers.includes(trigger.prefix ?? "/") ? trigger.prefix ?? command.trigger ?? "/" : command.trigger ?? "/"}{command.name}</span>
+                      <span className="menu-item-main">{prefix}{command.name}</span>
+                      {terminalCommand(command) && <span className="badge composer-menu-badge">{t("Terminal")}</span>}
                       {owner !== null && <span className="visually-hidden">{owner}</span>}
                       <span className="menu-item-hint">{withSource && owner === null ? `${t(SOURCE_LABEL[command.source])}${description ? " · " : ""}` : ""}{description}</span>
                     </button>
                   );
                 };
-                if (!groupedBySource) return <div className="composer-menu-group">{orderedCommands.map((command) => row(command, true))}</div>;
+                if (trigger.kind === "file") {
+                  // the pane's `@` skills first, under their own heading, then the files (or the line saying they could not be read)
+                  return <>
+                    {atChoices.length > 0 && (
+                      <div className="composer-menu-group">
+                        <div className="menu-heading">{t("Skills")}</div>
+                        {atChoices.map((command, index) => row(command, index, "@", false))}
+                      </div>
+                    )}
+                    {(files.length > 0 || filesFailed) && (
+                      <div className="composer-menu-group">
+                        <div className="menu-heading">{t("Files")}</div>
+                        {files.map((file, index) => (
+                          <button
+                            id={`${menuId}-${atChoices.length + index}`}
+                            key={file}
+                            type="button"
+                            className="menu-item"
+                            role="option"
+                            aria-selected={atChoices.length + index === selectedIndex}
+                            onMouseDown={(event) => event.preventDefault()}
+                            onClick={() => selectCompletion(file, trigger)}
+                          >
+                            <span className="menu-item-main">{file}</span>
+                          </button>
+                        ))}
+                        {filesFailed && files.length === 0 && <p className="chat-inline-state chat-inline-error">{t("Couldn't load suggestions. Keep typing to try again.")}</p>}
+                      </div>
+                    )}
+                  </>;
+                }
+                const slashPrefix = (command: SlashCommand): string => syntax.skillTriggers.includes(trigger.prefix ?? "/") ? trigger.prefix ?? command.trigger ?? "/" : command.trigger ?? "/";
+                if (!groupedBySource) return <div className="composer-menu-group">{orderedCommands.map((command, index) => row(command, index, slashPrefix(command), true))}</div>;
                 return COMMAND_GROUPS.map((group) => {
                   const rows = orderedCommands.filter((command) => commandGroup(command) === group);
                   if (rows.length === 0) return null;
                   return (
                     <div className="composer-menu-group" key={group}>
                       <div className="menu-heading">{groupLabel(group)}</div>
-                      {rows.map((command) => row(command, false))}
+                      {rows.map((command) => row(command, orderedCommands.indexOf(command), slashPrefix(command), false))}
                     </div>
                   );
                 });
-              })()
-            ) : (
-              <div className="composer-menu-group">
-                <div className="menu-heading">{t("Files")}</div>
-                {files.map((file, index) => (
-                  <button
-                    id={`${menuId}-${index}`}
-                    key={file}
-                    type="button"
-                    className="menu-item"
-                    role="option"
-                    aria-selected={index === selectedIndex}
-                    onMouseDown={(event) => event.preventDefault()}
-                    onClick={() => selectCompletion(file, trigger)}
-                  >
-                    <span className="menu-item-main">{file}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+              })()}
             </div>
           </div>
         )}
@@ -1280,6 +1310,16 @@ export function Composer({
             setNote((current) => typeof current === "object" && current !== null && "failure" in current ? current : pasteCutNote.current);
           }}
         />
+        <textarea
+          ref={measurementRef}
+          className="composer-measure"
+          rows={1}
+          value={text}
+          placeholder={placeholder}
+          readOnly
+          tabIndex={-1}
+          aria-hidden="true"
+        />
 
         <div className="composer-controls composer-controls-left">
           <input
@@ -1304,6 +1344,20 @@ export function Composer({
             <Plus aria-hidden="true" />
           </button>
           {dictation.shown && <MicButton dictation={dictation} />}
+          {/* only once this device turned it on (Settings → Chat → Composer; the composer's row stays minimal, and
+              the tab menu opens the same dialog), and in a mouse-driven window only, like the usage glance: a phone's
+              card has no row to spare beside the mic and the tasks chip, and its tab menu carries New tab with agent… already */}
+          {onOpenNewSession && settings.composerNewTabButton && role !== "observe" && !mobile && (
+            <button
+              type="button"
+              className="icon-button composer-new-session"
+              aria-label={t("New tab with an agent…")}
+              title={t("New tab with an agent…")}
+              onClick={onOpenNewSession}
+            >
+              <MessageSquarePlus aria-hidden="true" />
+            </button>
+          )}
           <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} claude={agent === "claude"} plan={plan} />
         </div>
         {/* between the two control groups of the card's last row. The agent's name, its separator and the
@@ -1400,12 +1454,6 @@ export function Composer({
             <span className="composer-strip-text">{strip.branch}</span>
           </span>}
         </div>
-      )}
-      {/* said while typing, before the send: after it the browser is already open and the reader is
-          already in the state the words describe. Not a block — the text still goes, and pi runs the
-          command in the terminal the way its own palette would */}
-      {!note && terminalOnly !== null && (
-        <div className="composer-hint" role="status">{t("{command} opens a tree the chat cannot show. It runs in the terminal — tap the terminal button at the top of the screen to choose a branch.", { command: `/${terminalOnly}` })}</div>
       )}
       {/* above the whole composer: inside the surface it would cover the text being dictated */}
       {dictation.shown && <VoiceRecordingPill dictation={dictation} align="start" />}

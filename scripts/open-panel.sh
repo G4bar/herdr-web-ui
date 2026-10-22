@@ -17,19 +17,20 @@ usage() {
 url=$1
 label=${2:-}
 
-base=${HERDR_WEB_URL:-http://127.0.0.1:7317}
+base=${OVIS_URL:-http://127.0.0.1:7317}
 base=${base%/}
 
 # The token the app asks for: this environment, else the plugin's own env files: `env` first, then
 # `.env`, which wins, as scripts/plugin.ts reads them. Those files are KEY=value lines, never a
 # script: read the one line instead of running it, so nothing they hold is printed or executed.
-token=${HERDR_WEB_TOKEN:-}
+token=${OVIS_TOKEN:-}
 if [ -z "$token" ]; then
-  dir=${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/devswha.herdr-web-ui
-  for name in env .env; do
-    [ -r "$dir/$name" ] || continue
-    found=$(sed -n 's/^HERDR_WEB_TOKEN=//p' "$dir/$name" | head -n 1 | tr -d '\r')
-    if [ -n "$found" ]; then token=$found; fi
+  for dir in ${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/devswha.ovis ${XDG_CONFIG_HOME:-$HOME/.config}/herdr/plugins/config/devswha.herdr-web-ui; do
+    for name in env .env; do
+      [ -r "$dir/$name" ] || continue
+      found=$(sed -n 's/^OVIS_TOKEN=//p' "$dir/$name" | head -n 1 | tr -d '\r')
+      if [ -n "$found" ]; then token=$found; fi
+    done
   done
   token=${token#\"}; token=${token%\"}
   token=${token#\'}; token=${token%\'}

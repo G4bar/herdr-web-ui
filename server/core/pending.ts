@@ -1,0 +1,691 @@
+/**
+ * Messages a connection sends to wait for the agent: queued for its next turn, or held for the
+ * sender's Send now. Each carries a lease on the pane's terminal and on the sender's authority,
+ * checked again before every write, so a message is typed only into the attach it was sent from
+ * while that connection may still type. A turn's end sends the pane's next message; losing the
+ * lease holds it for the sender to review instead of sending it.
+ *
+ * A create request's first message (POST /api/workspace/create and /api/tab/create `first_message`)
+ * is listed by the bridge (FIRST_MESSAGE_OWNER), so every connection attached to the pane sees it among
+ * its pending messages and may discard or send it now; one pane holds one. It is typed on its own only
+ * through the page connection that sent the request (`first_message_connection`), while that connection
+ * has the pane attached, with the same checks as its own queued messages. Once that connection closes
+ * or leaves the pane before it went, or when the request named none, it is held: nothing the user typed
+ * goes automatically after a disconnect, another device attaching later never types it on its own, and
+ * the pane's other messages are not left behind it. It is bound to the agent the launch brought up: the
+ * process and session in front when it is queued, and what herdr says of that agent at each event of the
+ * pane after, so another session or process of the same kind gets none.
+ * First messages live in memory: a restart of the bridge loses those not sent yet.
+ */
+import { closeMention, type createSubmitText, freeClaudeBox, freeHermesInput, InputDraftError, pendingFault, pendingIdentity, pendingText } from "./composer.ts";
+import { type Client, connectionOf, send } from "./connections.ts";
+import { ATTACH_HELD_MESSAGE } from "./terminal-process.ts";
+import type { AttachmentView, TerminalSighting } from "./terminals.ts";
+import type { ClientMessage, HerdrPane, PendingMessage, SessionSnapshot } from "../../shared/protocol.ts";
+import { typingGuards } from "../input-guard.ts";
+import { claudeForegroundSession } from "../claude-store.ts";
+import { HerdrError, paneProcessInfo, paneRead, paneSendKeys, paneSendText, type ProcessInfo } from "../herdr/client.ts";
+import { bindCommandProcess, claudeHeldIsGrey, codexQuestionsCollapsed, isClaudeHeld, heldCandidate, noteSubmitted, parseInteractivePrompt, prepareCommandSend, shownInputBox } from "../prompt.ts";
+import { registry } from "../dialogs/registry.ts";
+import { secretPrompt } from "../../shared/secret-prompt.ts";
+import { PendingInputs, samePendingIdentity, type PendingIdentity, type PendingRecord } from "../pending-input.ts";
+import { processStartedAt } from "../process-start.ts";
+import { PendingRequestBook } from "../pending-requests.ts";
+import { interruptCodexSteering } from "../codex-steering.ts";
+import type { OmoStatus } from "../omo-status.ts";
+import { startOpenCodeWatch, openCodeSkillsToType, type OpenCodeWatch, skillsNotAttached } from "../opencode-native.ts";
+import { herdrSkillAttachIo, type PromptPiece, typeWithSkills } from "../opencode-skill-attach.ts";
+
+type Frame<T extends ClientMessage["type"]> = Extract<ClientMessage, { type: T }>;
+
+type PendingLease = { sighting: TerminalSighting; authority: object };
+/** The bridge, as the owner of the first messages create requests queued for new panes' agents. */
+export type FirstMessageOwner = { readonly firstMessages: true };
+export const FIRST_MESSAGE_OWNER: FirstMessageOwner = { firstMessages: true };
+export type PendingOwner = Client | FirstMessageOwner;
+const isClient = (owner: PendingOwner): owner is Client => owner !== FIRST_MESSAGE_OWNER;
+/** a first message's lease is the delivering connection's, taken at each attempt: none is kept on the record */
+type PendingItem = PendingRecord<PendingOwner, PendingLease | null>;
+type SubmitReply = { ok: boolean; pending?: PendingMessage; code?: string; message?: string };
+/** a first message refused before anything was typed because its connection could not type it yet stays queued for its next attach or turn */
+const FIRST_MESSAGE_RETRY_CODES = new Set(["input_not_ready", "pending_lease_lost", "disconnected", "read_only"]);
+/** a first message whose page left before it went, or that named none: held for an explicit Send now or Discard */
+const FIRST_MESSAGE_UNATTENDED = { code: "first_message_unattended", message: "The page that sent this first message is gone; send it now or discard it" };
+/** a first message whose pane runs something other than the agent launched for it, found at a pane's event */
+const TARGET_CHANGED = { code: "pending_target_changed", message: "The pane's terminal or agent session changed; review the message before sending it again" };
+/** a first message whose launched agent came up and left before it went: held for an explicit Send now or Discard */
+const LAUNCH_GONE = { code: "pending_target_changed", message: "The agent started for this message has ended; review the message before sending it" };
+/** receipts of first messages kept per pane, so a connection that attaches later drops a stale copy */
+const FIRST_MESSAGE_RECEIPTS = 8;
+
+/**
+ * The server's pending messages. `authorizeSocket`, `clientSnapshot` and `omo` belong to the
+ * connections and the status hub, which are built after this (they take its store), so they are
+ * called through: only a frame or a turn calls them, after `createServer` has returned.
+ */
+export function createPendingDelivery({ options, clients, attachments, sight, serialize, lastTyped, submitText, authorizeSocket, clientSnapshot, omo, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, TYPED_SETTLE_MS }: {
+  options: { pendingStartTimeoutMs?: number; submitDeadlineMs?: number; submitDelayMs?: number; openCodeStateDir?: string };
+  clients: Set<Client>;
+  attachments: ReadonlyMap<string, AttachmentView>;
+  sight: (client: Client, paneId: string) => TerminalSighting;
+  serialize: <T>(paneId: string, task: () => T | Promise<T>) => Promise<T>;
+  lastTyped: ReadonlyMap<string, number>;
+  submitText: ReturnType<typeof createSubmitText>;
+  authorizeSocket: (client: Client) => void;
+  clientSnapshot: () => Promise<SessionSnapshot>;
+  omo: Pick<OmoStatus, "sessionOf">;
+  SUBMIT_DEADLINE_MS: number;
+  SUBMIT_DELAY_MS: number;
+  TYPED_SETTLE_MS: number;
+}) {
+  const pendingAuthorities = new WeakMap<Client, Map<string, object>>();
+  const firstReceipts = new Map<string, Array<{ id: string; outcome: "sent" | "discarded" }>>();
+  /** the connections that could type into the pane now: attached, allowed to type, and with a ready lease */
+  const typists = (paneId: string): Client[] => [...clients].filter((client) => {
+    if (!client.data.attached.has(paneId)) return false;
+    try { authorizeSocket(client); } catch { return false; }
+    return typingGuards.pendingLease(sight(client, paneId).facts());
+  });
+  const pending = new PendingInputs<PendingOwner, PendingLease | null>((owner, paneId, messages, removed) => {
+    if (isClient(owner)) { send(owner, { type: "pending-messages", pane_id: paneId, messages, ...(removed ? { removed } : {}) }); return; }
+    // a first message: every connection attached to the pane sees it, and keeps the receipt once it went
+    if (removed) firstReceipts.set(paneId, [...(firstReceipts.get(paneId) ?? []), ...removed].slice(-FIRST_MESSAGE_RECEIPTS));
+    for (const client of clients) {
+      if (client.data.attached.has(paneId) && connectionOf(client).mode !== "observe") send(client, { type: "pending-messages", pane_id: paneId, messages, ...(removed ? { removed } : {}) });
+    }
+  }, Date.now, options.pendingStartTimeoutMs, undefined, (owner) => !isClient(owner));
+  let nextFirstRequestId = -1;
+  /** first messages still learning the agent launched for them (queueFirstMessage, learnLaunched) */
+  const launchBound = new WeakSet<PendingItem>();
+  /**
+   * The pane's launch-bound first messages that are checked at its events: a queued one, and a held one
+   * until it is held for its launched agent having left or been replaced (pending_target_changed), the
+   * reason its card then gives; past that it reads the pane no more until its Send now (bindLaunched).
+   */
+  const launchBoundIn = (paneId: string): PendingItem[] => pending.list(FIRST_MESSAGE_OWNER, paneId)
+    .map((message) => pending.get(FIRST_MESSAGE_OWNER, paneId, message.id))
+    .filter((item): item is PendingItem => item !== undefined && launchBound.has(item)
+      && (item.message.state === "queued" || (item.message.state === "held" && item.message.error?.code !== "pending_target_changed")));
+  /** A first message held for `fault`: a queued one is held, a held one takes it as its reason. */
+  const holdFor = (item: PendingItem, fault: { code: string; message: string }): void => {
+    if (item.message.state === "held") pending.rehold(item, fault);
+    else pending.holdItem(item, fault);
+  };
+  /** the page connection that sent each first message: the only one that types it on its own */
+  const requesters = new WeakMap<PendingItem, Client>();
+  const requested = new WeakMap<Client, Set<PendingItem>>();
+  const present = (client: Client): boolean => clients.has(client) && !connectionOf(client).closing;
+  const pendingDrains = new Set<string>();
+  const pendingRequests = new WeakMap<Client, PendingRequestBook<SubmitReply>>();
+  // the last input_draft refusal per pane: its named draft (Clear it and send), or none (Send anyway)
+  const draftConfirmations = new WeakMap<Client, Map<string, { draft: string | null; identity: PendingIdentity; box?: string | null }>>();
+
+  function pendingLease(owner: Client, paneId: string): PendingLease {
+    const sighting = sight(owner, paneId);
+    if (!sighting.facts().attached) throw new HerdrError("input_not_ready", "The pane is not attached and ready");
+    let authorities = pendingAuthorities.get(owner);
+    if (!authorities) { authorities = new Map(); pendingAuthorities.set(owner, authorities); }
+    let authority = authorities.get(paneId);
+    if (!authority) { authority = {}; authorities.set(paneId, authority); }
+    const lease = { sighting, authority };
+    authorizePending(owner, paneId, lease);
+    return lease;
+  }
+  // Losing authority cancels already-running checks too. Rejoining the same shared
+  // attachment or returning to interact must never revive a captured lease.
+  function holdPending(owner: Client, paneId?: string): void {
+    if (paneId === undefined) pendingAuthorities.delete(owner);
+    else pendingAuthorities.get(owner)?.delete(paneId);
+    pending.hold(owner, paneId);
+    holdRequested(owner, paneId);
+  }
+  /**
+   * The first messages `client`'s page sent, in `paneId` or in every pane, that have not gone: once it
+   * leaves the pane, may no longer type or closes, each is held for an explicit Send now or Discard, and
+   * the pane's other messages go at their turn. One on its way settles held, not retried.
+   */
+  function holdRequested(client: Client, paneId?: string): void {
+    const items = requested.get(client);
+    if (!items) return;
+    for (const item of [...items]) {
+      if (paneId !== undefined && item.paneId !== paneId) continue;
+      items.delete(item);
+      requesters.delete(item);
+      pending.holdItem(item, FIRST_MESSAGE_UNATTENDED);
+      drainPending(item.paneId);
+    }
+  }
+  function holdPendingPane(paneId: string, fault: { code: string; message: string }): void {
+    for (const owner of clients) pendingAuthorities.get(owner)?.delete(paneId);
+    pending.holdPane(paneId, fault);
+    // a pane that ended takes its first messages with it: nothing is left to type them into, and no connection closes to expire them
+    if (fault.code === "pane_not_found") {
+      for (const message of pending.list(FIRST_MESSAGE_OWNER, paneId)) {
+        const item = pending.get(FIRST_MESSAGE_OWNER, paneId, message.id);
+        if (item) pending.discard(item);
+      }
+      firstReceipts.delete(paneId);
+    }
+  }
+  function authorizePending(owner: Client, paneId: string, lease: PendingLease): void {
+    authorizeSocket(owner);
+    if (!clients.has(owner) || connectionOf(owner).closing) throw new HerdrError("disconnected", "The pending message's connection closed");
+    if (pendingAuthorities.get(owner)?.get(paneId) !== lease.authority) throw new HerdrError("pending_lease_lost", "The pending message's authority changed; review it before sending again");
+    const facts = lease.sighting.facts();
+    if (facts.currentHeld) throw new HerdrError("attach_held", ATTACH_HELD_MESSAGE);
+    if (!typingGuards.pendingLease(facts)) throw new HerdrError("input_not_ready", "The pending message's pane connection changed");
+  }
+  /**
+   * The pane and the identity of what runs in it now, as a pending message is checked against them. Its
+   * process is the first in front of the pane, or `bound` (the process a message was bound to) while that
+   * one is among those in front: a wrapper that does not exec its agent (a shim, `sh -c` with more to run)
+   * stays listed before it, and is not another agent.
+   */
+  async function currentIdentity(paneId: string, bound: number | null = null): Promise<{ pane: HerdrPane; identity: PendingIdentity; shellPid: number | null; processes: ProcessInfo | undefined }> {
+    // The same normalized snapshot the client sees includes a known Codex finish that
+    // herdr reports as unknown. Nothing is inferred from a bare unknown state.
+    const pane = (await clientSnapshot()).panes.find((candidate) => candidate.pane_id === paneId);
+    if (!pane) throw new HerdrError("pane_not_found", `pane ${paneId} not found`);
+    const info = await paneProcessInfo(paneId);
+    const foreground = info?.foreground_processes ?? [];
+    const pid = (bound !== null && foreground.some((entry) => entry.pid === bound) ? bound : foreground[0]?.pid) ?? null;
+    const base = pendingIdentity(pane);
+    return { pane, shellPid: info?.shell_pid ?? null, processes: info, identity: {
+      ...base, processPid: pid, processBirth: pid === null ? null : processStartedAt(pid),
+      omoSession: omo.sessionOf(paneId)?.sessionId ?? null,
+      // Claude's own PID record says which session it runs, also without herdr's hook
+      claudeSession: base.agent === "claude" ? await claudeForegroundSession(info?.foreground_processes ?? []) : null,
+    } };
+  }
+  async function pendingContext(owner: Client, paneId: string, lease: PendingLease, identity?: PendingIdentity, pasted = false): Promise<{ pane: HerdrPane; identity: PendingIdentity; working: boolean; screen: string; processes: ProcessInfo | undefined }> {
+    authorizePending(owner, paneId, lease);
+    const { pane, identity: current, processes } = await currentIdentity(paneId, identity?.processPid ?? null);
+    if (identity && !samePendingIdentity(identity, current)) {
+      throw new HerdrError("pending_target_changed", "The pane's terminal or agent session changed; review the message before sending it again");
+    }
+    if (identity) {
+      // Keep newly learned parts so a replacement before Enter is checked against them too.
+      identity.session ??= current.session;
+      identity.processPid ??= current.processPid;
+      identity.processBirth ??= current.processBirth;
+      identity.omoSession ??= current.omoSession;
+      identity.claudeSession ??= current.claudeSession;
+    }
+    // the live screen, not the viewport: a pane scrolled into its history still draws its next
+    // menu or password prompt at the bottom (server/prompt.ts liveScreen)
+    const screen = (await paneRead({ paneId, source: "detection", format: "text" })).text;
+    if (secretPrompt(screen, lease.sighting.facts().cols) !== null) {
+      throw new HerdrError("agent_blocked", "The terminal is waiting for masked input; answer it with the secret-input form first");
+    }
+    const collapsed = current.agent === "codex" && codexQuestionsCollapsed(screen);
+    // a message Claude Code holds for its invisible characters is a card to answer first, also once its hint has gone.
+    // Not so with this delivery's own paste in the box (`pasted`), which the check before the paste found
+    // free of a held message: the same words as the message noted before would be taken for that one,
+    // and so would any paste under a hint left up from it (typing does not take Claude's hint down)
+    const held = !pasted && current.agent === "claude" ? heldCandidate(paneId) : null;
+    const prompt = current.agent ? parseInteractivePrompt(current.agent, screen, null, true, [], held) : null;
+    // as the card's own reader decides it: Claude's grey text under a hint left behind is no held message
+    const waits = prompt !== null && !(pasted && isClaudeHeld(prompt)) && !(await claudeHeldIsGrey(paneId, prompt));
+    if (current.agent && (waits || registry.waits(current.agent, screen) || (pane.agent_status === "blocked" && !collapsed))) {
+      throw new HerdrError("agent_blocked", "The agent is waiting for an answer in the terminal");
+    }
+    if (current.agent && !["working", "idle", "done"].includes(pane.agent_status) && !collapsed) {
+      throw new HerdrError("agent_not_ready", "The agent's current input state is not known");
+    }
+    authorizePending(owner, paneId, lease);
+    return { pane, identity: current, working: current.agent !== null && (pane.agent_status === "working" || collapsed), screen, processes };
+  }
+  /**
+   * The live screen for claudeInputDraft, and the viewport's colors when viewportShowsLive verifies
+   * they show it. Read last, the live screen holds anything typed meanwhile. An empty box (or none)
+   * needs no colors.
+   */
+
+  async function dispatchPendingText(owner: Client, paneId: string, text: string, lease: PendingLease, identity: PendingIdentity,
+    automatic: boolean, arrivedAt: number, committing: (working: boolean, restarting?: boolean) => void = () => {}, interruptWorkingCodex = false): Promise<SubmitReply> {
+    let wrote = false;
+    let watch: OpenCodeWatch | null = null;
+    // what the checks below read is older than a status event that arrives while they run
+    let mark = pending.mark(paneId);
+    try {
+      const typed = Date.now() - (lastTyped.get(paneId) ?? 0);
+      // fixed wait: herdr holds a lone ESC typed into the pty ~150ms, so a Stop tapped just before reaches the pane first
+      if (typed < TYPED_SETTLE_MS) await Bun.sleep(TYPED_SETTLE_MS - typed);
+      mark = pending.mark(paneId);
+      const context = await pendingContext(owner, paneId, lease, identity);
+      if (automatic && context.working) {
+        pending.observe(paneId, "working", mark);
+        throw new HerdrError("pending_wait", "The agent is working again; this message still waits for its next turn");
+      }
+      // a draft typed in the terminal is the user's: the paste would join it and the Enter send both (#609).
+      // The box is the live screen's; only the viewport read tells Claude's grey text from a draft. The live
+      // read comes after the colors, so text typed between the two is in the box and holds the message.
+      if (context.identity.agent === "claude") await freeClaudeBox(paneId, context.working, () => authorizePending(owner, paneId, lease), arrivedAt + (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS));
+      else if (context.identity.agent === "hermes") context.screen = await freeHermesInput(paneId, context.identity);
+      // OpenCode v2 attaches a skill only through its autocomplete, never from a paste. A first message
+      // goes before any Chat read the pane's catalog: the cold send's catalog (bounded reads, within the
+      // catalog budget, at the pane's own version) is openCodeSkillsToType's, as for any other send
+      const opencode = await openCodeSkillsToType(context.pane, prepareCommandSend(context.pane, text, context.screen), text, context.screen, options.openCodeStateDir);
+      let command = opencode.sent;
+      // the process this message goes to, from the identity read above: recording reads nothing more before the write
+      bindCommandProcess(paneId, command, context.processes);
+      const skills = opencode.skills;
+      let attached: string[] = [];
+      let prompt: PromptPiece[] = [{ pasted: closeMention(text) }];
+      // followed from before the first key: the send's own message can be announced before Enter returns
+      watch = startOpenCodeWatch(context.pane, command, options.openCodeStateDir);
+      if (Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS)) throw new HerdrError("submit_timeout", "The pending message waited too long; nothing was typed");
+      authorizePending(owner, paneId, lease);
+      // asked again right before herdr is written to: its connect is awaited (#666)
+      const allowed = (): boolean => {
+        try { authorizePending(owner, paneId, lease); return true; } catch { return false; }
+      };
+      // Pending input is a guarded literal paste + Enter, never Codex's native Tab queue.
+      // Keep the final key here so a disconnect, pane switch or new menu can cancel it.
+      wrote = true;
+      if (command && skills.length > 0) {
+        let typed = false;
+        const typing = (): boolean => { const ok = allowed(); typed ||= ok; return ok; };
+        // the lookup above awaited the service: the pane, its session and its state are read again before every key
+        const revalidate = async (): Promise<void> => {
+          const current = await pendingContext(owner, paneId, lease, identity, typed);
+          if (automatic && !typed && current.working) throw new HerdrError("pending_wait", "The agent is working again; this message still waits for its next turn");
+        };
+        const result = await typeWithSkills(text, skills, typing, herdrSkillAttachIo(paneId), revalidate).catch((error: unknown) => {
+          // nothing was written before a refused check or guard: the message is unsent, not uncertain
+          if (!typed) {
+            wrote = false;
+            if (error instanceof HerdrError && error.code === "cancelled") authorizePending(owner, paneId, lease);
+          }
+          throw error;
+        });
+        attached = result.attached;
+        prompt = result.prompt;
+        command = skillsNotAttached(command, result.missed);
+      } else {
+        await paneSendText(paneId, `\u001b[200~${closeMention(text)}\u001b[201~`, undefined, allowed).catch((error: unknown) => {
+          // a paste the guard refused was never written: the message is unsent, not uncertain
+          if (error instanceof HerdrError && error.code === "cancelled") { wrote = false; authorizePending(owner, paneId, lease); }
+          throw error;
+        });
+      }
+      // fixed wait: the TUI takes the paste before its Enter, which arriving with it could read as a newline
+      await Bun.sleep(options.submitDelayMs ?? SUBMIT_DELAY_MS);
+      const beforeEnter = await pendingContext(owner, paneId, lease, identity, true);
+      if (automatic && beforeEnter.working) throw new HerdrError("pending_wait", "The agent started another turn before this queued message could be committed");
+      authorizePending(owner, paneId, lease);
+      const steering = !automatic && beforeEnter.working;
+      committing(steering);
+      // Claude Code queues what Enter commits during a turn; Ctrl+Enter sends it now (#737). herdr
+      // encodes the key as the pane asked, and as a plain CR for a program that asked for nothing.
+      await paneSendKeys(paneId, [steering && beforeEnter.identity.agent === "claude" ? "ctrl+enter" : "Enter"], undefined, allowed);
+      // the status the panel was read under; a status event since (a finish, an approval) stales the Escape
+      let statusAtRead = pending.current(paneId);
+      await interruptCodexSteering(interruptWorkingCodex, closeMention(text), { agent: beforeEnter.identity.agent, working: beforeEnter.working, screen: beforeEnter.screen }, {
+        read: async () => {
+          const current = await pendingContext(owner, paneId, lease, identity, true);
+          statusAtRead = pending.current(paneId);
+          return { agent: current.identity.agent, working: current.working, screen: current.screen };
+        },
+        restarting: () => committing(true, true),
+        // herdr has no compare-and-send: the screen can change between this read and the write, so the
+        // write is refused when the lease, the deadline or the pane's status moved meanwhile
+        escape: (fresh) => paneSendKeys(paneId, ["Escape"], undefined, () => allowed() && fresh() && pending.current(paneId) === statusAtRead),
+      });
+      noteSubmitted(paneId, text, command);
+      if (command) watch?.commit(command, prompt, attached);
+      return { ok: true };
+    } catch (error) {
+      watch?.cancel();
+      const fault = wrote ? { code: "submit_changed", message: "Pending-message delivery could not be confirmed. Check the terminal before sending again." } : pendingFault(error);
+      if (automatic && !wrote && fault.code === "agent_blocked") pending.observe(paneId, "blocked", mark);
+      return { ok: false, ...fault };
+    }
+  }
+  /**
+   * `by`: the connection that types the message, the owner's own for a connection's message; for a
+   * first message whichever typist the caller found, whose lease is taken here for this attempt alone.
+   */
+  async function dispatchPending(item: PendingItem, automatic: boolean, arrivedAt: number, interruptWorkingCodex = false, by: Client | null = isClient(item.owner) ? item.owner : null): Promise<SubmitReply> {
+    let reply: SubmitReply;
+    try {
+      if (by === null) throw new HerdrError("input_not_ready", "No connection has the pane attached to type the message");
+      const lease = item.lease ?? pendingLease(by, item.paneId);
+      reply = await dispatchPendingText(by, item.paneId, item.message.text, lease, item.identity,
+        automatic, arrivedAt, (working, restarting) => pending.committing(item, working, restarting), interruptWorkingCodex);
+    } catch (error) {
+      reply = { ok: false, ...pendingFault(error) };
+    }
+    const code = reply.code ?? "";
+    // a first message its page could not type yet stays queued for that page's next attach or turn. One whose
+    // page left or closed during its own automatic send is held as at that leaving, never retried: no page is
+    // left to type it, and queued again it would head the pane's queue ahead of the other devices' messages
+    const requester = requesters.get(item);
+    const unattended = automatic && !isClient(item.owner) && (requester === undefined || !present(requester));
+    const retryable = ["pending_wait", "agent_blocked"].includes(code) || (!isClient(item.owner) && FIRST_MESSAGE_RETRY_CODES.has(code));
+    const fault = reply.ok ? undefined : unattended && retryable ? FIRST_MESSAGE_UNATTENDED : { code: reply.code!, message: reply.message! };
+    pending.settle(item, fault, reply.code === "submit_changed", automatic && retryable && !unattended);
+    return reply;
+  }
+  function drainPending(paneId: string): void {
+    // a first message learns its launched agent at every event of its pane, also while no connection can type it
+    const learning = launchBoundIn(paneId).length > 0;
+    if (pending.next(paneId) === null && !learning) return;
+    if (pendingDrains.has(paneId)) {
+      // what the running drain read may predate this event: it runs once more
+      if (learning) drainAgain.add(paneId);
+      return;
+    }
+    pendingDrains.add(paneId);
+    const arrivedAt = Date.now();
+    // drained again only after a dispatch: a message no connection can type yet waits for the next
+    // attach, readiness or status event, where draining again at once would spin the event loop
+    let dispatched = false;
+    void serialize(paneId, async () => {
+      if (learning) await learnLaunched(paneId);
+      const item = pending.next(paneId);
+      if (!item) return;
+      // a first message waits for its own page to have the pane attached and ready; a connection's own message has its owner
+      const requester = requesters.get(item);
+      const by = isClient(item.owner) ? item.owner : requester !== undefined && typists(paneId).includes(requester) ? requester : null;
+      if (by === null) return;
+      // a launched agent herdr does not name yet is waited for: its next status event drains again
+      if (await bindLaunched(item) === "wait") return;
+      if (!pending.claim(item, true)) return;
+      dispatched = true;
+      await dispatchPending(item, true, arrivedAt, false, by);
+    }).catch((error) => console.warn("pending message:", pendingFault(error).code)).finally(() => {
+      pendingDrains.delete(paneId);
+      const again = drainAgain.delete(paneId);
+      if (dispatched || again) drainPending(paneId);
+    });
+  }
+  const drainAgain = new Set<string>();
+  /**
+   * A create request's first message for the pane's agent, queued as the request's own send: typed once
+   * the agent is ready through `requester`, the id of the page connection that sent the request, while it
+   * has the pane attached (drainPending), and listed to every connection attached to the pane. Without a
+   * connection of that id it is held from the start. Refused as a submit frame's text would be.
+   */
+  async function queueFirstMessage(paneId: string, raw: string, kind: string, requester: string | null = null, launchedPid: number | null = null): Promise<PendingMessage> {
+    const text = pendingText(raw);
+    const page = requester === null ? undefined : [...clients].find((client) => client.data.connectionId === requester && present(client));
+    const message = await serialize(paneId, async () => {
+      // bound to the terminal and the kind launched there, and to the process the launch left in front when
+      // it is not the shell: a replacement of the same kind is not what the message was sent to. Right after
+      // a launch herdr may name no agent yet; that binding is completed when it does (bindLaunched)
+      const { pane, identity, shellPid } = await currentIdentity(paneId, launchedPid);
+      // The launch's own word wins: a shell-started agent's launch says which process it came up as, which
+      // may have ended already, and then an agent the user starts later is not the one launched
+      const launchedProcess = launchedPid !== null
+        ? { processPid: launchedPid, processBirth: identity.processPid === launchedPid ? identity.processBirth : processStartedAt(launchedPid) }
+        : identity.processPid !== null && identity.processPid !== undefined && identity.processPid !== shellPid
+          ? { processPid: identity.processPid, processBirth: identity.processBirth } : {};
+      // and to the sessions herdr, OmO or Claude's own record already name for that agent: a /resume
+      // before the message went is another session
+      const sessions = identity.agent === kind
+        ? { session: identity.session, omoSession: identity.omoSession ?? null, claudeSession: identity.claudeSession ?? null } : { session: null };
+      const item = pending.enqueue(FIRST_MESSAGE_OWNER, paneId, nextFirstRequestId--, text, null,
+        { agent: kind, terminalId: pane.terminal_id, ...sessions, ...launchedProcess });
+      launchBound.add(item);
+      // no page to type it, or one that closed meanwhile: held before any drain could see it queued
+      if (page === undefined || !present(page)) pending.holdItem(item, FIRST_MESSAGE_UNATTENDED);
+      else {
+        requesters.set(item, page);
+        requested.set(page, (requested.get(page) ?? new Set()).add(item));
+      }
+      return item.message;
+    });
+    drainPending(paneId);
+    return { ...message };
+  }
+  /**
+   * What a launch-bound first message learns of the agent launched for it from what runs in its pane now:
+   * the parts not known yet (process, sessions), once herdr names the launched kind in its terminal and
+   * nothing known disagrees. The first agent seen there is the launched one, and a part once learned is
+   * never replaced, so a later session or process of the same kind is another; pendingContext holds the
+   * message for it with pending_target_changed.
+   */
+  function learn(item: PendingItem, identity: PendingIdentity, shellPid: number | null): void {
+    if (identity.terminalId !== item.identity.terminalId || identity.agent !== item.identity.agent || !samePendingIdentity(item.identity, identity)) return;
+    item.identity.session ??= identity.session;
+    // the shell itself is never the launched process: with it still in front, the launch is not known yet
+    if (identity.processPid !== shellPid) {
+      item.identity.processPid ??= identity.processPid;
+      item.identity.processBirth ??= identity.processBirth;
+    }
+    item.identity.omoSession ??= identity.omoSession;
+    item.identity.claudeSession ??= identity.claudeSession;
+  }
+  /** Each launch-bound first message in the pane is checked against a read of it, at each event of the pane (drainPending). */
+  async function learnLaunched(paneId: string): Promise<void> {
+    const items = launchBoundIn(paneId);
+    if (items.length === 0) return;
+    // read for each message's own bound process (a pane holds one first message, so one read in practice)
+    for (const item of items) {
+      const { identity, shellPid } = await currentIdentity(paneId, item.identity.processPid ?? null);
+      // its agent came up and left, or what herdr names there is not what was launched for it: held at once, as
+      // pendingContext would hold it at a send, which a pane that is not at rest never gets to
+      if (launchGone(item, identity)) holdFor(item, LAUNCH_GONE);
+      else if (targetChanged(item, identity)) holdFor(item, TARGET_CHANGED);
+      else learn(item, identity, shellPid);
+    }
+  }
+  /**
+   * A first message before a send. While herdr names no agent in its terminal it waits ("wait") only for a
+   * launch still coming up: no process learned yet, or the learned one still in front. A launched agent
+   * that came up and left is no longer waited for: pendingContext finds no agent of its kind there and
+   * holds the message with pending_target_changed. Otherwise it learns from what runs there (learn) and
+   * goes to pendingContext's checks ("bound").
+   */
+  async function bindLaunched(item: PendingItem): Promise<"bound" | "wait"> {
+    if (!launchBound.has(item)) return "bound";
+    const { identity, shellPid } = await currentIdentity(item.paneId, item.identity.processPid ?? null);
+    if (identity.terminalId === item.identity.terminalId && identity.agent === null && !launchGone(item, identity)) return "wait";
+    learn(item, identity, shellPid);
+    return "bound";
+  }
+  /**
+   * Whether the agent launched for a first message came up and left: herdr names no agent in its terminal
+   * and the process learned for it is no longer the one in front.
+   */
+  /** Whether what runs in a first message's pane is not what was launched for it: another terminal, or an agent herdr names that disagrees. */
+  function targetChanged(item: PendingItem, identity: PendingIdentity): boolean {
+    return identity.terminalId !== item.identity.terminalId || (identity.agent !== null && !samePendingIdentity(item.identity, identity));
+  }
+  function launchGone(item: PendingItem, identity: PendingIdentity): boolean {
+    const launched = item.identity.processPid;
+    if (launched == null || identity.terminalId !== item.identity.terminalId || identity.agent !== null) return false;
+    return identity.processPid !== launched
+      // macOS reads a birth to the whole second (samePendingIdentity)
+      || (item.identity.processBirth != null && identity.processBirth != null
+        && Math.abs(identity.processBirth - item.identity.processBirth) > (process.platform === "darwin" ? 1000 : 0));
+  }
+  /** A connection's end: its own messages are held, and so are the first messages its page sent that have not gone yet. */
+  function closeConnection(client: Client): void {
+    pending.close(client);
+    holdRequested(client);
+    requested.delete(client);
+  }
+  /** A connection that attached the pane: it sees the pane's first messages and their receipts, and may be the one to type them. */
+  function attached(client: Client, paneId: string): void {
+    const messages = pending.list(FIRST_MESSAGE_OWNER, paneId);
+    const removed = firstReceipts.get(paneId) ?? [];
+    if ((messages.length > 0 || removed.length > 0) && connectionOf(client).mode !== "observe") {
+      send(client, { type: "pending-messages", pane_id: paneId, messages, ...(removed.length > 0 ? { removed } : {}) });
+    }
+    drainPending(paneId);
+  }
+  function replayPendingOutcome(owner: Client, paneId: string, id: string): boolean {
+    const outcome = pending.outcome(owner, paneId, id) ?? pending.outcome(FIRST_MESSAGE_OWNER, paneId, id);
+    if (!outcome) return false;
+    send(owner, { type: "pending-messages", pane_id: paneId, messages: pending.list(owner, paneId), removed: [{ id, outcome }] });
+    return true;
+  }
+
+  /** The pending frames a connection sends, each handled as its `case` in the socket's frame switch was. */
+  const pendingFrames = {
+    async submit(client: Client, message: Frame<"submit">): Promise<void> {
+      // every submit is answered: the composer keeps its text until it hears back
+      const result = (ok: boolean, code?: string, text?: string, accepted?: PendingMessage, draft?: string | null, box?: string | null) => send(client, {
+        type: "submit-result", id: message.id, pane_id: message.pane_id, ok, ...(accepted ? { pending: accepted } : {}), ...(code ? { code, message: text } : {}),
+        ...(draft ? { draft } : {}), ...(!draft && typeof box === "string" ? { box } : {}),
+      });
+      if (!Number.isSafeInteger(message.id) || typeof message.pane_id !== "string" || !message.pane_id
+        || typeof message.text !== "string" || typeof message.payload !== "string") {
+        send(client, { type: "error", code: "invalid_submit", message: "id must be an integer, pane_id, text and payload strings" });
+        return;
+      }
+      const waits = message.delivery === "queue" || message.delivery === "hold";
+      if ((message.delivery !== undefined && message.delivery !== "immediate" && !waits)
+        || (waits && message.typed !== undefined && message.typed !== false)) {
+        result(false, "invalid_delivery", "Use immediate delivery, or queue or hold a chat message");
+        return;
+      }
+      if (message.clear_draft !== undefined && (typeof message.clear_draft !== "string" || !message.clear_draft
+        || waits || (message.typed !== undefined && message.typed !== false))) {
+        result(false, "invalid_delivery", "Clear a terminal draft only for a chat message sent at once");
+        return;
+      }
+      if (message.send_anyway !== undefined && (message.send_anyway !== true || waits || message.clear_draft !== undefined
+        || (message.typed !== undefined && message.typed !== false))) {
+        result(false, "invalid_delivery", "Send anyway only a chat message sent at once, without clearing a draft");
+        return;
+      }
+      if (message.resend_id !== undefined && (typeof message.resend_id !== "string" || !message.resend_id || message.resend_id.length > 128
+        || waits || message.typed === true || message.clear_draft !== undefined || message.send_anyway !== undefined)) {
+        result(false, "invalid_delivery", "Use a held-copy resend id only for an immediate chat message");
+        return;
+      }
+      if (message.resend_generation !== undefined && (!Number.isSafeInteger(message.resend_generation) || message.resend_generation < 0 || message.resend_id === undefined)) {
+        result(false, "invalid_delivery", "A resend generation must be a nonnegative integer with a held-copy id");
+        return;
+      }
+      if (connectionOf(client).mode === "observe") {
+        result(false, "read_only", "this connection is in observe mode");
+        return;
+      }
+      // another web bridge has this pane's terminal: its user types there, not this one
+      if (attachments.get(message.pane_id)?.held) {
+        result(false, "attach_held", ATTACH_HELD_MESSAGE);
+        return;
+      }
+      const arrivedAt = Date.now();
+      try {
+        if (waits) {
+          let book = pendingRequests.get(client);
+          if (!book) { book = new PendingRequestBook((reply: SubmitReply) => reply.pending !== undefined && pending.retains(client, reply.pending.id)); pendingRequests.set(client, book); }
+          // a digest, so a receipt kept for replay never holds a large request's bytes
+          const fingerprint = new Bun.CryptoHasher("sha256").update(JSON.stringify([message.pane_id, message.text, message.payload, message.delivery])).digest("hex");
+          const previous = book.get(message.id, fingerprint);
+          const lease = previous ? null : pendingLease(client, message.pane_id);
+          const reply = previous ?? book.run(message.id, fingerprint, () => serialize(message.pane_id, async (): Promise<SubmitReply> => {
+            const text = pendingText(message.text);
+            const mark = pending.mark(message.pane_id);
+            const context = await pendingContext(client, message.pane_id, lease!);
+            if (Date.now() - arrivedAt > (options.submitDeadlineMs ?? SUBMIT_DEADLINE_MS)) throw new HerdrError("submit_timeout", "This pending message waited too long; nothing was typed");
+            if (!context.working) {
+              // the agent left while the message was on its way: a chat follow-up is not typed into what is there now
+              if (context.identity.agent === null) throw new HerdrError("agent_not_ready", "No agent is in front of this pane now; nothing was typed");
+              // A request that raced the turn's finish still needs cancellable
+              // paste + Enter; agent.prompt commits its key inside herdr. With a message
+              // already waiting its turn here, this one takes its place behind it instead.
+              // A held message is never typed by arriving after the turn: it waits for Send now.
+              if (message.delivery === "queue" && !pending.waiting(message.pane_id)) return dispatchPendingText(client, message.pane_id, text, lease!, context.identity, false, arrivedAt);
+            }
+            pending.observe(message.pane_id, context.pane.agent_status, mark);
+            // hold: kept for the owner's Send now, never sent by the turn's end
+            const item = pending.enqueue(client, message.pane_id, message.id, text, lease!, context.identity, message.delivery === "hold");
+            return { ok: true, pending: item.message };
+          }).catch((error): SubmitReply => ({ ok: false, ...pendingFault(error) })));
+          const answer = await reply;
+          const accepted = answer.pending ? pending.get(client, message.pane_id, answer.pending.id)?.message : undefined;
+          if (answer.pending && !accepted) replayPendingOutcome(client, message.pane_id, answer.pending.id);
+          result(answer.ok, answer.code, answer.message, accepted);
+          drainPending(message.pane_id);
+          return;
+        }
+        const dispatch = () => {
+          // held while this waited its turn (the attach was refused after the check above)
+          if (attachments.get(message.pane_id)?.held) throw new HerdrError("attach_held", ATTACH_HELD_MESSAGE);
+          return submitText(message.pane_id, message.text, message.payload, arrivedAt, message.typed === true, () => authorizeSocket(client), message.clear_draft,
+            draftConfirmations.get(client)?.get(message.pane_id), message.send_anyway === true);
+        };
+        if (message.resend_id !== undefined) {
+          authorizeSocket(client);
+          const answer = await serialize(message.pane_id, () => pending.resend(message.pane_id, message.resend_id!,
+            new Bun.CryptoHasher("sha256").update(message.text).digest("hex"), async () => {
+              try { await dispatch(); return { ok: true }; }
+              catch (error) { return { ok: false, ...pendingFault(error) }; }
+            }, message.resend_generation));
+          result(answer.ok, answer.code, answer.message);
+          return;
+        }
+        await serialize(message.pane_id, dispatch);
+        if (message.clear_draft !== undefined || message.send_anyway) draftConfirmations.get(client)?.delete(message.pane_id);
+        result(true);
+      } catch (error) {
+        if (message.clear_draft !== undefined || message.send_anyway) draftConfirmations.get(client)?.delete(message.pane_id);
+        // a refusal naming a draft confirms it for Clear it and send; one naming none, for Send anyway
+        if (error instanceof InputDraftError && error.identity && (error.draft || error.box !== null)) {
+          let confirmations = draftConfirmations.get(client);
+          if (!confirmations) { confirmations = new Map(); draftConfirmations.set(client, confirmations); }
+          confirmations.set(message.pane_id, { draft: error.draft, identity: error.identity, box: error.box });
+        }
+        const fault = pendingFault(error);
+        result(false, fault.code, fault.message, undefined, error instanceof InputDraftError ? error.draft : null,
+          error instanceof InputDraftError && error.identity && error.box !== null ? shownInputBox(error.box) : null);
+      }
+      return;
+    },
+    async "pending-action"(client: Client, message: Frame<"pending-action">): Promise<void> {
+      const result = (reply: SubmitReply) => send(client, { type: "pending-result", id: message.id, pane_id: message.pane_id, pending_id: message.pending_id, ...reply });
+      if (!Number.isSafeInteger(message.id) || typeof message.pane_id !== "string" || !message.pane_id
+        || typeof message.pending_id !== "string" || !message.pending_id || !["steer", "discard"].includes(message.action)) {
+        result({ ok: false, code: "invalid_pending_action", message: "Use steer or discard with a pending-message id" }); return;
+      }
+      if (message.resend_generation !== undefined && (!Number.isSafeInteger(message.resend_generation) || message.resend_generation < 0)) {
+        result({ ok: false, code: "invalid_pending_action", message: "A resend generation must be a nonnegative integer" }); return;
+      }
+      const arrivedAt = Date.now();
+      try {
+        authorizeSocket(client);
+        const lease = message.action === "steer" ? pendingLease(client, message.pane_id) : null;
+        const answer = await serialize(message.pane_id, async (): Promise<SubmitReply> => {
+          authorizeSocket(client);
+          if (!clients.has(client) || connectionOf(client).closing) throw new HerdrError("disconnected", "This connection closed");
+          // a pane's first message is every attached connection's to send now or discard
+          const item = pending.get(client, message.pane_id, message.pending_id)
+            ?? (client.data.attached.has(message.pane_id) ? pending.get(FIRST_MESSAGE_OWNER, message.pane_id, message.pending_id) : undefined);
+          if (!item) return replayPendingOutcome(client, message.pane_id, message.pending_id)
+            ? { ok: true } : { ok: false, code: "pending_not_found", message: "This pending message does not belong to this connection" };
+          if (message.action === "discard") return pending.discard(item) ? { ok: true } : { ok: false, code: "pending_busy", message: "This message is already being sent" };
+          if (item.message.state === "uncertain") return { ok: false, code: "pending_uncertain", message: "Check the terminal before sending this message again" };
+          let dispatched = false;
+          const reply = await pending.resend(item.paneId, item.message.id,
+            new Bun.CryptoHasher("sha256").update(item.message.text).digest("hex"), async (): Promise<SubmitReply> => {
+              try {
+                if (await bindLaunched(item) === "wait") return { ok: false, code: "input_not_ready", message: "The agent started for this message is not up yet" };
+                await pendingContext(client, item.paneId, lease!, item.identity);
+                if (!pending.claim(item, false)) return { ok: false, code: "pending_busy", message: "This message is already being sent" };
+                if (isClient(item.owner)) item.lease = lease!;
+                dispatched = true;
+                return await dispatchPending(item, false, arrivedAt, true, client);
+              } catch (error) { return { ok: false, ...pendingFault(error) }; }
+            }, message.resend_generation);
+          // A saved copy may already have completed this ID on another connection.
+          if (!dispatched && pending.get(client, item.paneId, item.message.id) === item && pending.claim(item, false))
+            pending.settle(item, reply.ok ? undefined : { code: reply.code!, message: reply.message! }, reply.code === "submit_changed");
+          // a pane's first message refused because what runs there is not what was launched for it: its card says so
+          if (!dispatched && !isClient(item.owner) && reply.code === "pending_target_changed") pending.rehold(item, { code: reply.code, message: reply.message! });
+          return reply;
+        });
+        result(answer);
+        drainPending(message.pane_id);
+      } catch (error) { result({ ok: false, ...pendingFault(error) }); }
+      return;
+    },
+  };
+
+  return { pending, holdPending, holdPendingPane, drainPending, pendingFrames, queueFirstMessage, attached, closeConnection };
+}

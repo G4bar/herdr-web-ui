@@ -1,35 +1,149 @@
-/**
- * What both sidebar lists share for Settings → Agents order: herdr's state_change_seq per pane on
- * each PC, kept in step with pushed statuses. MachineSidebar owns it (`useSidebarActivityState`)
- * and provides it; the workspace rows and the Agents list read it (`useSidebarActivity`). The
- * logic itself is in lib/sidebarOrder.ts.
- */
-import { createContext, useContext, useMemo, useRef } from "react";
+/** Shared raw Activity order and acknowledgement of server-identified finishes, shared by the browsers of this server. */
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { Machine } from "../../shared/machines.ts";
 import type { AgentStatus, HerdrPane } from "../../shared/protocol.ts";
-import { liveSeqs, newSeqMemory, shownStatus, type SeqMemory } from "./sidebarOrder.ts";
+import type { SeenFinish } from "../../shared/seen.ts";
+import { liveSeqs, newSeqMemory, shownStatus, type SeenRecord, type SeqMemory } from "./sidebarOrder.ts";
+import { cleanSeen, loadSeen, saveSeen, seenKey, SEEN_LIMIT, subscribeSeen } from "./seenFinishes.ts";
+import { conversationFinishEvidence } from "./panePresentation.ts";
 
 export interface SidebarActivity {
-  /** herdr's state_change_seq per pane on a PC, a pushed status change dated at once */
   seqs(machineId: string): ReadonlyMap<string, number>;
-  /** the status a row draws for a pane */
-  status(machineId: string, pane: Pick<HerdrPane, "pane_id" | "agent_status" | "background_wait">): AgentStatus | undefined;
+  status(machineId: string, pane: Pick<HerdrPane, "pane_id" | "agent_status" | "background_wait" | "finish_id">): AgentStatus | undefined;
 }
-
 const NO_SEQS: ReadonlyMap<string, number> = new Map();
-const SidebarActivityContext = createContext<SidebarActivity>({ seqs: () => NO_SEQS, status: (_machineId, pane) => shownStatus(pane) });
+const SidebarActivityContext = createContext<SidebarActivity>({ seqs: () => NO_SEQS, status: (_machineId, pane) => shownStatus(pane, null) });
 export const SidebarActivityProvider = SidebarActivityContext.Provider;
 export const useSidebarActivity = (): SidebarActivity => useContext(SidebarActivityContext);
 
-export function useSidebarActivityState(machines: readonly Machine[]): SidebarActivity {
-  const memories = useRef(new Map<string, SeqMemory>());
+interface MachineSeen { epoch: string; record: SeenRecord }
+interface SharedFinish extends SeenFinish { state: "pending" | "success" | "failed" | "answered-error" }
+const unobscured = () => true;
+const answeredError = (error: unknown) => error instanceof Error && typeof (error as { status?: unknown }).status === "number";
+
+function sameSeen(left: ReadonlyMap<string, MachineSeen>, right: ReadonlyMap<string, MachineSeen>): boolean {
+  if (left.size !== right.size) return false;
+  for (const [machine, value] of right) {
+    const before = left.get(machine);
+    if (!before || before.epoch !== value.epoch || before.record !== value.record) return false;
+  }
+  return true;
+}
+
+export function useSidebarActivityState(machines: readonly Machine[], selectedMachineId: string, presentedPaneId: string | null, paneInFront: () => boolean = unobscured,
+  share?: (finish: SeenFinish) => Promise<void>): SidebarActivity {
+  const memories = useRef(new Map<string, { epoch: string | undefined; memory: SeqMemory }>());
   const seqsByMachine = useMemo(() => new Map(machines.map((machine) => {
-    let memory = memories.current.get(machine.id);
-    if (!memory) memories.current.set(machine.id, memory = newSeqMemory());
-    return [machine.id, liveSeqs(machine.snapshot, memory)] as const;
+    const epoch = machine.snapshot?.finish_epoch;
+    let kept = memories.current.get(machine.id);
+    if (!kept || kept.epoch !== epoch) {
+      kept = { epoch, memory: newSeqMemory() };
+      memories.current.set(machine.id, kept);
+    }
+    return [machine.id, liveSeqs(machine.snapshot, kept.memory)] as const;
   })), [machines]);
+  const [seen, setSeen] = useState<ReadonlyMap<string, MachineSeen>>(() => new Map());
+  const seenRef = useRef(seen); seenRef.current = seen;
+  const [pageVisible, setPageVisible] = useState(() => document.visibilityState === "visible");
+  const epochs = useRef(new Map<string, string>());
+  // One latest acknowledgement per pane; bounded independently of how many finishes arrive.
+  const shared = useRef(new Map<string, SharedFinish>());
+  const shareRef = useRef(share); shareRef.current = share;
+  useEffect(() => {
+    const onVisibility = () => setPageVisible(document.visibilityState === "visible");
+    document.addEventListener("visibilitychange", onVisibility);
+    const stopReceiving = subscribeSeen((changes) => {
+      setSeen((current) => {
+        let next: Map<string, MachineSeen> | undefined;
+        const checked = new Set<string>();
+        for (const { pc, epoch } of changes) {
+          const scope = JSON.stringify([pc, epoch]);
+          if (checked.has(scope)) continue;
+          checked.add(scope);
+          const before = (next ?? current).get(pc);
+          if (!before || before.epoch !== epoch) continue;
+          const record = loadSeen(pc, epoch);
+          if (before.record === record) continue;
+          next ??= new Map(current);
+          next.set(pc, { epoch, record });
+        }
+        return next ?? current;
+      });
+    });
+    return () => {
+      stopReceiving();
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, []);
+  useEffect(() => {
+    for (const machine of machines) {
+      const epoch = machine.snapshot?.finish_epoch;
+      if (!epoch) continue;
+      const previousEpoch = epochs.current.get(machine.id);
+      if (previousEpoch && previousEpoch !== epoch) {
+        cleanSeen([{ pc: machine.id, epoch: previousEpoch }]);
+        for (const [key, finish] of shared.current) {
+          if (finish.pc === machine.id && finish.epoch === previousEpoch) shared.current.delete(key);
+        }
+      }
+      epochs.current.delete(machine.id);
+      epochs.current.set(machine.id, epoch);
+      while (epochs.current.size > SEEN_LIMIT) epochs.current.delete(epochs.current.keys().next().value!);
+      const pane = machine.state === "connected" && machine.id === selectedMachineId && pageVisible && paneInFront()
+        ? machine.snapshot?.panes.find((pane) => pane.pane_id === presentedPaneId) : undefined;
+      if (pane?.agent_status === "done" && !pane.background_wait && pane.finish_id !== undefined && pane.finish_id > 0) {
+        const answer = conversationFinishEvidence.answer(seenKey(machine.id, epoch, pane.pane_id), pane.finish_id);
+        saveSeen(machine.id, epoch, pane.pane_id, pane.finish_id, answer);
+        const finish: SeenFinish = { pc: machine.id, epoch, pane: pane.pane_id, id: pane.finish_id, ...(answer === undefined ? {} : { answer }) };
+        const key = JSON.stringify([finish.pc, finish.epoch, finish.pane]);
+        const previous = shared.current.get(key);
+        const sameFinish = previous?.id === finish.id
+          && (previous.answer === answer || (previous.answer !== undefined && answer === undefined));
+        const answerUpgrade = previous?.id === finish.id && previous.answer === undefined && answer !== undefined;
+        if (!previous || finish.id > previous.id || answerUpgrade || (sameFinish && previous.state === "failed")) {
+          const sender = shareRef.current;
+          if (sender) {
+            const payload: SeenFinish = sameFinish && previous?.answer !== undefined && answer === undefined
+              ? { ...finish, answer: previous.answer } : finish;
+            const sent: SharedFinish = { ...payload, state: "pending" };
+            shared.current.delete(key);
+            shared.current.set(key, sent);
+            while (shared.current.size > SEEN_LIMIT) shared.current.delete(shared.current.keys().next().value!);
+            const failed = (error: unknown) => {
+              if (shared.current.get(key) === sent) {
+                sent.state = answeredError(error) ? "answered-error" : "failed";
+              }
+              console.warn("Could not tell the other browsers about a read finish", error);
+            };
+            try {
+              void Promise.resolve(sender(payload)).then(() => {
+                if (shared.current.get(key) === sent) sent.state = "success";
+              }, failed);
+            } catch (error) { failed(error); }
+          }
+        } else if (finish.id === previous.id) {
+          // Keep frequently observed panes in the bounded latest-state window.
+          shared.current.delete(key);
+          shared.current.set(key, previous);
+        }
+      }
+    }
+    // Read after every acknowledgement and epoch retirement: a later machine can evict an
+    // earlier machine's oldest entry while enforcing the shared cap.
+    const next = new Map<string, MachineSeen>();
+    for (const machine of machines) {
+      const epoch = machine.snapshot?.finish_epoch;
+      if (epoch) next.set(machine.id, { epoch, record: loadSeen(machine.id, epoch) });
+    }
+    if (!sameSeen(seenRef.current, next)) setSeen(next);
+  }, [machines, selectedMachineId, presentedPaneId, paneInFront, pageVisible]);
+
   return useMemo<SidebarActivity>(() => ({
     seqs: (machineId) => seqsByMachine.get(machineId) ?? NO_SEQS,
-    status: (_machineId, pane) => shownStatus(pane),
-  }), [seqsByMachine]);
+    status: (machineId, pane) => {
+      const epoch = machines.find((machine) => machine.id === machineId)?.snapshot?.finish_epoch;
+      const kept = seen.get(machineId);
+      return shownStatus(pane, epoch && kept?.epoch === epoch ? kept.record : null);
+    },
+  }), [machines, seqsByMachine, seen]);
 }

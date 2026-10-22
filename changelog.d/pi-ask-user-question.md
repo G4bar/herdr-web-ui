@@ -3,7 +3,7 @@
   is read off the terminal as an answerable card: its header, its numbered options with
   descriptions, a multiple choice's checkboxes, the free-text row, and the Submit tab with the
   answers it would send. A form of several questions is answered a tab at a time.
-  `HERDR_WEB_PI_ASK_PROMPT=0` (plugin env file, then restart the plugin) leaves it as plain
+  `OVIS_PI_ASK_PROMPT=0` (plugin env file, then restart the plugin) leaves it as plain
   terminal text.
 - The card carries what the pane's screen never shows, joined from the session's
   `ask_user_question` call: the question's header in its heading, each option's `preview`

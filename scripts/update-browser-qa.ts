@@ -48,14 +48,14 @@ try {
   const origin = `http://127.0.0.1:${port}`;
   supervisor = Bun.spawn([process.execPath, "server/managed.ts"], {
     cwd: install, stdout: log, stderr: log,
-    env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), HERDR_WEB_TOKEN: "",
-      HERDR_WEB_AUTO_UPDATE: "0", HERDR_WEB_TELEMETRY: "0", HERDR_WEB_STATE_DIR: join(temp, "state") },
+    env: { ...process.env, HOST: "127.0.0.1", PORT: String(port), OVIS_TOKEN: "",
+      OVIS_AUTO_UPDATE: "0", OVIS_TELEMETRY: "0", OVIS_STATE_DIR: join(temp, "state") },
   });
   const status = async (): Promise<UpdateStatus | null> => {
     try { return await (await fetch(`${origin}/api/updates`)).json() as UpdateStatus; } catch { return null; }
   };
   await until(async () => (await status())?.managed === true, "Managed server never became ready");
-  const workspace = await workspaceCreate({ cwd: temp, label: "herdr-web-ui-test-update-browser" });
+  const workspace = await workspaceCreate({ cwd: temp, label: "ovis-test-update-browser" });
   workspaceId = workspace.workspace.workspace_id;
   const paneId = workspace.root_pane.pane_id;
   browser = await chromium.launch({ executablePath: chromePath(), headless: true, args: ["--no-sandbox"] });
@@ -126,7 +126,7 @@ try {
   // A reload is explicit. The new frontend's build revision must match the server.
   await page.locator(".update-notice").getByRole("button", { name: "Reload app" }).click();
   // the new version tells of the update: its line opens Settings on what the update brought
-  await page.locator(".update-notice").getByText("herdr web ui was updated to v99.0.0.", { exact: true }).waitFor();
+  await page.locator(".update-notice").getByText("Ovis was updated to v99.0.0.", { exact: true }).waitFor();
   await page.screenshot({ path: join(evidence, "updated-line-desktop.png") });
   await page.locator(".update-notice").getByRole("button", { name: "What's new", exact: true }).click();
   await page.getByRole("region", { name: "What the last update brought", exact: true }).waitFor();

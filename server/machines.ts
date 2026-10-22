@@ -9,13 +9,15 @@ import type { ServerMessage, SessionSnapshot, HerdrPane } from "../shared/protoc
 import type { PushService } from "./push.ts";
 import { alertStatus } from "../shared/notify-policy.ts";
 import type { BridgeDescriptor } from "./bridge.ts";
-import { sessionSnapshot } from "./herdr/client.ts";
+import { HerdrError, sessionSnapshot } from "./herdr/client.ts";
+import { ConnectionDiagnostics, transportFailureCode } from "./connection-diagnostics.ts";
 import { labelOmoPanes } from "./conversation.ts";
 import type { CompletionTracker } from "./completion.ts";
 import { HerdrProfileState, herdrMachineId } from "./herdr-profile-state.ts";
 import { sameSshSession, type HerdrMachineProfile } from "./herdr-profiles.ts";
 import { validateTarget } from "./machine-security.ts";
 import { detectHost, HERDR_INSTALL_CMD } from "./remote-host.ts";
+import { discard, readCappedJson, REMOTE_LIMITS } from "./remote-json.ts";
 import { SshConnection } from "./ssh.ts";
 
 interface StoredMachine { id: string; name: string; target: SshTarget; enabled: boolean; snapshot?: SessionSnapshot | null }
@@ -33,6 +35,12 @@ interface Runtime {
   refreshQueued: boolean;
   snapshotRevision: number;
   terminals: Set<() => void>;
+  /** the remote server's order epoch its own /api/health proved over this connection; cleared with the connection */
+  acceptedEpoch?: string;
+  /** a full snapshot of another epoch than the proven one, held back until health says which server answers */
+  candidate?: SessionSnapshot;
+  /** this PC's one health call in flight (sourceCheck) */
+  verification?: SourceCheck;
   /** the user cancelled this PC's bridge update: it is not started again on its own until the PC connects */
   updateCancelled?: boolean;
 }
@@ -52,6 +60,20 @@ interface JobState {
   finished: Promise<void>;
 }
 const DEFAULT_SETTINGS: MachineSettings = { auto_update_bridges: true };
+/** the shortest time between the starts of two health calls that prove one PC's server (sourceCheck) */
+export const SOURCE_CHECK_INTERVAL_MS = 1000;
+interface SourceCheck { token: number; promise: Promise<string | null>; abort: AbortController }
+/** a verify_source_boot answer: the proved boot id, or why there is none */
+export type SourceProof = { boot_id: string } | { refused: "unknown" | "interval" | "unverified" };
+
+/**
+ * A full snapshot that may not replace a cached one of the same order epoch: it was read before that
+ * one (shared/protocol.ts). Snapshots of different epochs, or without evidence, are not compared.
+ */
+export function olderOrderRead(cached: SessionSnapshot | null | undefined, incoming: SessionSnapshot): boolean {
+  return !!cached && typeof cached.order_epoch === "string" && cached.order_epoch === incoming.order_epoch
+    && Number.isSafeInteger(cached.read_seq) && Number.isSafeInteger(incoming.read_seq) && incoming.read_seq! < cached.read_seq!;
+}
 
 /** The step a job shows between an approve/answer and the next stage() the setup reaches. */
 export function actionStep(action: "approve" | "answer"): string {
@@ -156,6 +178,8 @@ export class MachineManager {
   private statePath: string;
   private sshDir: string;
   private local: Machine = { id: LOCAL_MACHINE, name: hostname(), kind: "local", enabled: true, state: "connecting", error: null, snapshot: null };
+  private localDiagnostics = new ConnectionDiagnostics("machine.local");
+  private remoteDiagnostics = new ConnectionDiagnostics("machine.remote");
   private discoveryTimer?: ReturnType<typeof setTimeout>;
   private discoveryStarted = false;
   private settingsPath: string;
@@ -164,8 +188,19 @@ export class MachineManager {
   private autoChain: Promise<void> = Promise.resolve();
   private autoQueued = new Set<string>();
   private emitTimer?: ReturnType<typeof setTimeout>;
+  /** this server's own boot id: the local PC's proof, without asking anyone */
+  private bootId?: string;
+  /** a monotonic clock for the health calls' start interval; tests pass their own */
+  private now: () => number;
+  private sourceToken = 0;
+  /** each PC's last health-call start, kept across reconnects for as long as this manager lives */
+  private sourceStarts = new Map<string, number>();
 
-  constructor(readonly stateDir: string, private push: PushService, private completions: CompletionTracker, private readLocal: () => Promise<SessionSnapshot> = () => this.completions.readSnapshot(sessionSnapshot, labelOmoPanes)) {
+  constructor(readonly stateDir: string, private push: PushService, private completions: CompletionTracker, private readLocal: () => Promise<SessionSnapshot> = () => this.completions.readSnapshot(sessionSnapshot, labelOmoPanes),
+    options: { bootId?: string; now?: () => number } = {}) {
+    this.bootId = options.bootId;
+    this.now = options.now ?? (() => performance.now());
+    if (this.bootId) this.local.source_boot_id = this.bootId;
     this.profileState = new HerdrProfileState(stateDir);
     this.statePath = join(stateDir, "machines.json");
     this.sshDir = join(stateDir, "ssh");
@@ -318,7 +353,7 @@ export class MachineManager {
     // its id used again is a pane heard of for the first time
     if (message.type === "pane-exited") this.heardAgents.forget(message.pane_id);
     if (message.type === "pane-status" && this.local.snapshot) {
-      this.local.snapshot = { ...this.local.snapshot, panes: this.local.snapshot.panes.map((p: HerdrPane) => p.pane_id === message.pane_id ? paneAfterStatus(p, message) : p) };
+      this.local.snapshot = snapshotAfterStatus(this.local.snapshot, message);
     }
     if (message.type === "session-changed" || message.type === "pane-exited") void this.refreshLocal();
   }
@@ -340,17 +375,23 @@ export class MachineManager {
       do {
         this.localRefreshQueued = false;
         const revision = this.localRevision;
+        const started = performance.now();
         try {
           const snapshot = await this.readLocal();
           if (this.stopped) break;
           // A newer event already patched the roster. Never publish this older load.
           if (revision !== this.localRevision) { this.localRefreshQueued = true; continue; }
-          this.local.snapshot = snapshot; this.local.state = "connected"; this.local.error = null;
+          this.localDiagnostics.recovered(LOCAL_MACHINE, { operation: "snapshot", elapsed_ms: performance.now() - started });
+          // a read that started before the cached one never replaces it
+          if (!olderOrderRead(this.local.snapshot, snapshot)) this.local.snapshot = snapshot;
+          this.local.state = "connected"; this.local.error = null;
           // a pane the roster no longer lists is gone: the same id later is a pane heard of anew
           this.heardAgents.keepOnly(snapshot.panes);
         } catch (e) {
           if (this.stopped) break;
           if (revision !== this.localRevision) { this.localRefreshQueued = true; continue; }
+          const code = e instanceof HerdrError ? transportFailureCode(e.code) : null;
+          this.localDiagnostics.failed(LOCAL_MACHINE, code ?? "refresh_failed", { operation: "snapshot", elapsed_ms: performance.now() - started });
           this.local.state = "error"; this.local.error = String(e instanceof Error ? e.message : e);
         }
         this.emit();
@@ -462,6 +503,9 @@ export class MachineManager {
         this.emit();
       } catch (e) {
         const ownsRuntime = runtime.generation === generation;
+        if (ownsRuntime && !this.stopped && !job.abort.signal.aborted && job.public.phase !== "cancelled") {
+          this.remoteDiagnostics.failed(machineId, e instanceof MachineActionRequired ? "action_required" : "connection_lost", { operation: "bridge", machine_id: machineId });
+        }
         const error = e instanceof Error ? e.message : String(e);
         // an update of a registered PC that could not reach it (switched off, asleep, off the
         // network, or gone in the middle) learned nothing about its bridge: the PC waits as
@@ -621,7 +665,7 @@ export class MachineManager {
           const directory = mkdtempSync(join(this.sshDir, "keygen-"));
           const temporary = join(directory, "key");
           try {
-            const keygen = Bun.spawn(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", `herdr-web-ui:${runtime.machine.id}`, "-f", temporary], { stdout: "ignore", stderr: "pipe" });
+            const keygen = Bun.spawn(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", `ovis:${runtime.machine.id}`, "-f", temporary], { stdout: "ignore", stderr: "pipe" });
             if (await keygen.exited !== 0) throw new Error("Could not generate the dedicated SSH key");
             if (job.abort.signal.aborted || runtime.generation !== generation || this.stopped) throw new Error("Setup cancelled");
             renameSync(temporary + ".pub", path + ".pub");
@@ -680,8 +724,8 @@ export class MachineManager {
     await ssh.forward(port, descriptor.port);
     const endpoint = { url: `http://127.0.0.1:${port}`, token: descriptor.token };
     const response = await fetch(`${endpoint.url}/api/bridge`, { headers: { authorization: `Bearer ${endpoint.token}` }, signal: AbortSignal.timeout(15_000) });
-    if (!response.ok) throw new Error(verificationFailure(response.status, await response.json().catch(() => null)));
-    const identity: BridgeIdentity = await response.json();
+    if (!response.ok) throw new Error(verificationFailure(response.status, await readCappedJson(response, REMOTE_LIMITS.bridgeError).catch(() => null)));
+    const identity = await readCappedJson<BridgeIdentity>(response, REMOTE_LIMITS.bridgeIdentity);
     // An approved replacement only reads this stable identity endpoint. It never uses the
     // old bridge's pane protocol; the new bridge must pass the strict version check below.
     if (!forReplacement && (identity.bridge_protocol !== BRIDGE_PROTOCOL || identity.bundle_version !== REMOTE_BUNDLE_VERSION)) {
@@ -715,14 +759,17 @@ export class MachineManager {
         const revision = runtime.snapshotRevision;
         try {
           const r = await fetch(endpoint.url + "/api/session", { headers: { authorization: `Bearer ${endpoint.token}` }, signal: AbortSignal.timeout(15_000) });
-          if (!r.ok) throw new Error(`Remote herdr unavailable (${r.status})`);
-          const { snapshot } = await r.json() as { snapshot: SessionSnapshot };
+          if (!r.ok) { await discard(r); throw new Error(`Remote herdr unavailable (${r.status})`); }
+          const { snapshot } = await readCappedJson<{ snapshot: SessionSnapshot }>(r, REMOTE_LIMITS.sessionSnapshot);
           if (generation !== runtime.generation || this.stopped) return;
           if (revision !== runtime.snapshotRevision) { runtime.refreshQueued = true; continue; }
-          runtime.machine.snapshot = snapshot; runtime.machine.error = null;
-          this.saveSoon();
-          this.push.seed(forAlerts(snapshot.panes), runtime.machine.id, runtime.machine.name);
-          this.emit();
+          runtime.machine.error = null;
+          if (this.admitRemote(runtime, snapshot)) {
+            runtime.machine.snapshot = snapshot;
+            this.saveSoon();
+            this.push.seed(forAlerts(snapshot.panes), runtime.machine.id, runtime.machine.name);
+            this.emit();
+          }
         } catch (e) {
           if (generation !== runtime.generation || this.stopped) return;
           if (revision !== runtime.snapshotRevision) { runtime.refreshQueued = true; continue; }
@@ -747,16 +794,22 @@ export class MachineManager {
     const endpoint = runtime.endpoint!;
     const ws = authenticatedWebSocket(endpoint.url.replace("http:", "ws:") + "/ws", endpoint.token);
     runtime.observer = ws;
-    ws.onopen = () => ws.send(JSON.stringify({ type: "role", mode: "observe" }));
+    ws.onopen = () => {
+      if (generation !== runtime.generation || this.stopped) return;
+      this.remoteDiagnostics.recovered(runtime.machine.id, { operation: "bridge", machine_id: runtime.machine.id });
+      ws.send(JSON.stringify({ type: "role", mode: "observe" }));
+    };
     ws.onmessage = (event) => {
       if (generation !== runtime.generation || this.stopped) return;
       let message: ServerMessage;
       try { message = JSON.parse(String(event.data)); } catch { return; }
       // session-changed queues one follow-up, but lets the active roster publish.
       if (["snapshot", "pane-status", "pane-exited"].includes(message.type)) runtime.snapshotRevision++;
-      if (message.type === "snapshot") { runtime.machine.snapshot = message.snapshot; this.push.seed(forAlerts(message.snapshot.panes), runtime.machine.id, runtime.machine.name); this.emit(); }
+      if (message.type === "snapshot" && this.admitRemote(runtime, message.snapshot)) { runtime.machine.snapshot = message.snapshot; this.push.seed(forAlerts(message.snapshot.panes), runtime.machine.id, runtime.machine.name); this.emit(); }
       if (message.type === "pane-status") {
-        if (runtime.machine.snapshot) runtime.machine.snapshot = { ...runtime.machine.snapshot, panes: runtime.machine.snapshot.panes.map((p) => p.pane_id === message.pane_id ? paneAfterStatus(p, message) : p) };
+        if (runtime.machine.snapshot) runtime.machine.snapshot = snapshotAfterStatus(runtime.machine.snapshot, message);
+        // a snapshot held for health is older than this frame too: published later, it keeps the status
+        if (runtime.candidate) runtime.candidate = snapshotAfterStatus(runtime.candidate, message);
         void this.push.onStatus(message.pane_id, alertStatus(message.agent_status, message.background_wait), runtime.machine.id).catch(() => {});
       }
       if (message.type === "pane-exited") void this.push.onEnded(message.pane_id, runtime.machine.id).catch(() => {});
@@ -771,6 +824,7 @@ export class MachineManager {
   }
   private lost(runtime: Runtime, generation: number, error: unknown): void {
     if (generation !== runtime.generation || !runtime.machine.enabled || this.stopped) return;
+    this.remoteDiagnostics.failed(runtime.machine.id, error instanceof MachineActionRequired ? "action_required" : "connection_lost", { operation: "bridge", machine_id: runtime.machine.id });
     this.disconnect(runtime);
     runtime.machine.error = error instanceof Error ? error.message : String(error);
     if (error instanceof MachineActionRequired) {
@@ -824,7 +878,105 @@ export class MachineManager {
     runtime.observer?.close(); runtime.observer = undefined;
     for (const close of runtime.terminals) close(); runtime.terminals.clear();
     runtime.ssh?.close(); runtime.ssh = undefined; runtime.endpoint = undefined;
+    // what this connection proved goes with it; the start interval stays (sourceStarts)
+    runtime.verification?.abort.abort(); runtime.verification = undefined;
+    runtime.acceptedEpoch = undefined; runtime.candidate = undefined; delete runtime.machine.source_boot_id;
     runtime.machine.state = "disconnected";
+  }
+  /**
+   * Whether a remote PC's full snapshot may replace its cached one. Pairs are the remote server's own,
+   * copied unchanged. Within the epoch its health proved over this connection, a read older than the
+   * cached one is dropped; any other epoch, the connection's first included, is held back while the
+   * manager asks that PC's /api/health which server answers now (a held one is offered again by the
+   * next refresh). A snapshot without evidence (an older bridge) is taken as before.
+   */
+  private admitRemote(runtime: Runtime, snapshot: SessionSnapshot): boolean {
+    const epoch = snapshot.order_epoch;
+    if (typeof epoch !== "string" || !Number.isSafeInteger(snapshot.read_seq)) return true;
+    if (epoch === runtime.acceptedEpoch) return !olderOrderRead(runtime.machine.snapshot, snapshot);
+    if (!olderOrderRead(runtime.candidate, snapshot)) runtime.candidate = snapshot;
+    this.sourceCheck(runtime);
+    return false;
+  }
+  /**
+   * The PC's health call in flight, or a new one: at most one per PC, started at least
+   * SOURCE_CHECK_INTERVAL_MS after the last. `fresh` says it started now. Null: the interval refuses one,
+   * or the PC has no connection. Its answer is used only while the connection and the call are current.
+   */
+  private sourceCheck(runtime: Runtime): { call: SourceCheck; fresh: boolean } | null {
+    if (runtime.verification) return { call: runtime.verification, fresh: false };
+    const endpoint = runtime.endpoint;
+    if (!endpoint || this.stopped) return null;
+    const id = runtime.machine.id;
+    const now = this.now();
+    const last = this.sourceStarts.get(id);
+    if (last !== undefined && now - last < SOURCE_CHECK_INTERVAL_MS) return null;
+    this.sourceStarts.set(id, now);
+    const token = ++this.sourceToken;
+    const generation = runtime.generation;
+    const abort = new AbortController();
+    const current = () => !this.stopped && runtime.generation === generation && runtime.endpoint === endpoint && runtime.verification?.token === token;
+    const call: SourceCheck = { token, abort, promise: Promise.resolve(null) };
+    runtime.verification = call;
+    call.promise = (async () => {
+      try {
+        const response = await fetch(`${endpoint.url}/api/health`, { headers: { authorization: `Bearer ${endpoint.token}` }, signal: AbortSignal.any([abort.signal, AbortSignal.timeout(15_000)]) });
+        if (!current() || !response.ok) { await discard(response); return null; }
+        const boot = (await readCappedJson<{ web_ui?: { boot_id?: unknown } } | null>(response, REMOTE_LIMITS.health))?.web_ui?.boot_id;
+        if (!current() || typeof boot !== "string" || boot === "") return null;
+        this.proved(runtime, boot);
+        return boot;
+      } catch { return null; }
+      finally { if (runtime.verification?.token === token) runtime.verification = undefined; }
+    })();
+    return { call, fresh: true };
+  }
+  /** the PC's server proved itself: its epoch is the accepted one, and a held snapshot of it is published */
+  private proved(runtime: Runtime, boot: string): void {
+    runtime.machine.source_boot_id = boot;
+    runtime.acceptedEpoch = boot;
+    const candidate = runtime.candidate;
+    runtime.candidate = undefined;
+    if (candidate?.order_epoch === boot && !olderOrderRead(runtime.machine.snapshot, candidate)) {
+      runtime.machine.snapshot = candidate;
+      this.saveSoon();
+      this.push.seed(forAlerts(candidate.panes), runtime.machine.id, runtime.machine.name);
+    } else if (runtime.machine.snapshot?.order_epoch !== boot) {
+      // the cache is of another server: a read of this one replaces it
+      const generation = runtime.generation;
+      void this.refresh(runtime).catch((e) => this.lost(runtime, generation, e));
+    }
+    this.emit();
+  }
+  /**
+   * GET /api/machines?verify_source_boot: the boot id of the server behind a PC, proved during this
+   * request. A health call that was already running when it came is waited for but proves nothing to
+   * it; the caller's abort ends only its own wait.
+   */
+  async verifySourceBoot(id: string, signal?: AbortSignal): Promise<SourceProof> {
+    if (id === LOCAL_MACHINE) return this.bootId ? { boot_id: this.bootId } : { refused: "unverified" };
+    const runtime = this.machines.get(id);
+    if (!runtime) return { refused: "unknown" };
+    if (!runtime.endpoint) return { refused: "unverified" };
+    const generation = runtime.generation;
+    const check = this.sourceCheck(runtime);
+    if (!check) return { refused: "interval" };
+    const aborted = signal ? new Promise<null>((resolve) => {
+      if (signal.aborted) resolve(null);
+      signal.addEventListener("abort", () => resolve(null), { once: true });
+    }) : null;
+    const boot = await (aborted ? Promise.race([check.call.promise, aborted]) : check.call.promise);
+    if (!check.fresh || boot === null || signal?.aborted || this.stopped || runtime.generation !== generation) return { refused: "unverified" };
+    return { boot_id: boot };
+  }
+  /** a proxied move's PC, as it is now: after the move succeeds, that connection reads its roster again */
+  refreshAfterMove(id: string): () => void {
+    const runtime = this.machines.get(id);
+    const generation = runtime?.generation;
+    return () => {
+      if (!runtime || runtime.generation !== generation || this.stopped) return;
+      void this.refresh(runtime).catch((e) => this.lost(runtime, generation!, e));
+    };
   }
   patch(id: string, patch: { name?: unknown; enabled?: unknown }): void {
     const runtime = this.machines.get(id);
@@ -864,10 +1016,19 @@ export class MachineManager {
  * them; one that names neither leaves them. Every frame says whether the pane waits on its turn's work.
  */
 export function paneAfterStatus(p: HerdrPane, message: Extract<ServerMessage, { type: "pane-status" }>): HerdrPane {
-  const { background_tasks: before, background_wait: _waited, plan: planBefore, ...pane } = p;
+  const { background_tasks: before, background_wait: _waited, plan: planBefore, finish_id: _finish, ...pane } = p;
   const tasks = message.background_tasks === undefined ? before : message.background_tasks > 0 ? message.background_tasks : undefined;
   const plan = message.plan === undefined ? planBefore : message.plan ?? undefined;
-  return { ...pane, agent_status: message.agent_status, ...(tasks === undefined ? {} : { background_tasks: tasks }), ...(message.background_wait ? { background_wait: true } : {}), ...(plan === undefined ? {} : { plan }) };
+  return { ...pane, agent_status: message.agent_status, ...(message.finish_id === undefined ? {} : { finish_id: message.finish_id }), ...(tasks === undefined ? {} : { background_tasks: tasks }), ...(message.background_wait ? { background_wait: true } : {}), ...(plan === undefined ? {} : { plan }) };
+}
+
+function snapshotAfterStatus(snapshot: SessionSnapshot, message: Extract<ServerMessage, { type: "pane-status" }>): SessionSnapshot {
+  return { ...snapshot, finish_epoch: message.finish_epoch, panes: snapshot.panes.map((pane) => {
+    if (pane.pane_id === message.pane_id) return paneAfterStatus(pane, message);
+    if (snapshot.finish_epoch === message.finish_epoch) return pane;
+    const { finish_id: _finish, ...rest } = pane;
+    return rest;
+  }) };
 }
 
 /** A remote PC's panes as its alerts take them: one waiting on its turn's background work is working. */

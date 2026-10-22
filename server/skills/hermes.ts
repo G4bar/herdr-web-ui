@@ -1,13 +1,11 @@
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
-import type { SlashCommand } from "../../shared/protocol.ts";
+import type { CommandForm, SlashCommand } from "../../shared/protocol.ts";
 import type { AgentCommandContext, AgentCommandSource } from "./index.ts";
 import { environRecord, plainObject, readFrontmatter } from "./walk.ts";
 
-// Hermes 0.21.5 CommandDefs, including cli_only commands and palette-visible aliases.
-// Screen checks exclude model, resume, sessions, config, agents, plugins, skills and skin.
-// Gateway-only commands are never CLI rows. Unchecked commands (including prompt) stay.
-// Plugin skills are omitted: their enabled state lives in Hermes' Python plugin manager.
+// Hermes 0.21.5 CommandDefs at 354724fb085162678964c116ceb4c40fc57c717c; CLI aliases are included.
+// Gateway-only commands are never CLI rows. Runtime-only plugin commands are not listed.
 const BUILTINS: Readonly<Record<string, string>> = {
   "new": "Start a new session (fresh session ID + history)",
   "reset": "Start a new session (fresh session ID + history)",
@@ -58,6 +56,14 @@ const BUILTINS: Readonly<Record<string, string>> = {
   "ctx": "Show detailed context window view with usage gauge, category breakdown, compression stats, and throughput",
   "whoami": "Show your slash command access (admin / user)",
   "profile": "Show active profile name and home directory",
+  "model": "Switch model (session-scoped; --global to persist)",
+  "resume": "Resume a previously-named session",
+  "sessions": "Browse and resume previous sessions",
+  "config": "Show current configuration",
+  "agents": "Show active agents and running tasks",
+  "plugins": "List installed plugins and their status",
+  "skills": "Search, install, inspect, or manage skills",
+  "skin": "Show or change the display skin/theme",
   "codex-runtime": "Toggle codex app-server runtime for OpenAI/Codex models",
   "codex_runtime": "Toggle codex app-server runtime for OpenAI/Codex models",
   "personality": "Set a predefined personality",
@@ -121,6 +127,34 @@ const BUILTINS: Readonly<Record<string, string>> = {
   "exit": "Exit the CLI (use --delete to also remove session history)",
 };
 const CORE_NAMES = new Set([...Object.keys(BUILTINS), "start", "topic", "pause", "approve", "deny", "agents", "tasks", "sethome", "set-home", "resume", "sessions", "config", "model", "skin", "skills", "plugins", "commands", "restart", "platform"]);
+// The second line waits for a key at 354724fb: the reload-mcp and update confirmations (cli_info_mixin.py:908-923,
+// cli_commands_mixin.py:2387-2407), undo's confirmation (cli_loops_mixin.py:220-242), prompt and compose open $EDITOR
+// (cli_commands_mixin.py:2088-2131), palette its overlay, tasks (an alias of agents) and the journey views their TUI
+// overlays, and the plan and billing commands their pickers whenever the account may change them (cli_billing_mixin.py).
+// login shows its device code only on the screen, and debug uploads its report publicly as soon as it is typed.
+const TERMINAL_BOUND = ["model", "resume", "sessions", "config", "agents", "plugins", "skills", "skin",
+  "reload-mcp", "reload_mcp", "update", "undo", "prompt", "compose", "palette", "tasks", "journey", "learning", "memory-graph",
+  "subscription", "upgrade", "topup", "login", "debug"] as const;
+// new, reset and clear confirm first unless told now, --yes or -y (approvals.destructive_slash_confirm,
+// cli_loops_mixin.py:93-100, 191-202); curator's destructive subcommands ask on a stdin the CLI does not read
+const CONFIRMED: CommandForm[] = [
+  { match: "bare", interaction: "terminal" },
+  ...["now", "--yes", "-y"].map((sub): CommandForm => ({ match: { sub }, interaction: "none" })),
+  { match: "other", interaction: "terminal" },
+];
+// printed inline by the classic CLI and read by the result readers in server/dialogs/hermes.ts
+const RESULT_FORMS: Record<string, CommandForm[]> = {
+  ...Object.fromEntries(
+    [["help", "help"], ["status", "status"], ["version", "version"], ["v", "version"], ["profile", "profile"], ["reload-skills", "reload-skills"], ["reload_skills", "reload-skills"]]
+      .map(([name, reader]) => [name, [{ match: "bare", interaction: "dialog", dialog: `hermes-${reader}` }]]),
+  ),
+  new: CONFIRMED, reset: CONFIRMED, clear: CONFIRMED,
+  curator: [
+    { match: "bare", interaction: "unknown" },
+    ...["adopt", "prune", "purge", "rollback"].map((sub): CommandForm => ({ match: { sub }, interaction: "terminal" })),
+    { match: "other", interaction: "unknown" },
+  ],
+};
 const SKIP_DIRS = new Set([".git", ".github", ".hub", ".archive", ".curator_backups", ".locks", ".venv", "venv", "node_modules", "site-packages", "__pycache__", ".tox", ".nox"]);
 const SUPPORT_DIRS = new Set(["references", "templates", "assets", "scripts"]);
 
@@ -247,7 +281,7 @@ function discover(ctx: AgentCommandContext): SlashCommand[] {
     if (!winner || disabled.has(name)) continue;
     const key = slug(name);
     if (!key || CORE_NAMES.has(key) || commands.has(key)) continue;
-    commands.set(key, { name: key, description: winner.description, source: "skill", origin: winner.root === local && bundled.has(key) ? "bundled" : winner.origin });
+    commands.set(key, { name: key, description: winner.description, source: "skill", origin: winner.root === local && bundled.has(key) ? "bundled" : winner.origin, id: canonical(winner.path) });
   }
   const bundlesDir = env.get("HERMES_BUNDLES_DIR") ? expand(env.get("HERMES_BUNDLES_DIR") ?? "") : join(hermesHome, "skill-bundles");
   const bundleNames = new Set<string>();
@@ -268,7 +302,17 @@ function discover(ctx: AgentCommandContext): SlashCommand[] {
     const command = plainObject(value);
     commands.set(name, { name, description: typeof command.description === "string" ? command.description : `Run /${name}`, source: "user" });
   }
+  // Hermes plugin manifests have no command field; commands.py parses fields only, while plugins.py
+  // registers slash commands at runtime (354724fb085162678964c116ceb4c40fc57c717c,
+  // plugins_manifest.py:32-39,342-395,544-557; plugins.py:647-671).
   return [...commands.values()];
 }
 
-export const source: AgentCommandSource = { builtins: Object.keys(BUILTINS), descriptions: BUILTINS, discover };
+export const source: AgentCommandSource = {
+  builtins: Object.keys(BUILTINS),
+  descriptions: BUILTINS,
+  forms: RESULT_FORMS,
+  terminalBound: TERMINAL_BOUND,
+  pin: "0.21.5",
+  discover,
+};
