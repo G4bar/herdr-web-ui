@@ -62,6 +62,11 @@ const handle = (command) => {
       break;
     case "hang":
       break;
+    // one answer and gone: the exit races the response it just wrote
+    case "respond-then-quit":
+      send({ id: command.id, type: "response", command: "respond-then-quit", success: true, data: { ok: true } });
+      process.exit(0);
+      break;
     case "quit":
       process.exit(0);
   }
@@ -189,10 +194,20 @@ describe("PiRpc", () => {
     await expect(rpc.call({ type: "get_state" })).rejects.toThrow("pi has exited");
   });
 
-  it("keeps a running bash command's output in its tail", async () => {
+  it("resolves a response written just before the child exited, and stays lost", async () => {
+    const { rpc } = start();
+    await expect(rpc.call({ type: "respond-then-quit" })).resolves.toEqual({ ok: true });
+    await until(() => rpc.state.mode === "lost");
+    // a record read after the exit cannot bring the state back to life
+    await Bun.sleep(50);
+    expect(rpc.state.mode).toBe("lost");
+    expect(rpc.state.isStreaming).toBe(false);
+  });
+
+  it("drops a direct bash command's output once it answered", async () => {
     const { rpc } = start();
     await rpc.call({ type: "bash", command: "printf one" });
-    expect(Object.values(rpc.state.toolTails)[0]).toEqual(["one", "two", "three", ""]);
+    expect(rpc.state.toolTails).toEqual({});
   });
 });
 

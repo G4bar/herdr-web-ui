@@ -19,6 +19,10 @@ const STDERR_LINE_CHARS = 400;
 /** An exiting child gets this long to dispose its runtime before it is killed. */
 const CLOSE_GRACE_MS = 500;
 
+/** Notice ids are ours, not pi's: one counter keeps them distinct however many the cap drops. */
+let noticeSequence = 0;
+const nextNoticeId = (): string => `notice-${++noticeSequence}`;
+
 const utf8 = new TextDecoder();
 
 /** One stdout record: a session event, an `extension_ui_request`, or a response. Only `type` is trusted. */
@@ -98,7 +102,8 @@ function statsOf(value: unknown): PiNativeStats | null {
  * The session's totals with one finished message's usage added. `get_session_stats` is the answer
  * for the whole session and replaces these; between its reads this keeps them from standing still
  * while a turn runs. Compaction and summary usage is in neither until that read.
- */function plusUsage(stats: PiNativeStats, usage: Record<string, unknown>): PiNativeStats {
+ */
+function plusUsage(stats: PiNativeStats, usage: Record<string, unknown>): PiNativeStats {
   const cost = object(usage["cost"]);
   const summed = number(usage["input"]) + number(usage["output"]) + number(usage["cacheRead"]) + number(usage["cacheWrite"]);
   return {
@@ -112,6 +117,20 @@ function statsOf(value: unknown): PiNativeStats | null {
     },
     cost: stats.cost + number(cost["total"]),
   };
+}
+
+/** Chunks joined in order: a record split across reads is read as the bytes pi wrote it with. */
+function joinBytes(parts: Uint8Array[]): Uint8Array {
+  if (parts.length === 1) return parts[0]!;
+  let length = 0;
+  for (const part of parts) length += part.length;
+  const joined = new Uint8Array(length);
+  let offset = 0;
+  for (const part of parts) {
+    joined.set(part, offset);
+    offset += part.length;
+  }
+  return joined;
 }
 
 /**
@@ -223,6 +242,8 @@ function reduceResponse(state: PiNativeState, event: PiRpcRecord): PiNativeState
       const queue = object(data);
       return { ...state, mode: "native", queue: { steering: stringList(queue["steering"]), followUp: stringList(queue["followUp"]) } };
     }
+    /** the command is over, so the output it streamed has nowhere left to go */
+    case "bash": return dropTail(state, text(request["id"]));
     default: return state.mode === "native" ? state : { ...state, mode: "native" };
   }
 }
@@ -291,7 +312,7 @@ function reduceCompactionEnd(state: PiNativeState, event: PiRpcRecord): PiNative
   const failure = text(event["errorMessage"]);
   const next = { ...state, isCompacting: false };
   if (failure === null) return next;
-  const notice: PiNativeNotice = { id: `compaction-${state.notices.length}-${failure.length}`, type: "error", message: `Compaction failed: ${failure}` };
+  const notice: PiNativeNotice = { id: nextNoticeId(), type: "error", message: `Compaction failed: ${failure}` };
   return { ...next, notices: [...state.notices, notice].slice(-NOTICE_LIMIT) };
 }
 
@@ -299,7 +320,7 @@ function reduceRetryEnd(state: PiNativeState, event: PiRpcRecord): PiNativeState
   const failure = text(event["finalError"]);
   const next = { ...state, retry: null };
   if (event["success"] === true || failure === null) return next;
-  const notice: PiNativeNotice = { id: `retry-${state.notices.length}-${failure.length}`, type: "error", message: `Retries failed: ${failure}` };
+  const notice: PiNativeNotice = { id: nextNoticeId(), type: "error", message: `Retries failed: ${failure}` };
   return { ...next, notices: [...state.notices, notice].slice(-NOTICE_LIMIT) };
 }
 
@@ -337,17 +358,28 @@ export class PiRpc {
   private readonly stateListeners = new Set<(state: PiNativeState) => void>();
   private readonly exitListeners = new Set<(code: number | null) => void>();
   private readonly log: (line: string) => void;
-  private buffer = new Uint8Array(0);
+  /** the bytes of a record still waiting for its LF */
+  private chunks: Uint8Array[] = [];
   private sequence = 0;
   private ending = false;
+  /** the child is gone and its last records were read: nothing that arrives after this counts */
+  private gone = false;
+  /** the whole exit: the child ended and its pipes were drained */
+  private readonly settled: Promise<void>;
 
   constructor(options: PiRpcOptions) {
     this.log = options.log ?? ((line) => console.error(`[pi-rpc] ${line}`));
     const argv = [...(options.bin ?? ["pi"]), "--mode", "rpc", "--session", options.sessionFile, ...(options.args ?? [])];
     this.child = Bun.spawn(argv, { cwd: options.cwd, env: options.env, stdin: "pipe", stdout: "pipe", stderr: "pipe", windowsHide: true });
-    void this.pump(this.child.stdout);
-    void this.pumpErrors(this.child.stderr);
-    void this.child.exited.then((code) => this.exited(code));
+    // the exit is handled only once the pipes are drained: a response written just before the child
+    // left is still in them, and rejecting its caller would lose an answer pi already gave
+    const output = this.pump(this.child.stdout);
+    const errors = this.pumpErrors(this.child.stderr);
+    this.settled = this.child.exited.then(async (code) => {
+      await output;
+      await errors;
+      this.exited(code);
+    });
   }
 
   get state(): PiNativeState { return this.current; }
@@ -373,8 +405,13 @@ export class PiRpc {
     if (this.ending) return Promise.reject(new Error("pi has exited"));
     const id = `req-${++this.sequence}`;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { request: command, resolve, reject });
-      this.write({ ...command, id });
+      // the command as it went out, its id included: the response reports what that command answered
+      const sent = { ...command, id };
+      this.pending.set(id, { request: sent, resolve, reject });
+      // a command pi cannot be given is not a command that will ever be answered
+      if (this.write(sent)) return;
+      this.pending.delete(id);
+      reject(new Error(`could not send ${command.type} to pi`));
     });
   }
 
@@ -393,14 +430,18 @@ export class PiRpc {
     try { this.child.stdin.end(); } catch { /* the child is already gone */ }
     const grace = setTimeout(() => { this.child.kill(); }, CLOSE_GRACE_MS);
     try { await this.child.exited; } finally { clearTimeout(grace); }
+    // the state is `lost` by the time this answers, not a tick after it
+    await this.settled;
   }
 
-  private write(record: PiRpcRecord): void {
+  private write(record: PiRpcRecord): boolean {
+    if (this.gone) return false;
     try {
       this.child.stdin.write(`${JSON.stringify(record)}\n`);
       const flushed: unknown = this.child.stdin.flush();
       if (flushed instanceof Promise) void flushed.catch((error: unknown) => this.log(`stdin: ${describe(error)}`));
-    } catch (error) { this.log(`stdin: ${describe(error)}`); }
+      return true;
+    } catch (error) { this.log(`stdin: ${describe(error)}`); return false; }
   }
 
   /** Read stdout as bytes, split on LF only (U+2028 is a character inside a record, not its end). */
@@ -414,22 +455,27 @@ export class PiRpc {
       }
     } catch (error) { this.log(`stdout: ${describe(error)}`); }
     // a last record the child ended without a newline still counts
-    if (this.buffer.length > 0) { const rest = this.buffer; this.buffer = new Uint8Array(0); this.record(utf8.decode(rest)); }
+    if (this.chunks.length > 0) { const rest = joinBytes(this.chunks); this.chunks = []; this.recordBytes(rest); }
   }
 
-  /** Bytes in, whole records out: a record split over two chunks is joined before it is read. */
+  /** Bytes in, whole records out: only the new chunk is scanned, and a record split over two is joined. */
   private push(chunk: Uint8Array): void {
-    const joined = new Uint8Array(this.buffer.length + chunk.length);
-    joined.set(this.buffer);
-    joined.set(chunk, this.buffer.length);
     let start = 0;
-    for (let at = 0; at < joined.length; at += 1) {
-      if (joined[at] !== 0x0a) continue;
-      const end = at > start && joined[at - 1] === 0x0d ? at - 1 : at;
-      this.record(utf8.decode(joined.subarray(start, end)));
+    for (let at = 0; at < chunk.length; at += 1) {
+      if (chunk[at] !== 0x0a) continue;
+      const parts = chunk.subarray(start, at);
+      const whole = this.chunks.length === 0 ? parts : joinBytes([...this.chunks, parts]);
+      this.chunks = [];
+      this.recordBytes(whole);
       start = at + 1;
     }
-    this.buffer = joined.subarray(start);
+    if (start < chunk.length) this.chunks.push(chunk.subarray(start));
+  }
+
+  /** A record's bytes, without the CR of CRLF framing: LF is the only record end. */
+  private recordBytes(bytes: Uint8Array): void {
+    const ended = bytes.length > 0 && bytes[bytes.length - 1] === 0x0d;
+    this.record(utf8.decode(ended ? bytes.subarray(0, bytes.length - 1) : bytes));
   }
 
   private record(line: string): void {
@@ -478,6 +524,8 @@ export class PiRpc {
   }
 
   private apply(event: PiRpcRecord): void {
+    // once the child is gone its state is final: a record that arrives late cannot make it live again
+    if (this.gone) return;
     const next = reducePiEvent(this.current, event);
     if (next === this.current) return;
     this.current = next;
@@ -487,11 +535,13 @@ export class PiRpc {
   }
 
   private exited(code: number | null): void {
+    if (this.gone) return;
     this.ending = true;
     const error = new Error(`pi exited (${code ?? "signal"})`);
     for (const { reject } of this.pending.values()) reject(error);
     this.pending.clear();
     this.apply({ type: "exit" });
+    this.gone = true;
     for (const listener of this.exitListeners) {
       try { listener(code); } catch (thrown) { this.log(`exit listener: ${describe(thrown)}`); }
     }
