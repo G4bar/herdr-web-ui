@@ -11,7 +11,7 @@
  * card polls, and each poll must name the same dialog, while the request after it must not.
  */
 import { createHash } from "node:crypto";
-import type { InteractivePrompt, PiNativeUiAnswer, PiNativeUiRequest, PromptAnswer } from "../shared/protocol.ts";
+import type { InteractivePrompt, PiNativeState, PiNativeUiAnswer, PiNativeUiRequest, PromptAnswer } from "../shared/protocol.ts";
 
 /** The card's id for one request: stable across polls, another for pi's next dialog. */
 export function nativePromptId(requestId: string): string {
@@ -21,6 +21,17 @@ export function nativePromptId(requestId: string): string {
 /** When pi gives up on `request` by itself (epoch ms), or null when it waits for as long as it takes. */
 export function nativeDeadline(request: PiNativeUiRequest): number | null {
   return request.timeout === undefined || request.receivedAt === undefined ? null : request.receivedAt + request.timeout;
+}
+
+/**
+ * The dialog pi still waits on, or null once it gave up on it at its own timeout: pi sends no
+ * record for that, so the state keeps the request until something else replaces it.
+ */
+export function liveDialog(state: PiNativeState): PiNativeUiRequest | null {
+  const request = state.uiRequest;
+  if (request === null) return null;
+  const deadline = nativeDeadline(request);
+  return deadline !== null && Date.now() > deadline ? null : request;
 }
 
 /**

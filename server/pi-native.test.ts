@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { PiNativeState } from "../shared/protocol.ts";
+import type { PiNativeState, PiNativeUiAnswer, PiNativeUiRequest } from "../shared/protocol.ts";
 import { initialPiNativeState } from "./pi-rpc.ts";
 import type { PiRpcOptions } from "./pi-rpc.ts";
 import { PiNativeError, PiNativeRegistry, PiNeedsTrustError, type PiNativeChild, type PiNativeOptions } from "./pi-native.ts";
@@ -12,9 +12,12 @@ import { PiNativeError, PiNativeRegistry, PiNeedsTrustError, type PiNativeChild,
 class FakeChild implements PiNativeChild {
   state: PiNativeState;
   readonly calls: { type: string }[] = [];
+  readonly answers: { id: string; answer: PiNativeUiAnswer }[] = [];
   closed = false;
   /** a child that leaves instead of answering the first get_state */
   exitOnGetState = false;
+  /** a child whose stdin is gone: an answer cannot be written to it */
+  refuseRespond = false;
   private readonly stateListeners = new Set<(state: PiNativeState) => void>();
   private readonly exitListeners = new Set<(code: number | null) => void>();
 
@@ -35,7 +38,14 @@ class FakeChild implements PiNativeChild {
     return {};
   }
 
-  respond(): void {}
+  respond(id: string, answer: PiNativeUiAnswer): boolean {
+    if (this.refuseRespond) return false;
+    this.answers.push({ id, answer });
+    // as pi's own: the dialog stops pending the moment the answer goes back
+    this.state = { ...this.state, uiRequest: null };
+    this.notify();
+    return true;
+  }
 
   close(): Promise<void> { this.closed = true; return Promise.resolve(); }
 
@@ -65,6 +75,12 @@ class FakeChild implements PiNativeChild {
     this.state = { ...this.state, mode: "lost" };
     this.notify();
     for (const listener of this.exitListeners) listener(code);
+  }
+
+  /** pi asks a dialog: the state the registry holds says so */
+  asks(dialog: PiNativeUiRequest): void {
+    this.state = { ...this.state, uiRequest: dialog };
+    this.notify();
   }
 
   private notify(): void {
@@ -335,5 +351,30 @@ describe("PiNativeRegistry lost and hand-back", () => {
     const h = setup();
     await expect(h.registry.handBack("w:p1")).rejects.toBeInstanceOf(PiNativeError);
     expect(h.calls).toEqual([]);
+  });
+});
+
+describe("PiNativeRegistry dialogs", () => {
+  it("answers the dialog pi waits on, and stops waiting for it", async () => {
+    const h = setup();
+    await h.registry.takeover("w:p1");
+    const child = h.children[0]!;
+    child.asks({ id: "req-7", method: "confirm", title: "Clear session?" });
+    expect(h.registry.state("w:p1")?.uiRequest).toMatchObject({ id: "req-7" });
+    h.registry.respond("w:p1", "req-7", { confirmed: true });
+    expect(child.answers).toEqual([{ id: "req-7", answer: { confirmed: true } }]);
+    expect(h.registry.state("w:p1")?.uiRequest).toBeNull();
+  });
+
+  it("keeps the dialog waiting when the answer could not be written to pi", async () => {
+    const h = setup();
+    await h.registry.takeover("w:p1");
+    const child = h.children[0]!;
+    child.asks({ id: "req-7", method: "confirm", title: "Clear session?" });
+    child.refuseRespond = true;
+    expect(() => h.registry.respond("w:p1", "req-7", { confirmed: true })).toThrow(PiNativeError);
+    expect(child.answers).toEqual([]);
+    // pi is still blocked on it: the card must not have been taken as answered
+    expect(h.registry.state("w:p1")?.uiRequest).toMatchObject({ id: "req-7" });
   });
 });

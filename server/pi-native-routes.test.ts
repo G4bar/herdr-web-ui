@@ -17,7 +17,7 @@ function control(overrides: Partial<PiNativeControl> = {}): PiNativeControl {
     state: () => null,
     sessionFile: () => null,
     call: async () => ({}),
-    respond: () => undefined,
+    respond: () => true,
     onState: () => () => undefined,
     takeover: async () => initialPiNativeState(),
     handBack: async () => undefined,

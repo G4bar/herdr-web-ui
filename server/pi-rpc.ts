@@ -415,10 +415,14 @@ export class PiRpc {
     });
   }
 
-  /** Answer the dialog pi waits on. It sends no response to this, so nothing is awaited. */
-  respond(id: string, answer: PiNativeUiAnswer): void {
-    this.write({ type: "extension_ui_response", id, ...answer });
+  /**
+   * Answer the dialog pi waits on. It sends no response to this, so nothing is awaited. False: the
+   * child is gone and the answer went nowhere, so the dialog still waits (if pi is still there).
+   */
+  respond(id: string, answer: PiNativeUiAnswer): boolean {
+    if (!this.write({ type: "extension_ui_response", id, ...answer })) return false;
     this.apply({ type: "ui_answered", id });
+    return true;
   }
 
   /**

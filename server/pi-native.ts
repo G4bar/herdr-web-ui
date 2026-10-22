@@ -22,8 +22,8 @@ import { readStateDocument, type StateDocument, writeStateDocument } from "./sta
 export interface PiNativeChild {
   readonly state: PiNativeState;
   call(command: { type: string } & Record<string, unknown>): Promise<unknown>;
-  /** answer the dialog pi waits on; pi sends no response to it */
-  respond(id: string, answer: PiNativeUiAnswer): void;
+  /** answer the dialog pi waits on; pi sends no response to it. False: the child is gone and nothing was sent */
+  respond(id: string, answer: PiNativeUiAnswer): boolean;
   close(): Promise<void>;
   onState(listener: (state: PiNativeState) => void): () => void;
   onExit(listener: (code: number | null) => void): () => void;
@@ -270,12 +270,13 @@ export class PiNativeRegistry implements PiNativeControl {
     return await entry.rpc.call(command);
   }
 
-  /** The answer to the dialog the child waits on: its `extension_ui_response`, and the state stops waiting. */
+  /** The answer to the dialog the child waits on: its `extension_ui_response`, and the state stops waiting.
+   * A child that could not be written to refuses: pi is still blocked, so the card must not claim it was answered. */
   respond(paneId: string, id: string, answer: PiNativeUiAnswer): void {
     const entry = this.panes.get(paneId);
     if (entry === undefined) throw new PiNativeError("not_native", "this pane is not driven by the chat", 404);
     if (entry.rpc === null) throw new PiNativeError("not_connected", "pi in this pane is not connected; reconnect it first", 409);
-    entry.rpc.respond(id, answer);
+    if (!entry.rpc.respond(id, answer)) throw new PiNativeError("not_connected", "the answer could not be sent to pi in this pane", 409);
   }
 
   /** Every change any native pane's state makes, by pane id. Returns the unsubscribe. */

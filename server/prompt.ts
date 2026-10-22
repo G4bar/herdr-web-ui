@@ -16,7 +16,7 @@ import { listPendingQuestionForms, openCodeService, replyOpenCodeForm } from "./
 import { opencodeSessionId } from "./opencode.ts";
 import { registry } from "./dialogs/registry.ts";
 import { type PiNativeControl, PiNativeError } from "./pi-native.ts";
-import { nativeDeadline, nativePromptId, piNativeAnswer, piNativePrompt } from "./pi-native-prompt.ts";
+import { liveDialog, nativePromptId, piNativeAnswer, piNativePrompt } from "./pi-native-prompt.ts";
 import { PI_ASK_HEADER_CAP, PI_ASK_PREVIEW_CAP, RPIV_ASK_FOOTER_LINES, RPIV_ASK_HINT_AT_END_RE, RPIV_ASK_HINT_RE, RPIV_ASK_PROMPT, capped } from "./dialogs/pi-ask.ts";
 import { claudeRewindPanelBelow } from "./dialogs/claude.ts";
 import { ANSI_RE, type AnswerStep, KEY, type OmoAsk, type OpenCodePromptEntry, PI_MODEL_HINT_RE, type ParsedPrompt, SOLID_RULE_RE, cleanLine, findLastIndex, finishPrompt, isDivider, keySteps, navigationKeys, normalizeText, parsedByPublicPrompt, publicPrompt, wrapped } from "./dialogs/shared.ts";
@@ -1675,10 +1675,8 @@ function promptChanged(): Response {
  * (another one replaced it, or pi gave up on it at its own timeout) is `prompt_changed`, never sent.
  */
 function answerNativePrompt(piNative: PiNativeControl, body: PromptAnswer, state: PiNativeState, log: { matched: boolean }): Response {
-  const dialog = state.uiRequest;
+  const dialog = liveDialog(state);
   if (dialog === null || nativePromptId(dialog.id) !== body.prompt_id) return promptChanged();
-  const deadline = nativeDeadline(dialog);
-  if (deadline !== null && Date.now() > deadline) return promptChanged();
   log.matched = true;
   const mapped = piNativeAnswer(dialog, body);
   if ("invalid" in mapped) return badRequest("invalid_answer", mapped.invalid);
@@ -1738,8 +1736,9 @@ export async function handlePromptRequest(request: Request, url: URL, options: P
       // the same dialog's for as long as pi waits on it.
       const native = options.piNative?.state(paneId) ?? null;
       if (native !== null) {
+        const dialog = liveDialog(native);
         return jsonResponse({
-          prompt: native.uiRequest === null ? null : piNativePrompt(native.uiRequest),
+          prompt: dialog === null ? null : piNativePrompt(dialog),
           suggestion: null,
           restored: null,
         } satisfies PanePromptResponse);

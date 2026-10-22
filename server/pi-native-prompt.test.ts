@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test";
 import type { PanePromptResponse, PiNativeState, PiNativeUiAnswer, PiNativeUiRequest, PromptAnswer } from "../shared/protocol.ts";
 import type { PiNativeControl } from "./pi-native.ts";
+import { PiNativeError } from "./pi-native.ts";
 import { nativeDeadline, nativePromptId, piNativeAnswer, piNativePrompt } from "./pi-native-prompt.ts";
 import { initialPiNativeState } from "./pi-rpc.ts";
 import { handlePromptRequest } from "./prompt.ts";
@@ -10,12 +11,12 @@ import { handlePromptRequest } from "./prompt.ts";
 
 const paneId = "w:p1";
 
-function control(state: PiNativeState | null, answers: { id: string; answer: PiNativeUiAnswer }[] = []): PiNativeControl {
+function control(state: PiNativeState | null, answers: { id: string; answer: PiNativeUiAnswer }[] = [], onRespond?: () => void): PiNativeControl {
   return {
     state: () => state,
     sessionFile: () => null,
     call: async () => ({}),
-    respond: (_paneId, id, answer) => { answers.push({ id, answer }); },
+    respond: (_paneId, id, answer) => { if (onRespond) onRespond(); answers.push({ id, answer }); },
     onState: () => () => undefined,
     takeover: async () => initialPiNativeState(),
     handBack: async () => undefined,
@@ -120,6 +121,11 @@ describe("the prompt route for a native pane", () => {
     expect((await getPrompt(control(nativeState(null)))).prompt).toBeNull();
   });
 
+  it("serves none for a dialog pi has already given up on", async () => {
+    const expired = dialog({ timeout: 1, receivedAt: Date.now() - 5_000 });
+    expect((await getPrompt(control(nativeState(expired)))).prompt).toBeNull();
+  });
+
   it("answers over RPC by the request pi named, not by the card's id", async () => {
     const answers: { id: string; answer: PiNativeUiAnswer }[] = [];
     const response = await answer(control(nativeState(dialog()), answers), { prompt_id: nativePromptId("req-7"), option_index: 0 });
@@ -150,5 +156,16 @@ describe("the prompt route for a native pane", () => {
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: { code: string } }).error.code).toBe("invalid_answer");
     expect(answers).toEqual([]);
+  });
+
+  it("keeps the dialog waiting when the answer could not be written to pi", async () => {
+    const answers: { id: string; answer: PiNativeUiAnswer }[] = [];
+    const registry = control(nativeState(dialog()), answers, () => { throw new PiNativeError("not_connected", "the answer could not be sent to pi in this pane", 409); });
+    const response = await answer(registry, { prompt_id: nativePromptId("req-7"), option_index: 0 });
+    expect(response.status).toBe(409);
+    expect(((await response.json()) as { error: { code: string } }).error.code).toBe("prompt_changed");
+    expect(answers).toEqual([]);
+    // pi is still blocked on it: the card is not taken as answered
+    expect((await getPrompt(registry)).prompt?.id).toBe(nativePromptId("req-7"));
   });
 });
