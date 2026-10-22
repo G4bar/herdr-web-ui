@@ -32,7 +32,7 @@ import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
-import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
+import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, toolRowState, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { ToolCardHead } from "./ToolCardHead.tsx";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
@@ -450,7 +450,7 @@ function ToolImages({ paneId, part }: { paneId: string; part: ToolPartType }) {
  * verb table knows reads as verb + object, and its id moves to the title and the opened detail;
  * any other keeps its id in front, as the agent names it.
  */
-function WorkRow({ paneId, part, stateKey, live, waiting, pending, expandRows }: { paneId: string; part: ToolPartType; stateKey: string; live: boolean; waiting: boolean; pending: boolean; expandRows: boolean }) {
+export function WorkRow({ paneId, part, stateKey, live, waiting, last, expandRows }: { paneId: string; part: ToolPartType; stateKey: string; live: boolean; waiting: boolean; last: boolean; expandRows: boolean }) {
   const t = useT();
   // the files an output names open from it ("saved /tmp/shot/t0.png")
   const openFile = useContext(OpenFileContext);
@@ -460,10 +460,10 @@ function WorkRow({ paneId, part, stateKey, live, waiting, pending, expandRows }:
   const summary = part.arguments_omitted ? t("Arguments omitted (too large)") : todoCallSummary(part) ?? part.summary;
   // reads the call's input: once per call, not on every poll of the transcript
   const { verb, narration, object, server } = useMemo(() => workRowLabel({ name: part.name, input: part.input }, summary), [part.name, part.input, summary]);
-  // a call whose result has not arrived: running while the turn runs, stopped once it ended
-  const running = pending && live && !waiting;
-  const stopped = pending && !live;
-  const cardState = part.error ? "failed" : pending ? (live ? "running" : "stopped") : "done";
+  // a call whose result has not arrived: running while the turn runs, stopped once it ended without one
+  const cardState = toolRowState(part, { live, last });
+  const running = cardState === "running" && !waiting;
+  const stopped = cardState === "stopped";
   // the list is the answer of a todo call: its raw text would say it twice
   const output = isTodoTool(part.name) && parseTodoAnswer(part.output) !== null ? "" : whole.text ?? part.output;
   return <div className={`work-row${part.error ? " is-error" : ""}${stopped ? " is-stopped" : ""}`}>
@@ -497,11 +497,6 @@ function ThinkingRow({ text, stateKey, streaming, expandRows }: { text: string; 
     </button>
     {open && <div className="work-row-detail work-thinking-text">{text}</div>}
   </div>;
-}
-
-/** A call whose result has not arrived: Pi records the call, its result is a later entry. */
-function hasNoResult(part: ToolPartType): boolean {
-  return part.output.length === 0 && part.output_ref === undefined && part.error !== true;
 }
 
 /**
@@ -549,7 +544,7 @@ function WorkBlockView({ paneId, parts, duration, live, waiting, defaultOpen, sh
       <div className="work-block-rows" onFocus={keepOpen} onClick={keepOpen}>{visible.map((part, index) =>
         part.kind === "thinking" ? <ThinkingRow key={index} stateKey={`thinking:${parts.indexOf(part)}`} text={part.text} streaming={live && !waiting && index === visible.length - 1} expandRows={expandRows} />
           : part.kind === "text" ? <div key={index} className="work-narration"><Markdown>{part.text}</Markdown></div>
-            : part.kind === "tool" ? <WorkRow key={index} stateKey={`tool:${parts.indexOf(part)}`} paneId={paneId} part={part} live={live} waiting={waiting} pending={index === lastTool && hasNoResult(part)} expandRows={expandRows} /> : null)}
+            : part.kind === "tool" ? <WorkRow key={index} stateKey={`tool:${parts.indexOf(part)}`} paneId={paneId} part={part} live={live} waiting={waiting} last={index === lastTool} expandRows={expandRows} /> : null)}
       </div>
     </AnimatedHeight>
   </section>;
@@ -1768,7 +1763,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} showThinking={settings.showThinking} expandRows={settings.expandToolOutput} skills={skillMatcher} userSkills={skillMatcher} outcome={row.outcome} outcomeActions={outcomeActions}
         onRewindInTerminal={turn.role === "user" ? rewindInTerminal : null} />
     </RenderBoundary>;
-  }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agentStatus, settings.showThinking, skillMatcher, outcomeActions, rewindInTerminal]);
+  }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agentStatus, settings.showThinking, settings.expandToolOutput, skillMatcher, outcomeActions, rewindInTerminal]);
   // displayPaneTitle falls back to the pane id for a pane with nothing else to call it
   const shownTitle = title?.trim() ?? "";
   const logLabel = shownTitle !== "" && shownTitle !== paneId ? t("conversation of {pane}", { pane: shownTitle }) : t("Conversation");

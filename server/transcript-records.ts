@@ -320,6 +320,7 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
           const tool = pending.get(result.id);
           if (!tool) continue;
           pending.delete(result.id);
+          delete tool.result_missing;
           trimOutput(tool, result.text, result.id);
           if (result.error) tool.error = true;
           if (toolImages && result.images.length > 0) {
@@ -371,7 +372,8 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
               output: "",
             };
             turn.parts.push(part);
-            if (typeof b.id === "string") pending.set(b.id, part);
+            // the transcript holds no result for the call yet: only a result entry can clear this
+            if (typeof b.id === "string") { part.result_missing = true; pending.set(b.id, part); }
           }
           // unsupported transcript parts are intentionally ignored
         }

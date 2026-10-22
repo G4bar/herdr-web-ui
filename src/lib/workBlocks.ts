@@ -117,6 +117,31 @@ export function isLiveWorkTurn(turn: ConversationTurn, last: boolean, status?: s
   return last && turn.role === "assistant" && (status === "working" || status === "blocked");
 }
 
+export type ToolRowState = "running" | "done" | "failed" | "stopped";
+
+/**
+ * Whether the call's result has not arrived. Pi records the call and its result as two entries, so
+ * its transcript says which calls are still without one (`result_missing`, set by the parser); the
+ * other agents' transcripts do not, and an empty output reads the same whether the result was empty
+ * or never came. There, only the block's last call (`last`) can still be without a result.
+ */
+export function hasNoResult(part: ToolPart, last = true): boolean {
+  if (part.result_missing === true) return true;
+  return last && part.output.length === 0 && part.output_ref === undefined && part.error !== true;
+}
+
+/**
+ * A tool row's state: running while its call has no result and the turn runs, stopped only when the
+ * transcript says the result never arrived and the turn has ended. A call that merely returned
+ * nothing is done: a finished turn painted stopped over every empty output would be a lie.
+ */
+export function toolRowState(part: ToolPart, { live, last }: { live: boolean; last: boolean }): ToolRowState {
+  if (part.error === true) return "failed";
+  if (!hasNoResult(part, last)) return "done";
+  if (live) return "running";
+  return part.result_missing === true ? "stopped" : "done";
+}
+
 /** The rows a work block draws: skills are chips beside the prompt, thinking only when shown. */
 export function visibleWorkParts(parts: ConversationPart[], showThinking: boolean): ConversationPart[] {
   return parts.filter((part) => part.kind !== "skill" && (showThinking || part.kind !== "thinking"));

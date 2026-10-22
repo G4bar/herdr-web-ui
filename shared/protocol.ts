@@ -565,6 +565,9 @@ export type ConversationPart =
     skill?: SkillActivity;
     /** set when `output` was cut: the call's id, for GET /api/pane/conversation/tool-output, and the whole output's length */
     output_ref?: string; output_size?: number;
+    /** the transcript holds no result for the call: it ran when the entry was read, or an abort left it
+     * without one. `output` is "" whether a result was empty or never came, so only this says which. */
+    result_missing?: true;
     /** images the call returned (pi reads a picture into the result); same fetch as a user image */
     images?: { media_type: string; ref: string }[];
   }

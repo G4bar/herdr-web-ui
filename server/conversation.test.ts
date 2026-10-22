@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import * as fs from "node:fs";
 import type { HerdrPane, SessionSnapshot } from "../shared/protocol.ts";
-import { MAX_TURNS, parseOmpTranscript } from "./transcript-records.ts";
+import { MAX_TURNS, createOmpTranscriptParser, parseOmpTranscript } from "./transcript-records.ts";
 import { toolVerb } from "../src/lib/toolVerbs.ts";
 import type { ConversationTurn } from "../shared/protocol.ts";
 import { parseAgyTranscript } from "./agy.ts";
@@ -1095,6 +1095,19 @@ describe("parseOmpTranscript", () => {
       JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: `m${i}` }] } }),
     ).join("\n");
     expect(parseOmpTranscript(many).length).toBe(MAX_TURNS);
+  });
+
+  it("says which calls are still without a result, and forgets it once one lands", () => {
+    const call = JSON.stringify({ type: "message", message: { role: "assistant", content: [
+      { type: "toolCall", id: "t", name: "bash", arguments: { command: "sleep 9" } },
+    ] } });
+    // an abort leaves the call without a result: the part carries the fact, `output` is "" either way
+    const parser = createOmpTranscriptParser();
+    parser.write(call);
+    expect(parser.snapshot()[0]?.parts[0]).toMatchObject({ kind: "tool", name: "bash", result_missing: true });
+    // an empty result is still a result
+    parser.write(JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: "t", content: [{ type: "text", text: "" }] } }));
+    expect(parser.snapshot()[0]?.parts[0]).not.toHaveProperty("result_missing");
   });
 });
 

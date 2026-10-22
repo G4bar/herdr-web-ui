@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { formatWorkDuration, splitTurn, visibleWorkParts, workFailed, workStartsOpen, workSummary } from "./workBlocks.ts";
+import { formatWorkDuration, hasNoResult, splitTurn, toolRowState, visibleWorkParts, workFailed, workStartsOpen, workSummary } from "./workBlocks.ts";
 import type { ConversationPart } from "../../shared/protocol.ts";
 
 const tool = (name: string, summary = name): Extract<ConversationPart, { kind: "tool" }> => ({ kind: "tool", name, summary, input: "{}", output: "" });
@@ -161,5 +161,28 @@ describe("visibleWorkParts", () => {
     expect(visibleWorkParts([skill, thinking("hm")], false)).toEqual([]);
     expect(visibleWorkParts([skill, thinking("hm")], true)).toEqual([thinking("hm")]);
     expect(visibleWorkParts([tool("read")], false)).toEqual([tool("read")]);
+  });
+});
+
+describe("toolRowState", () => {
+  // the work block names its last call: only that one can still be without a result
+  const last = { live: false, last: true };
+
+  it("is done, not stopped, for a finished call that merely returned nothing", () => {
+    expect(toolRowState(tool("bash"), last)).toBe("done");
+    expect(hasNoResult(tool("bash"))).toBe(true);
+  });
+
+  it("runs a call without a result while the turn runs, and stops it only when the transcript says so", () => {
+    expect(toolRowState(tool("bash"), { ...last, live: true })).toBe("running");
+    expect(toolRowState({ ...tool("bash"), result_missing: true }, last)).toBe("stopped");
+    expect(toolRowState({ ...tool("bash"), result_missing: true }, { ...last, live: true })).toBe("running");
+  });
+
+  it("reads a result that arrived as done, and a failure as failed", () => {
+    expect(toolRowState({ ...tool("bash"), output: "ok" }, last)).toBe("done");
+    // only the last call of a transcript that cannot say: an earlier empty one is done, never running
+    expect(toolRowState(tool("bash"), { live: true, last: false })).toBe("done");
+    expect(toolRowState({ ...tool("bash"), error: true }, last)).toBe("failed");
   });
 });
