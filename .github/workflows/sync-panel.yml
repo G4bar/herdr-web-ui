@@ -1,0 +1,38 @@
+# Fork maintenance: bring upstream into `panel`, the branch this fork builds from. A merge, not a
+# rebase: panel carries this fork's own commits and nothing is PRed upstream. A conflict fails the
+# run (GitHub notifies the owner) and leaves panel as it was; resolve it locally and the next run
+# carries on.
+name: sync-panel
+on:
+  schedule:
+    - cron: "43 4 * * *"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: sync-panel
+  cancel-in-progress: false
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: panel
+          fetch-depth: 0
+      - name: Merge upstream main into panel and push
+        env:
+          SYNC_KEY: ${{ secrets.SYNC_DEPLOY_KEY }}
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SYNC_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/devswha/ovis.git
+          git remote add fork git@github.com:G4bar/herdr-web-ui.git
+          git fetch upstream main
+          git merge --no-edit upstream/main
+          git push fork HEAD:panel
