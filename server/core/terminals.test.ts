@@ -2,7 +2,8 @@ import { afterEach, expect, it, mock } from "bun:test";
 import { ReplayBuffer } from "../output-window.ts";
 import { connectionData, type Client } from "./connections.ts";
 import type { PaneAttachment } from "./terminal-process.ts";
-import type { ServerMessage } from "../../shared/protocol.ts";
+import { initialPiNativeState } from "../pi-rpc.ts";
+import type { PiNativeState, ServerMessage } from "../../shared/protocol.ts";
 
 let attachment: PaneAttachment;
 mock.module("./terminal-process.ts", () => ({
@@ -11,7 +12,7 @@ mock.module("./terminal-process.ts", () => ({
     spawnAttachment: async (pane: string) => { attachments.set(pane, attachment); return attachment; },
   }),
 }));
-const { createTerminalRegistry } = await import("./terminals.ts");
+const { createNativeStatePush, createTerminalRegistry } = await import("./terminals.ts");
 
 afterEach(() => mock.restore());
 
@@ -67,3 +68,50 @@ for (const readOnly of [false, true]) {
     expect(frames.filter((frame) => frame.type === "input-ready")).toEqual([]);
   });
 }
+
+function watching(interested: boolean): { client: Client; frames: ServerMessage[] } {
+  const frames: ServerMessage[] = [];
+  const data = connectionData({ deviceId: undefined, readOnly: false });
+  data.attached.set("p", { keepSize: false });
+  if (interested) data.conversationInterests.add("p");
+  const client = {
+    data, readyState: WebSocket.OPEN,
+    getBufferedAmount: () => 0, send: (text: string) => { frames.push(JSON.parse(text)); return text.length; },
+    close() {},
+  } as unknown as Client;
+  return { client, frames };
+}
+
+it("pushes a native pane's state to the clients watching it, throttled, with a mode change at once", async () => {
+  const watcher = watching(true);
+  const attachedOnly = watching(false);
+  let state: PiNativeState = { ...initialPiNativeState(), mode: "native" };
+  const push = createNativeStatePush({ clients: new Set([watcher.client, attachedOnly.client]), state: () => state, intervalMs: 10 });
+
+  // once on watch, and only to a client interested in this pane's conversation
+  push.watch("p");
+  expect(watcher.frames).toEqual([{ type: "pi-native-state", pane_id: "p", state }]);
+  expect(attachedOnly.frames).toEqual([]);
+
+  // a stream of same-mode changes reaches the client once per interval, carrying the newest state
+  state = { ...state, thinkingLevel: "high" };
+  push.changed("p", state);
+  state = { ...state, isStreaming: true };
+  push.changed("p", state);
+  const settled = async (frames: number): Promise<void> => {
+    const deadline = Date.now() + 1_000;
+    while (watcher.frames.length < frames) {
+      if (Date.now() > deadline) throw new Error(`expected ${frames} pushes, got ${watcher.frames.length}`);
+      await Bun.sleep(5);
+    }
+  };
+  await settled(2);
+  expect(watcher.frames[1]).toMatchObject({ state: { thinkingLevel: "high", isStreaming: true } });
+
+  // a mode change leaves at once: the chat's own controls hang on it
+  state = { ...state, mode: "lost", isStreaming: false };
+  push.changed("p", state);
+  expect(watcher.frames).toHaveLength(3);
+  expect(watcher.frames[2]).toMatchObject({ state: { mode: "lost" } });
+  push.forget("p");
+});

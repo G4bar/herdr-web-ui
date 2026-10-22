@@ -48,7 +48,7 @@ import { isOmoProcess, omoProcessIdentity, omoSessionForPane, processEnviron } f
 import { processStartedAt } from "./process-start.ts";
 import { ompHeldTranscript } from "./omp.ts";
 import { forgetOpencodeRead, forgetOpencodeState, OPENCODE_IMAGE_REF, opencodeConversation, opencodeDatabasePath, opencodeImage, opencodeReadKey, opencodeSessionId, opencodeToolOutput } from "./opencode.ts";
-import { piTranscriptInStore, piTranscriptPath, unwrittenSession } from "./pi.ts";
+import { defaultPiSessionDir, piTranscriptInStore, piTranscriptPath, unwrittenSession } from "./pi.ts";
 import { cmdTranscriptPath } from "./cmd.ts";
 import { defaultDevinDbPath, DevinHistoryUnavailable, devinConversation, forgetDevinState } from "./devin.ts";
 import { forgetGrokState, grokProjection, grokToolOutput, parseGrokTranscript, GrokUnavailable } from "./grok.ts";
@@ -1556,6 +1556,23 @@ export type NativeTranscript =
   | ResolvedTranscript
   | { source: "devin-transcript"; path: string; session: string; cwd: string };
 
+/** The session file of a pane the bridge drives itself (server/pi-native.ts), or null for any other pane. */
+export type NativePaneSession = (paneId: string) => string | null;
+
+/**
+ * A native pane's session as the chat reads it. The bridge's child is no herdr agent, so herdr names no
+ * session for it (`piTranscriptPath` would find none): the registry does. Its file is kept inside pi's
+ * store, and one the child has not written yet is a conversation not begun, not a failure.
+ */
+function nativePiTranscript(sessionFile: string): ResolvedTranscript {
+  const store = defaultPiSessionDir();
+  const unwritten = unwrittenSession(sessionFile, store);
+  if (unwritten !== null) throw new ConversationNotStarted(unwritten.id, "pi-transcript", unwritten.path);
+  const inStore = piTranscriptInStore(sessionFile, store);
+  if (inStore === null) throw new ConversationUnavailable("no_session_path");
+  return { source: "pi-transcript", path: inStore };
+}
+
 /**
  * The store a pane's transcript lives in. herdr's agent label follows the
  * pane's foreground processes, so an omo pane reads as `pi` while it waits and
@@ -1564,8 +1581,11 @@ export type NativeTranscript =
  * label: omo's own store is read only when omo is really running
  * in that pane, never on a matching cwd alone.
  */
-async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: string, panes?: HerdrPane[], opencodeDb?: string, hermesHome?: string, grokHome?: string): Promise<ResolvedTranscript> {
+async function resolveTranscript(pane: HerdrPane, cwd: string, codexHome?: string, panes?: HerdrPane[], opencodeDb?: string, hermesHome?: string, grokHome?: string, nativeSession?: NativePaneSession): Promise<ResolvedTranscript> {
   const paneId = pane.pane_id;
+  // a pane the bridge drives over RPC has no herdr agent in front: its registry names the session file
+  const native = nativeSession?.(paneId) ?? null;
+  if (native !== null) return nativePiTranscript(native);
   let agent = resolveAgent(pane).agent ?? "";
   // herdr names no agent for this pane: a session report an earlier agent left behind says
   // nothing about what runs now, so the pane's processes are asked before it is followed.
@@ -1700,7 +1720,7 @@ export function devinSessionForPane(pane: HerdrPane, panes: HerdrPane[], argv: s
 }
 
 /** Resolve the native live file or database session without reading conversation turns. */
-export async function paneTranscript(paneId: string, codexHome?: string, snapshot?: SessionSnapshot, devinDbPath?: string, opencodeDb?: string, hermesHome?: string, grokHome?: string): Promise<NativeTranscript> {
+export async function paneTranscript(paneId: string, codexHome?: string, snapshot?: SessionSnapshot, devinDbPath?: string, opencodeDb?: string, hermesHome?: string, grokHome?: string, nativeSession?: NativePaneSession): Promise<NativeTranscript> {
   const panes = (snapshot ?? await sessionSnapshot()).panes;
   const pane = panes.find((candidate) => candidate.pane_id === paneId);
   if (pane === undefined) throw new ConversationUnavailable("pane_not_found");
@@ -1725,7 +1745,7 @@ export async function paneTranscript(paneId: string, codexHome?: string, snapsho
     }
   }
 
-  return resolveTranscript(pane, pane.cwd, codexHome, panes, opencodeDb, hermesHome, grokHome);
+  return resolveTranscript(pane, pane.cwd, codexHome, panes, opencodeDb, hermesHome, grokHome, nativeSession);
 }
 
 /**
@@ -1741,7 +1761,7 @@ export async function paneTranscript(paneId: string, codexHome?: string, snapsho
  * shows the pages before it. A cursor from another file throws HistoryChanged.
  * `opencodeDb` is OpenCode's store, unset where OpenCode itself would find it.
  */
-export async function paneConversation(paneId: string, codexHome?: string, page: ConversationPage = {}, devinDbPath?: string, opencodeDb?: string, hermesHome?: string, grokHome?: string): Promise<RecognizedConversation> {
+export async function paneConversation(paneId: string, codexHome?: string, page: ConversationPage = {}, devinDbPath?: string, opencodeDb?: string, hermesHome?: string, grokHome?: string, nativeSession?: NativePaneSession): Promise<RecognizedConversation> {
   const snapshot = await sessionSnapshot();
   let resolved: NativeTranscript;
 
@@ -1773,7 +1793,7 @@ export async function paneConversation(paneId: string, codexHome?: string, page:
   };
 
   try {
-    resolved = await paneTranscript(paneId, codexHome, snapshot, devinDbPath, opencodeDb, hermesHome, grokHome);
+    resolved = await paneTranscript(paneId, codexHome, snapshot, devinDbPath, opencodeDb, hermesHome, grokHome, nativeSession);
     launchedAgents.forget(paneId);
   } catch (error) {
     if (error instanceof ConversationNotStarted) { launchedAgents.forget(paneId); return await onNotStarted(error); }

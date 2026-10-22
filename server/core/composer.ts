@@ -13,6 +13,7 @@ import { mirrorInput } from "../mirror-input.ts";
 import { paneAgentOf, resolveAgent, typingRoots } from "../pane-context.ts";
 import { paneProcessRoots } from "../conversation.ts";
 import type { CommandSend } from "../outcome.ts";
+import type { PiNativeControl } from "../pi-native.ts";
 import { processStartedAt } from "../process-start.ts";
 import { isOmpProcess, ompAgentDir } from "../omp.ts";
 import { processEnviron } from "../omo.ts";
@@ -225,7 +226,7 @@ export async function freeClaudeBox(paneId: string, working: boolean, authorize:
 }
 
 export function createSubmitText({ options, lastTyped, attachments, terminalAttach, SUBMIT_DEADLINE_MS, TYPED_SETTLE_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS, SUBMIT_DELAY_MS }: {
-  options: { submitDeadlineMs?: number; submitDelayMs?: number; ompReportPollMs?: number; ompStartupMs?: number; openCodeStateDir?: string };
+  options: { submitDeadlineMs?: number; submitDelayMs?: number; ompReportPollMs?: number; ompStartupMs?: number; openCodeStateDir?: string; piNative?: PiNativeControl };
   lastTyped: Map<string, number>;
   attachments: ReadonlyMap<string, { cols: number }>;
   terminalAttach: () => Promise<boolean>;
@@ -235,6 +236,7 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
   DRAFT_CLEAR_POLL_MS: number;
   SUBMIT_DELAY_MS: number;
 }) {
+  const piNative = options.piNative;
   /**
    * Types a composer message and submits it, with its own Enter after the text: arriving
    * in the same chunk as the paste, a TUI still busy with it (turning an image path into
@@ -259,7 +261,18 @@ export function createSubmitText({ options, lastTyped, attachments, terminalAtta
    * the box still shows what they saw or reads empty. Never typed instead of agent.prompt.
    */
   async function submitText(paneId: string, text: string, payload: string, arrivedAt: number, fromTerminal = false, authorize: () => void = () => {},
-    clearDraft?: string, confirmation?: { draft: string | null; identity: PendingIdentity; box?: string | null }, sendAnyway = false): Promise<void> {
+    clearDraft?: string, confirmation?: { draft: string | null; identity: PendingIdentity; box?: string | null }, sendAnyway = false,
+    deliver?: "steer" | "followUp"): Promise<void> {
+    // A pane the bridge drives over Pi's RPC mode has no terminal input to type into: the message goes
+    // to its child, which holds it as a steer (the default) or a follow-up while a turn runs. Nothing
+    // is typed, so nothing waits for the pane's keyboard or its paste mode.
+    const native = piNative?.state(paneId) ?? null;
+    if (piNative && native !== null) {
+      authorize();
+      if (native.mode === "lost") throw new HerdrError("pi_lost", "Pi in this pane is not connected; reconnect it in the chat first");
+      await piNative.call(paneId, { type: "prompt", message: text, ...(native.isStreaming ? { streamingBehavior: deliver ?? "steer" } : {}) });
+      return;
+    }
     let clearedDraft = false;
     let command: ReturnType<typeof prepareCommandSend>;
     let beforeScreen: string | undefined;

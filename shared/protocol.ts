@@ -1437,8 +1437,8 @@ export interface PushPayload {
  *    | pty-ack {pane_id, stream_id, offset} | secret {id, pane_id, prompt, secret}
  *    | watch {pane_id, cols, rows} | unwatch {pane_id} | conversation-watch {pane_id, enabled}
  *  Server -> client frames: snapshot | pty-data | pty-exit | pane-geometry | role-ack
- *    | pane-status | pane-exited | session-changed | conversation-changed | secret-result
- *    | watch-data | watch-end | error
+ *    | pane-status | pane-exited | session-changed | conversation-changed | pi-native-state
+ *    | secret-result | watch-data | watch-end | error
  *
  *  attach {flow_control:"ack"} opts into per-subscription output credit.
  *  pty-data.flow carries a stream_id and cumulative UTF-8 payload offset;
@@ -1512,8 +1512,10 @@ export type ClientMessage =
    * shares the first outcome for 60 seconds after settlement. `resend_generation` defaults to 0;
    * only a definitive no-input refusal permits the next attempt generation. Not with `send_anyway`:
    * that combination returns invalid_delivery before reserving or replaying an ID. No `clear_draft`.
-   * Older peers ignore it. */
-  | { type: "submit"; id: number; pane_id: string; text: string; payload: string; typed?: boolean; delivery?: "immediate" | "queue" | "hold"; clear_draft?: string; send_anyway?: true; resend_id?: string; resend_generation?: number }
+   * Older peers ignore it.
+   * `deliver` (feature "pi-native"): a native Pi pane holds the message while a turn runs, as a
+   * steer (`steer`, the default) or after the turn (`followUp`). It is ignored while Pi is idle. */
+  | { type: "submit"; id: number; pane_id: string; text: string; payload: string; typed?: boolean; delivery?: "immediate" | "queue" | "hold"; clear_draft?: string; send_anyway?: true; resend_id?: string; resend_generation?: number; deliver?: "steer" | "followUp" }
   | { type: "pending-action"; id: number; pane_id: string; pending_id: string; action: "steer" | "discard"; resend_generation?: number }
   /** Masked input: revalidate the visible prompt, type literal bytes + Enter immediately.
    * Never queued, retried, sent through agent.prompt, or echoed in a result. */
@@ -1571,7 +1573,7 @@ export interface ClientConnectionTrace {
 }
 
 /** What a server supports beyond the base protocol, listed in its first snapshot; older bridges list nothing. */
-export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "ping";
+export type ServerFeature = "submit" | "pending-input" | "pending-hold" | "secret-input" | "input-ready" | "take-over" | "watch" | "conversation-watch" | "pi-native" | "ping";
 
 export type ServerMessage =
   /** `connection`: this socket's id on the PC, for a create request's `first_message_connection`; older bridges send none */
@@ -1610,6 +1612,10 @@ export type ServerMessage =
   | { type: "pane-status"; pane_id: string; agent_status: AgentStatus; finish_id?: number; finish_epoch?: string; /** a pane's running background tasks (OmO's, or a Claude Code pane's subagents and commands), when the frame is about them: it changes no status */ background_tasks?: number; /** every frame says it: absent, the pane does not wait on its turn's background work */ background_wait?: true; /** a pane's plan, when the frame is about it (null: it keeps none now); it changes no status */ plan?: PlanSummary | null }
   /** Native transcript invalidation for an interested attached pane; signature is opaque, not a REST ETag. Refetch the existing conversation endpoint. */
   | { type: "conversation-changed"; pane_id: string; signature: string }
+  /** A pane the bridge drives over Pi's RPC mode (feature "pi-native"), for the same interested attached
+   * panes as conversation-changed: the live state reduced from Pi's event stream, pushed whole, at most a
+   * few times a second (`state.mode` changes at once). Never the transcript: that stays the session file. */
+  | { type: "pi-native-state"; pane_id: string; state: PiNativeState }
   /** a pane's process exited (pushed even when nobody is attached to it) */
   | { type: "pane-exited"; pane_id: string }
   /** session structure changed (pane created/closed): refetch /api/session */

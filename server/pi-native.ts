@@ -60,6 +60,12 @@ export class PiNeedsTrustError extends Error {
 /** What a route needs of the registry; tests put a fake here. */
 export interface PiNativeControl {
   state(paneId: string): PiNativeState | null;
+  /** the session file the pane's child writes, written or still to come; null for a pane it does not drive */
+  sessionFile(paneId: string): string | null;
+  /** one command over the pane's child, answered with Pi's `data` or the refusal it threw */
+  call(paneId: string, command: { type: string } & Record<string, unknown>): Promise<unknown>;
+  /** every change a native pane's state makes, by pane id; returns the unsubscribe */
+  onState(listener: (paneId: string, state: PiNativeState) => void): () => void;
   takeover(paneId: string, options?: { trust?: PiTrust }): Promise<PiNativeState>;
   handBack(paneId: string): Promise<void>;
   reconnect(paneId: string): Promise<PiNativeState>;
@@ -242,6 +248,19 @@ export class PiNativeRegistry implements PiNativeControl {
   /** The pane for the transcript reader: even a lost one still names the session the chat reads. */
   paneOf(paneId: string): PiNativePane | null {
     return this.panes.get(paneId) ?? null;
+  }
+
+  /** The session file a native pane's child holds; a pane the chat does not drive has none. */
+  sessionFile(paneId: string): string | null {
+    return this.panes.get(paneId)?.sessionFile ?? null;
+  }
+
+  /** One command over the pane's child. A lost child has nothing to answer it, so typists reconnect first. */
+  async call(paneId: string, command: { type: string } & Record<string, unknown>): Promise<unknown> {
+    const entry = this.panes.get(paneId);
+    if (entry === undefined) throw new PiNativeError("not_native", "this pane is not driven by the chat", 404);
+    if (entry.rpc === null) throw new PiNativeError("not_connected", "pi in this pane is not connected; reconnect it first", 409);
+    return await entry.rpc.call(command);
   }
 
   /** Every change any native pane's state makes, by pane id. Returns the unsubscribe. */

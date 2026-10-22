@@ -3,10 +3,11 @@
  * still being created, the one whose process is still exiting, and the output each client is
  * sent. The pane's agent conversation is watched while a client that shows the pane asks for it.
  */
-import type { ClientMessage, ServerMessage } from "../../shared/protocol.ts";
+import type { ClientMessage, PiNativeState, ServerMessage } from "../../shared/protocol.ts";
 import { ConversationMonitor } from "../conversation-monitor.ts";
 import { type SightingFacts, sightingFacts } from "../input-guard.ts";
 import { OUTPUT_HARD_BYTES, OUTPUT_HIGH_BYTES, OUTPUT_STALL_MS, OutputWindow, wireBytes } from "../output-window.ts";
+import type { PiNativeControl } from "../pi-native.ts";
 import { type Client, connectionOf, send } from "./connections.ts";
 import { ATTACH_HELD_MESSAGE, createSpawnAttachment, type PaneAttachment } from "./terminal-process.ts";
 
@@ -17,6 +18,8 @@ const REPAINT_COALESCE_MS = 50;
  * and a joiner in the cooldown is served by the next one instead (a flapping phone, quick switches).
  */
 const REPAINT_MIN_INTERVAL_MS = 1000;
+/** The least time between two pushes of one native pane's state: Pi's event stream is a stream, not a repaint. */
+const NATIVE_PUSH_MS = 250;
 
 type Frame<T extends ClientMessage["type"]> = Extract<ClientMessage, { type: T }>;
 
@@ -51,11 +54,64 @@ export function validGeometry(cols: unknown, rows: unknown): { cols: number; row
 }
 
 /**
+ * The native Pi state of the panes a connection watches, pushed whole to the clients watching each
+ * pane's conversation. A changed state waits for the trailing edge of the interval, so a stream of
+ * events costs a few frames a second; a mode change (connecting, native, lost) leaves at once, since
+ * the chat's own controls hang on it.
+ */
+export function createNativeStatePush({ clients, state, intervalMs = NATIVE_PUSH_MS }: {
+  clients: Set<Client>;
+  state: (paneId: string) => PiNativeState | null;
+  /** how often one pane's changed state goes out at most; tests shorten it */
+  intervalMs?: number;
+}) {
+  /** the last state each pane's watchers were sent: a different mode reaches them at once */
+  const sent = new Map<string, PiNativeState>();
+  /** the panes whose push waits on their interval */
+  const waiting = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function push(paneId: string): void {
+    const current = state(paneId);
+    if (!current) return;
+    sent.set(paneId, current);
+    for (const client of clients) {
+      if (connectionOf(client).closing || client.readyState !== WebSocket.OPEN) continue;
+      if (client.data.attached.has(paneId) && client.data.conversationInterests.has(paneId)) {
+        send(client, { type: "pi-native-state", pane_id: paneId, state: current });
+      }
+    }
+  }
+
+  return {
+    changed(paneId: string, next: PiNativeState): void {
+      if (sent.get(paneId)?.mode !== next.mode) {
+        clearTimeout(waiting.get(paneId));
+        waiting.delete(paneId);
+        push(paneId);
+        return;
+      }
+      if (waiting.has(paneId)) return;
+      const timer = setTimeout(() => { waiting.delete(paneId); push(paneId); }, intervalMs);
+      timer.unref();
+      waiting.set(paneId, timer);
+    },
+    /** once, for a connection that has just started watching the pane */
+    watch(paneId: string): void { push(paneId); },
+    /** a pane with no attachment left sends nothing more */
+    forget(paneId: string): void {
+      clearTimeout(waiting.get(paneId));
+      waiting.delete(paneId);
+      sent.delete(paneId);
+    },
+  };
+}
+
+/**
  * The server's terminals. `stopped` is read through a getter, as `stop()` sets it later, and `end`
  * is called through one, as the connections are built after the terminals.
  */
 export function createTerminalRegistry({ options, clients, stopped, terminalAttach, holdFor, heldRetry, retryFor, relookupFor, holdPending, holdPendingPane, attached, inputReady, end }: {
-  options: { codexHome?: string; devinDbPath?: string; opencodeDb?: string; hermesHome?: string; grokHome?: string };
+  options: { codexHome?: string; devinDbPath?: string; opencodeDb?: string; hermesHome?: string; grokHome?: string; piNative?: PiNativeControl; nativePushMs?: number };
   clients: Set<Client>;
   stopped: () => boolean;
   terminalAttach: () => Promise<boolean>;
@@ -84,7 +140,15 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
         send(client, { type: "conversation-changed", pane_id: paneId, signature });
       }
     }
-  }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome);
+  }, options.codexHome, options.devinDbPath, options.opencodeDb, options.hermesHome, options.grokHome,
+  (paneId) => options.piNative?.sessionFile(paneId) ?? null);
+
+  const native = createNativeStatePush({
+    clients,
+    state: (paneId) => options.piNative?.state(paneId) ?? null,
+    intervalMs: options.nativePushMs,
+  });
+  options.piNative?.onState((paneId, next) => native.changed(paneId, next));
 
   function releaseConversation(paneId: string): void {
     for (const client of clients) {
@@ -153,6 +217,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
     if (!attachment) return;
     for (const member of attachment.clients) holdPending(member, paneId);
     attachments.delete(paneId);
+    native.forget(paneId);
     clearTimeout(attachment.retry);
     clearTimeout(attachment.relookup);
     clearTimeout(attachment.repaint);
@@ -409,6 +474,7 @@ export function createTerminalRegistry({ options, clients, stopped, terminalAtta
         }
         client.data.conversationInterests.add(message.pane_id);
         conversations.watch(message.pane_id);
+        native.watch(message.pane_id);
       } else {
         client.data.conversationInterests.delete(message.pane_id);
         releaseConversation(message.pane_id);

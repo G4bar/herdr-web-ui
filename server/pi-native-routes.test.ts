@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
 import type { PiNativeState } from "../shared/protocol.ts";
 import { initialPiNativeState } from "./pi-rpc.ts";
@@ -12,6 +15,9 @@ const paneId = "w:p1";
 function control(overrides: Partial<PiNativeControl> = {}): PiNativeControl {
   return {
     state: () => null,
+    sessionFile: () => null,
+    call: async () => ({}),
+    onState: () => () => undefined,
     takeover: async () => initialPiNativeState(),
     handBack: async () => undefined,
     reconnect: async () => initialPiNativeState(),
@@ -111,5 +117,77 @@ describe("native Pi routes", () => {
     expect(await (await call("/api/pi/handback", post("/api/pi/handback", { pane_id: paneId }), registry))?.json()).toEqual({ ok: true });
     expect(handed).toBe(paneId);
     expect(await (await call("/api/pi/reconnect", post("/api/pi/reconnect", { pane_id: paneId }), registry))?.json()).toMatchObject({ mode: "native" });
+  });
+});
+
+describe("native Pi RPC passthrough", () => {
+  const rpc = (command: unknown, registry: PiNativeControl = control()) => call("/api/pi/rpc", post("/api/pi/rpc", { pane_id: paneId, command }), registry);
+
+  it("refuses a command outside the allowlist, its unknown fields and a value outside its own set", async () => {
+    for (const command of [{ type: "get_messages" }, { type: "prompt", message: "hi", images: [] }, { type: "abort", id: "x" }, { type: "nonsense" }, { nope: 1 }, "abort"]) {
+      const response = await rpc(command);
+      expect(response?.status).toBe(400);
+      expect(await response?.json()).toMatchObject({ error: { code: "invalid_command" } });
+    }
+    // a field of another kind, and a closed set's own spelling
+    expect((await rpc({ type: "set_auto_compaction", enabled: "yes" }))?.status).toBe(400);
+    expect((await rpc({ type: "prompt", message: "hi", streamingBehavior: "later" }))?.status).toBe(400);
+  });
+
+  it("passes an allowed command unchanged and answers with Pi's data", async () => {
+    const seen: { paneId: string; command: Record<string, unknown> }[] = [];
+    const registry = control({ call: async (id, command) => { seen.push({ paneId: id, command }); return { levels: ["off", "high"] }; } });
+    const response = await rpc({ type: "get_available_thinking_levels" }, registry);
+    expect(await response?.json()).toEqual({ levels: ["off", "high"] });
+    expect(seen).toEqual([{ paneId, command: { type: "get_available_thinking_levels" } }]);
+  });
+
+  it("answers a child's refusal with 502 and Pi's own words", async () => {
+    const registry = control({ call: async () => { throw new Error("pi has exited"); } });
+    const response = await rpc({ type: "get_state" }, registry);
+    expect(response?.status).toBe(502);
+    expect(await response?.json()).toMatchObject({ error: { code: "command_failed", message: "pi has exited" } });
+  });
+
+  it("switches only to a session file inside Pi's store", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ovis-pi-switch-"));
+    const before = process.env["PI_CODING_AGENT_SESSION_DIR"];
+    process.env["PI_CODING_AGENT_SESSION_DIR"] = dir;
+    const session = join(dir, "session.jsonl");
+    writeFileSync(session, "{}\n");
+    try {
+      const outside = await rpc({ type: "switch_session", sessionPath: join(dir, "..", "elsewhere.jsonl") });
+      expect(outside?.status).toBe(400);
+      expect(await outside?.json()).toMatchObject({ error: { code: "invalid_session_path" } });
+      const seen: Record<string, unknown>[] = [];
+      const registry = control({ call: async (_id, command) => { seen.push(command); return { cancelled: false }; } });
+      expect((await rpc({ type: "switch_session", sessionPath: session }, registry))?.status).toBe(200);
+      expect(seen).toEqual([{ type: "switch_session", sessionPath: session }]);
+    } finally {
+      if (before === undefined) delete process.env["PI_CODING_AGENT_SESSION_DIR"];
+      else process.env["PI_CODING_AGENT_SESSION_DIR"] = before;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("exports to a temp file of the server's own, never the path a client names, and streams it back", async () => {
+    const seen: Record<string, unknown>[] = [];
+    const registry = control({
+      call: async (_id, command) => {
+        seen.push(command);
+        writeFileSync(command["outputPath"] as string, "<html>session</html>");
+        return { path: command["outputPath"] };
+      },
+    });
+    const response = await rpc({ type: "export_html", outputPath: "/tmp/client-chosen.html" }, registry);
+    expect(response?.status).toBe(200);
+    expect(response?.headers.get("content-type")).toContain("text/html");
+    expect(response?.headers.get("content-disposition")).toContain("attachment");
+    expect(await response?.text()).toBe("<html>session</html>");
+    const written = seen[0]?.["outputPath"] as string;
+    expect(written).not.toBe("/tmp/client-chosen.html");
+    expect(written.startsWith(tmpdir())).toBe(true);
+    // the temp file leaves with the answer
+    expect(() => readFileSync(written)).toThrow();
   });
 });

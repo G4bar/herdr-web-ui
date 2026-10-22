@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { statSync } from "node:fs";
 import type { SessionSnapshot } from "../shared/protocol.ts";
-import { ConversationNotStarted, ConversationUnavailable, paneTranscript, type NativeTranscript } from "./conversation.ts";
+import { ConversationNotStarted, ConversationUnavailable, paneTranscript, type NativePaneSession, type NativeTranscript } from "./conversation.ts";
 import { agyDatabasePath } from "./agy.ts";
 import { sessionSnapshot } from "./herdr/client.ts";
 
@@ -38,6 +38,7 @@ export class ConversationMonitor {
     private readonly opencodeDb?: string,
     private readonly hermesHome?: string,
     private readonly grokHome?: string,
+    private readonly nativeSession?: NativePaneSession,
   ) {}
 
   get size(): number { return this.panes.size; }
@@ -108,7 +109,7 @@ export class ConversationMonitor {
       this.snapshot ??= sessionSnapshot().finally(() => { this.snapshot = null; });
       const snapshot = await this.snapshot;
       if (this.panes.get(paneId) !== state) return;
-      const transcript = await paneTranscript(paneId, this.codexHome, snapshot, this.devinDbPath, this.opencodeDb, this.hermesHome, this.grokHome);
+      const transcript = await paneTranscript(paneId, this.codexHome, snapshot, this.devinDbPath, this.opencodeDb, this.hermesHome, this.grokHome, this.nativeSession);
       if (this.panes.get(paneId) !== state) return;
       state.transcript = transcript;
       present = this.read(paneId, state);

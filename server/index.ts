@@ -264,7 +264,7 @@ export function createServer(
   const piNative = new PiNativeRegistry({ stateDir: options.stateDir ?? defaultStateDir() });
   const draftTimer = setInterval(() => openCodeState.prune(), 60_000);
   draftTimer.unref();
-  const core = createCore({ options: { ...options, openCodeState, orderSequence }, devices, usage, usageLogin, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS });
+  const core = createCore({ options: { ...options, openCodeState, orderSequence, piNative }, devices, usage, usageLogin, TYPED_SETTLE_MS, KEY_SETTLE_MS, SUBMIT_DEADLINE_MS, SUBMIT_DELAY_MS, DRAFT_CLEAR_WAIT_MS, DRAFT_CLEAR_POLL_MS });
   const { sidecar, serialize, push, logPushError, omo, claudeAgents, plans, clientSnapshot, machines, broadcastAll, collector, queueFirstMessage } = core;
   // started after createCore's Node probe (server/pty/sidecar.ts), which can hold the thread up to 3 s: that wait
   // would count against the read's own 2.5 s limit, and a read cut short leaves the owner unknown for 5 minutes
@@ -683,7 +683,7 @@ export function createServer(
         }
       }
 
-      const paneResponse = await handlePaneRequest(request, url, pathname, options);
+      const paneResponse = await handlePaneRequest(request, url, pathname, { ...options, piNative });
       if (paneResponse) return paneResponse;
 
       if (pathname === "/api/pane/omo-tasks") {

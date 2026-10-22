@@ -142,6 +142,7 @@ describe("demo transport", () => {
     "/api/pane/selection": "copying a selection across screens: not part of the demo (listed when this guard was added)",
     "/api/pi/handback": "the demo runs no Pi, so no pane is ever native to hand back (listed when this guard was added)",
     "/api/pi/reconnect": "the demo runs no Pi, so no native pane is ever lost (listed when this guard was added)",
+    "/api/pi/rpc": "the demo runs no Pi, so no pane has a child to pass an RPC command to (listed when this guard was added)",
     "/api/pi/state": "the demo runs no Pi, so it reads no native state (listed when this guard was added)",
     "/api/pi/takeover": "Take over in chat: the demo runs no Pi in any pane to take over (listed when this guard was added)",
     "/api/preferences": "a 404 turns shared-settings sync off, as on an older server (fetchPreferences, src/lib/api.ts)",

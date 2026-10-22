@@ -557,6 +557,10 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
         result(false, "invalid_delivery", "Use a held-copy resend id only for an immediate chat message");
         return;
       }
+      if (message.deliver !== undefined && message.deliver !== "steer" && message.deliver !== "followUp") {
+        result(false, "invalid_delivery", "deliver must be steer or followUp");
+        return;
+      }
       if (message.resend_generation !== undefined && (!Number.isSafeInteger(message.resend_generation) || message.resend_generation < 0 || message.resend_id === undefined)) {
         result(false, "invalid_delivery", "A resend generation must be a nonnegative integer with a held-copy id");
         return;
@@ -609,7 +613,7 @@ export function createPendingDelivery({ options, clients, attachments, sight, se
           // held while this waited its turn (the attach was refused after the check above)
           if (attachments.get(message.pane_id)?.held) throw new HerdrError("attach_held", ATTACH_HELD_MESSAGE);
           return submitText(message.pane_id, message.text, message.payload, arrivedAt, message.typed === true, () => authorizeSocket(client), message.clear_draft,
-            draftConfirmations.get(client)?.get(message.pane_id), message.send_anyway === true);
+            draftConfirmations.get(client)?.get(message.pane_id), message.send_anyway === true, message.deliver);
         };
         if (message.resend_id !== undefined) {
           authorizeSocket(client);

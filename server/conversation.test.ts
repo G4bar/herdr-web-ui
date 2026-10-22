@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from "bun:test";
 import { Database } from "bun:sqlite";
-import { appendFileSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { appendFileSync, copyFileSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
 import * as fs from "node:fs";
@@ -15,7 +15,7 @@ import * as herdr from "./herdr/client.ts";
 import { forgetHistoryChains } from "./codex.ts";
 import { DevinHistoryChanged } from "./devin.ts";
 import * as omo from "./omo.ts";
-import { ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
+import { ConversationNotStarted, ConversationUnavailable, devinSessionForPane, forgetPaneTranscriptState, forgetTranscriptState, gjcTranscriptPath, HistoryChanged, isDevinProcess, isOmoProcess, ompSessionStore, paneConversation, paneProcessRoots, paneTranscript, parseClaudeTranscript, unwrapPastes, transcriptImage, transcriptPage, transcriptToolOutput } from "./conversation.ts";
 
 it("labels only Claude's explicit end_turn text as final-answer evidence", () => {
   const entry = (stop_reason: string | null) => JSON.stringify({ type: "assistant", message: { role: "assistant", stop_reason, content: [{ type: "text", text: "Answer" }] } });
@@ -2125,5 +2125,57 @@ describe("a Codex pane that reported no session yet", () => {
       const page = await paneConversation(pane.pane_id, join(root, ".codex"), { before: "x:0" }).catch((error: unknown) => error);
       expect((page as ConversationUnavailable).screen).toBeUndefined();
     } finally { snapshot.mockRestore(); rpc.mockRestore(); read.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); }
+  });
+});
+
+describe("a native Pi pane's transcript", () => {
+  // The bridge's own child is no herdr agent, so herdr names no session for the pane: the registry does.
+  const records = [
+    { type: "message", id: "u1", parentId: null, timestamp: "2026-10-01T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "fix the crash" }] } },
+    { type: "message", id: "a1", parentId: "u1", timestamp: "2026-10-01T00:00:01.000Z", message: { role: "assistant", model: "qwen-test", provider: "test", content: [{ type: "text", text: "Guarded." }] } },
+  ];
+  const pane = { pane_id: "w:p1", cwd: "/synthetic/work" } as HerdrPane;
+
+  it("comes from the session file the RPC child holds", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-pi-native-transcript-"));
+    const store = join(root, "sessions");
+    mkdirSync(store);
+    const file = join(store, "session.jsonl");
+    writeFileSync(file, `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+    const before = process.env["PI_CODING_AGENT_SESSION_DIR"];
+    process.env["PI_CODING_AGENT_SESSION_DIR"] = store;
+    const snapshot = spyOn(herdr, "sessionSnapshot").mockResolvedValue({ panes: [pane] } as SessionSnapshot);
+    const native = () => file;
+    try {
+      expect(await paneTranscript(pane.pane_id, undefined, { panes: [pane] } as SessionSnapshot, undefined, undefined, undefined, undefined, native))
+        .toEqual({ source: "pi-transcript", path: realpathSync(file) });
+      const conversation = await paneConversation(pane.pane_id, undefined, {}, undefined, undefined, undefined, undefined, native);
+      expect(conversation.source).toBe("pi-transcript");
+      expect(conversation.turns.map((turn) => turn.role)).toEqual(["user", "assistant"]);
+    } finally { snapshot.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); }
+    if (before === undefined) delete process.env["PI_CODING_AGENT_SESSION_DIR"];
+    else process.env["PI_CODING_AGENT_SESSION_DIR"] = before;
+  });
+
+  it("is a conversation not begun while Pi has written nothing, and no transcript outside Pi's store", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-pi-native-unwritten-"));
+    const store = join(root, "sessions");
+    mkdirSync(store);
+    const outside = join(root, "elsewhere.jsonl");
+    writeFileSync(outside, "{}\n");
+    const before = process.env["PI_CODING_AGENT_SESSION_DIR"];
+    process.env["PI_CODING_AGENT_SESSION_DIR"] = store;
+    const snapshot = { panes: [pane] } as SessionSnapshot;
+    try {
+      const unwritten = await paneTranscript(pane.pane_id, undefined, snapshot, undefined, undefined, undefined, undefined, () => join(store, "session.jsonl"))
+        .catch((error: unknown) => error);
+      expect(unwritten).toBeInstanceOf(ConversationNotStarted);
+      expect(unwritten).toMatchObject({ source: "pi-transcript", identity: join(realpathSync(store), "session.jsonl") });
+      const escaped = await paneTranscript(pane.pane_id, undefined, snapshot, undefined, undefined, undefined, undefined, () => outside)
+        .catch((error: unknown) => error);
+      expect(escaped).toBeInstanceOf(ConversationUnavailable);
+    } finally { forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); }
+    if (before === undefined) delete process.env["PI_CODING_AGENT_SESSION_DIR"];
+    else process.env["PI_CODING_AGENT_SESSION_DIR"] = before;
   });
 });
