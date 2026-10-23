@@ -1,4 +1,4 @@
-import type { PiNativeModel, PiNativeNotice, PiNativeState, PiNativeStats, PiNativeUiAnswer, PiNativeUiRequest } from "../shared/protocol.ts";
+import type { HerdsmanAgent, PiNativeHerdsman, PiNativeModel, PiNativeNotice, PiNativeState, PiNativeStats, PiNativeUiAnswer, PiNativeUiRequest } from "../shared/protocol.ts";
 import { PI_NOTICE_MESSAGE_CHARS } from "../shared/protocol.ts";
 
 /**
@@ -67,6 +67,11 @@ const DIALOG_METHODS = ["select", "confirm", "input", "editor"] as const;
 const NOTICE_TYPES = ["info", "warning", "error"] as const;
 /** pi puts a widget over the editor unless the extension asks for below it. */
 const WIDGET_PLACEMENTS = ["aboveEditor", "belowEditor"] as const;
+/** the status key Herdsman publishes its delegation tree under */
+const HERDSMAN_KEY = "herdsman";
+const HERDSMAN_AGENT_STATES = ["starting", "running", "asks", "finished", "failed", "stale", "closed"] as const;
+/** the snapshot version this bridge reads; a newer one is kept out rather than half-read */
+const HERDSMAN_SNAPSHOT_VERSION = 1;
 
 /** The model cut to what the chat shows: pi's registry states the rest. */
 function modelOf(value: unknown): PiNativeModel | null {
@@ -153,6 +158,63 @@ function tailOf(output: string): string[] {
   return output.split("\n").map((line) => line.slice(0, TAIL_LINE_CHARS)).slice(-TAIL_LINES);
 }
 
+/** One agent of the snapshot, or null when its entry names no label or a state this bridge cannot draw. */
+function agentOf(value: unknown): HerdsmanAgent | null {
+  const entry = object(value);
+  const label = text(entry["label"]);
+  const state = oneOf(entry["state"], HERDSMAN_AGENT_STATES);
+  if (label === null || label === "" || state === null) return null;
+  const agent: HerdsmanAgent = { label, definition: text(entry["definition"]) ?? "unknown", parent: text(entry["parent"]), state };
+  // an unknown field is left absent rather than filled: the roster draws a missing count as unknown,
+  // a zeroed one as a real zero
+  const task = text(entry["task"]);
+  if (task !== null) agent.task = task;
+  const activity = stringList(entry["activity"]);
+  if (activity.length > 0) agent.activity = activity;
+  const answer = text(entry["answer"]);
+  if (answer !== null) agent.answer = answer;
+  const resultRef = text(entry["resultRef"]);
+  if (resultRef !== null) agent.resultRef = resultRef;
+  const counts = ["toolCalls", "tokens", "startedAt", "endedAt"] as const;
+  for (const key of counts) {
+    const count = entry[key];
+    if (typeof count === "number" && Number.isFinite(count)) agent[key] = count;
+  }
+  const question = object(entry["question"]);
+  const questionText = text(question["text"]);
+  if (questionText !== null) agent.question = { text: questionText, files: stringList(question["files"]) };
+  if (entry["resumable"] === true) agent.resumable = true;
+  return agent;
+}
+
+/** A malformed snapshot is reported once: an extension that rewrites a broken status must not fill the log. */
+let herdsmanMalformedLogged = false;
+let herdsmanVersionLogged = false;
+
+/**
+ * The `herdsman` status as the roster reads it: null when the extension cleared it, the snapshot when
+ * it is readable, and `undefined` when the previous snapshot stands (a record mid-write, or a version
+ * this bridge does not know).
+ */
+function herdsmanOf(statusText: string | null): PiNativeHerdsman | null | undefined {
+  if (statusText === null) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(statusText); } catch {
+    if (!herdsmanMalformedLogged) { herdsmanMalformedLogged = true; console.warn("[pi-rpc] herdsman status is not JSON; keeping the previous snapshot"); }
+    return undefined;
+  }
+  const snapshot = object(parsed);
+  if (snapshot["v"] !== HERDSMAN_SNAPSHOT_VERSION) {
+    if (!herdsmanVersionLogged) { herdsmanVersionLogged = true; console.warn(`[pi-rpc] herdsman snapshot version ${String(snapshot["v"])} is not ${HERDSMAN_SNAPSHOT_VERSION}; keeping the previous snapshot`); }
+    return undefined;
+  }
+  if (!Array.isArray(snapshot["agents"])) {
+    if (!herdsmanMalformedLogged) { herdsmanMalformedLogged = true; console.warn("[pi-rpc] herdsman snapshot has no agents array; keeping the previous snapshot"); }
+    return undefined;
+  }
+  return { agents: snapshot["agents"].map(agentOf).filter((agent): agent is HerdsmanAgent => agent !== null), capabilities: stringList(snapshot["capabilities"]) };
+}
+
 /** The state of a child that has not said anything yet. */
 export function initialPiNativeState(): PiNativeState {
   return {
@@ -168,6 +230,7 @@ export function initialPiNativeState(): PiNativeState {
     retry: null,
     uiRequest: null,
     statuses: {},
+    herdsman: null,
     widgets: {},
     notices: [],
     editorText: null,
@@ -288,6 +351,12 @@ function reduceUiRequest(state: PiNativeState, event: PiRpcRecord): PiNativeStat
       const key = text(event["statusKey"]);
       if (key === null) return state;
       const statusText = text(event["statusText"]);
+      // Herdsman's status is a JSON snapshot, and the client draws agents rather than a string: the
+      // raw text is parsed here and never reaches a browser
+      if (key === HERDSMAN_KEY) {
+        const herdsman = herdsmanOf(statusText);
+        return herdsman === undefined || herdsman === state.herdsman ? state : { ...state, herdsman };
+      }
       const statuses = { ...state.statuses };
       if (statusText === null) delete statuses[key];
       else statuses[key] = statusText;

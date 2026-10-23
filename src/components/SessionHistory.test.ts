@@ -37,7 +37,7 @@ const SESSIONS: SessionHistoryRow[] = [
 const piState = (overrides: Partial<PiNativeState> = {}): PiNativeState => ({
   mode: "native", model: null, thinkingLevel: "high", isStreaming: false, isCompacting: false,
   steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", queue: { steering: [], followUp: [] },
-  stats: null, retry: null, uiRequest: null, statuses: {}, widgets: {}, notices: [], editorText: null,
+  stats: null, retry: null, uiRequest: null, statuses: {}, herdsman: null, widgets: {}, notices: [], editorText: null,
   toolTails: {}, sessionFile: SESSIONS[0]!.path, sessionName: "Retry budget", ...overrides,
 });
 

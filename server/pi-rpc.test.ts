@@ -276,10 +276,48 @@ describe("reducePiEvent", () => {
     ]);
     expect(fireAndForget.uiRequest).toBeNull();
     expect(fireAndForget.notices).toEqual([{ id: "f1", type: "error", message: "Command blocked" }]);
-    expect(fireAndForget.statuses).toEqual({ herdsman: "2 agents" });
+    expect(fireAndForget.statuses).toEqual({});
     expect(fireAndForget.widgets).toEqual({});
     expect(fireAndForget.editorText).toBe("prefilled");
     expect(consumeEditorText(fireAndForget).editorText).toBeNull();
+  });
+
+  it("parses the Herdsman snapshot and keeps it out of the status lines", () => {
+    const state = reducePiEvent(initialPiNativeState(), { type: "extension_ui_request", id: "h1", method: "setStatus", statusKey: "herdsman", statusText: JSON.stringify({
+      v: 1,
+      capabilities: ["steer", "interrupt"],
+      agents: [
+        { label: "scout_ui", definition: "scout", parent: null, state: "running", task: "Map the chat UI", activity: ["Read ChatView.tsx"], toolCalls: 14, tokens: 38000, startedAt: 1000 },
+        { label: "child", definition: "implementer", parent: "scout_ui", state: "asks", question: { text: "Which file?", files: ["a.ts"] } },
+        { label: "bogus", state: "exploded" },
+        { definition: "scout", state: "running" },
+      ],
+    }) });
+    expect(state.statuses).toEqual({});
+    expect(state.herdsman?.capabilities).toEqual(["steer", "interrupt"]);
+    expect(state.herdsman?.agents).toEqual([
+      { label: "scout_ui", definition: "scout", parent: null, state: "running", task: "Map the chat UI", activity: ["Read ChatView.tsx"], toolCalls: 14, tokens: 38000, startedAt: 1000 },
+      { label: "child", definition: "implementer", parent: "scout_ui", state: "asks", question: { text: "Which file?", files: ["a.ts"] } },
+    ]);
+  });
+
+  it("leaves unknown optional agent fields absent, and only an explicit true is resumable", () => {
+    const state = reducePiEvent(initialPiNativeState(), { type: "extension_ui_request", id: "h2", method: "setStatus", statusKey: "herdsman", statusText: JSON.stringify({
+      v: 1,
+      agents: [{ label: "scout_ui", state: "stale", activity: [], toolCalls: "many", resumable: "yes" }],
+    }) });
+    expect(state.herdsman).toEqual({ agents: [{ label: "scout_ui", definition: "unknown", parent: null, state: "stale" }], capabilities: [] });
+    expect("activity" in state.herdsman!.agents[0]!).toBe(false);
+  });
+
+  it("keeps the previous Herdsman snapshot when the status cannot be read, and clears it when it goes", () => {
+    const snapshot = reducePiEvent(initialPiNativeState(), { type: "extension_ui_request", id: "h3", method: "setStatus", statusKey: "herdsman", statusText: JSON.stringify({ v: 1, agents: [{ label: "scout_ui", state: "running" }] }) });
+    for (const statusText of ["{oops", JSON.stringify({ v: 2, agents: [] }), JSON.stringify({ v: 1, agents: "none" })]) {
+      const kept = reducePiEvent(snapshot, { type: "extension_ui_request", id: "h4", method: "setStatus", statusKey: "herdsman", statusText });
+      // the same object, so no listener is told about a record that changed nothing
+      expect(kept).toBe(snapshot);
+    }
+    expect(reducePiEvent(snapshot, { type: "extension_ui_request", id: "h5", method: "setStatus", statusKey: "herdsman" }).herdsman).toBeNull();
   });
 
   it("keeps a widget's lines where the extension put them", () => {

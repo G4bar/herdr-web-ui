@@ -812,6 +812,36 @@ export interface PiNativeRetry {
   errorMessage: string;
 }
 
+/** Where one Herdsman agent stands, as the extension publishes it. */
+export type HerdsmanAgentState = "starting" | "running" | "asks" | "finished" | "failed" | "stale" | "closed";
+
+/** One agent of the delegation tree: the fields it must state, then the ones that come when known. */
+export interface HerdsmanAgent {
+  label: string;
+  definition: string;
+  /** the delegating agent's label, null for the lead */
+  parent: string | null;
+  state: HerdsmanAgentState;
+  task?: string;
+  /** what the agent is doing right now; it sends this for a running agent only, never when idle */
+  activity?: string[];
+  toolCalls?: number;
+  tokens?: number;
+  startedAt?: number;
+  endedAt?: number;
+  question?: { text: string; files: string[] };
+  answer?: string;
+  resultRef?: string;
+  /** the history may be continued after this agent finished; absent unless true */
+  resumable?: boolean;
+}
+
+/** The delegation tree a session publishes as its `herdsman` status, parsed on the server. */
+export interface PiNativeHerdsman {
+  agents: HerdsmanAgent[];
+  capabilities: string[];
+}
+
 /**
  * The live state of one pi pane driven over RPC (`server/pi-rpc.ts`), reduced on the server from
  * pi's event stream and pushed whole. It is not the transcript: that stays the session JSONL pi
@@ -834,8 +864,10 @@ export interface PiNativeState {
   /** the retry in flight, null outside one */
   retry: PiNativeRetry | null;
   uiRequest: PiNativeUiRequest | null;
-  /** extension status lines by key. `herdsman` is the roster's own and is never drawn as one */
+  /** extension status lines by key. `herdsman` is the roster's own: it is parsed into `herdsman` and is never drawn as a line */
   statuses: Record<string, string>;
+  /** the Herdsman delegation tree this session publishes as its `herdsman` status, null until it does */
+  herdsman: PiNativeHerdsman | null;
   /** extension widgets by key, each its own lines and its placement over the composer */
   widgets: Record<string, PiNativeWidget>;
   /** newest last, capped */
