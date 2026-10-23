@@ -734,7 +734,7 @@ export function createServer(
 
       if (pathname === SESSION_HISTORY_PATH) {
         setRequestRoute(SESSION_HISTORY_PATH);
-        return handleSessionHistoryRequest(request, url, { readOnly, stores: { codexHome: options.codexHome, opencodeDb: options.opencodeDb, hermesHome: options.hermesHome } });
+        return handleSessionHistoryRequest(request, url, { readOnly, stores: { codexHome: options.codexHome, opencodeDb: options.opencodeDb, hermesHome: options.hermesHome }, native: piNative });
       }
 
       const piNativeResponse = await handlePiNativeRequest(request, url, pathname, { registry: piNative });

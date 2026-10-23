@@ -44,7 +44,7 @@ export const SESSION_HISTORY_AGENTS = Object.keys(RESUME_FLAGS) as SessionHistor
 /** Two earlier, fictional sessions of an agent in a demo folder, newest first. */
 export function sessionHistoryRows(agent: SessionHistoryAgent): SessionHistoryRow[] {
   const row = (id: string, title: string, firstMessage: string, started: number, updated: number): SessionHistoryRow =>
-    ({ id, title, firstMessage, startedAt: t(started), updatedAt: t(updated), resume: { argv: [agent, ...RESUME_FLAGS[agent], id] } });
+    ({ id, title, firstMessage, startedAt: t(started), updatedAt: t(updated), path: null, resume: { argv: [agent, ...RESUME_FLAGS[agent], id] } });
   return [
     row(`demo-${agent}-0002`, "Retry budget for the payment client", "Cap the payment client's retries at three and log each one.", 4, 9),
     row(`demo-${agent}-0001`, "Flaky export test", "Why does the export test fail one run in ten?", 0, 3),

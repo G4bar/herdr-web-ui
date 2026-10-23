@@ -155,6 +155,9 @@ export type { Machine, MachineEvent, MachineRoster, PaneTarget, SetupJob, SetupR
  *         one agent in the workspace's folder, newest first, from the agent's own store; at most 50.
  *         First messages are prompt text: a watch-only device gets 403 read_only. 400
  *         missing_workspace_id / invalid_agent, 404 workspace_not_found, 409 no_folder)
+ *  DELETE /api/sessions/history { agent: "pi", path } -> { deleted: string } (the session file itself,
+ *         unlinked only inside Pi's store and only while no pane runs it: 400 invalid_agent /
+ *         missing_path / invalid_session_path, 409 session_live, 404 not_found)
  *  GET    /api/pane/read?pane_id=&source=&format=&lines=  -> { read: PaneReadResult }
  *         (pane.read. `lines` is herdr's uint32: an integer from 0 to 4294967295 written in
  *         plain decimal digits (leading zeros allowed). Left out it is left out of the RPC, and 0
@@ -1676,6 +1679,8 @@ export interface SessionHistoryRow {
   firstMessage: string | null;
   startedAt: string | null;
   updatedAt: string;
+  /** the session file itself, for a store of one file per session (Pi): the chat resumes and deletes by it; null elsewhere */
+  path: string | null;
   resume: { argv: string[] } | null;
 }
 

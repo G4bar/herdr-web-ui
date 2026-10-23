@@ -160,13 +160,14 @@ function iso(value: unknown, unit: "ms" | "s" = "ms"): string | null {
   return null;
 }
 
-function row(agent: SessionHistoryAgent, id: string, fields: { title?: string | null; firstMessage?: string | null; startedAt?: string | null; updatedAt: string }): Row {
+function row(agent: SessionHistoryAgent, id: string, fields: { title?: string | null; firstMessage?: string | null; startedAt?: string | null; updatedAt: string; path?: string | null }): Row {
   return {
     id,
     title: clip(fields.title ?? null, TITLE_CHARS),
     firstMessage: clip(fields.firstMessage ?? null, MESSAGE_CHARS),
     startedAt: fields.startedAt ?? null,
     updatedAt: fields.updatedAt,
+    path: fields.path ?? null,
     resume: SAFE_ID.test(id) ? { argv: RESUME[agent](id) } : null,
   };
 }
@@ -468,7 +469,7 @@ function piFamilyRow(agent: SessionHistoryAgent, scan: Scan, file: Found, cwds: 
       if (message.role === "user") firstMessage = textOf(message.content);
     }
   }
-  return row(agent, id, { title, firstMessage, startedAt: iso(header.timestamp), updatedAt: new Date(file.mtimeMs).toISOString() });
+  return row(agent, id, { title, firstMessage, startedAt: iso(header.timestamp), updatedAt: new Date(file.mtimeMs).toISOString(), path: file.real });
 }
 
 function piFamily(agent: SessionHistoryAgent, sessions: string, folders: readonly string[], cwds: readonly string[], budget: Budget, read: SessionHistoryOptions["readHead"], idFromName = false): Row[] {

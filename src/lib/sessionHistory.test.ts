@@ -8,7 +8,7 @@ const pane = (overrides: Partial<HerdrPane>): HerdrPane => ({
   pane_id: "p1", tab_id: "t1", terminal_id: "term1", workspace_id: "w1", agent: "codex", agent_status: "idle", focused: false, revision: 1, ...overrides,
 }) as HerdrPane;
 const row = (overrides: Partial<SessionHistoryRow> = {}): SessionHistoryRow => ({
-  id: "00000000-0000-4000-8000-000000000002", title: "Retry budget", firstMessage: "Cap the retries", startedAt: null, updatedAt: "2026-09-25T09:09:00.000Z",
+  id: "00000000-0000-4000-8000-000000000002", title: "Retry budget", firstMessage: "Cap the retries", startedAt: null, updatedAt: "2026-09-25T09:09:00.000Z", path: null,
   resume: { argv: ["codex", "resume", "00000000-0000-4000-8000-000000000002"] }, ...overrides,
 });
 

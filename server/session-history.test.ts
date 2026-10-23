@@ -6,7 +6,7 @@ import { dirname, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { SessionHistoryAgent, SessionSnapshot } from "../shared/protocol.ts";
 import { HEAD_BYTES, listSessions, MAX_ENTRIES, MAX_ROWS, MAX_STATS, MAX_WALK, SESSION_HISTORY_AGENTS } from "./session-history.ts";
-import { handleSessionHistoryRequest, workspaceFolder } from "./session-history-routes.ts";
+import { handleSessionHistoryRequest, SESSION_HISTORY_PATH, workspaceFolder, type SessionHistoryRouteOptions } from "./session-history-routes.ts";
 import { claudeProjectDir } from "./claude-store.ts";
 import { codexRolloutPath } from "./codex.ts";
 import rolloutHeaders from "./fixtures/codex-rollout-headers.json";
@@ -1020,6 +1020,14 @@ describe("listSessions", () => {
     writeFileSync(join(piStore(home), "flag.jsonl"), piHeader("--yolo") + piPrompt("flag"));
     expect(listSessions("pi", CWD, { home, env: {} }).map((row) => [row.id, row.resume])).toEqual([["--yolo", null]]);
   });
+
+  it("names each pi session's own file, which the chat resumes and deletes by", () => {
+    const home = newHome();
+    mkdirSync(piStore(home), { recursive: true });
+    const path = join(piStore(home), "session-a.jsonl");
+    writeFileSync(path, piHeader(ID(3)) + piPrompt("a"));
+    expect(listSessions("pi", CWD, { home, env: {} }).map((row) => row.path)).toEqual([realpathSync(path)]);
+  });
 });
 
 const snapshot = (worktree: string | null = null): Pick<SessionSnapshot, "workspaces" | "tabs" | "panes"> => ({
@@ -1068,5 +1076,78 @@ describe("GET /api/sessions/history", () => {
     expect(await codes("workspace_id=w1&agent=bash")).toEqual([400, "invalid_agent"]);
     expect(await codes("agent=codex")).toEqual([400, "missing_workspace_id"]);
     expect(await codes("workspace_id=w9&agent=codex")).toEqual([404, "workspace_not_found"]);
+  });
+});
+
+describe("DELETE /api/sessions/history", () => {
+  /** A pane list as herdr reports it: what a pane holds is `agent_session`, its name is `label`. */
+  const panes = (entries: { pane_id: string; label?: string; agent?: string; holds?: string }[]): Pick<SessionSnapshot, "workspaces" | "tabs" | "panes"> => ({
+    workspaces: [], tabs: [],
+    panes: entries.map(({ holds, ...pane }) => ({
+      tab_id: "t1", workspace_id: "w1", cwd: CWD, ...pane,
+      ...(holds === undefined ? {} : { agent_session: { agent: "pi", kind: "path", source: "herdr:pi", value: holds } }),
+    })),
+  }) as unknown as Pick<SessionSnapshot, "workspaces" | "tabs" | "panes">;
+  const stored = (home: string, name: string): string => {
+    const path = join(piStore(home), name);
+    writeFileSync(path, piHeader(name.replace(/\.jsonl$/, "")) + piPrompt(name));
+    return path;
+  };
+  const remove = (body: unknown, options: SessionHistoryRouteOptions): Promise<Response> => {
+    const url = new URL(`http://localhost${SESSION_HISTORY_PATH}`);
+    return handleSessionHistoryRequest(new Request(url, { method: "DELETE", body: JSON.stringify(body), headers: { "content-type": "application/json" } }), url, options);
+  };
+  const code = async (response: Response): Promise<[number, string]> => [response.status, ((await response.json()) as { error: { code: string } }).error.code];
+
+  it("unlinks an idle Pi session file and nothing else", async () => {
+    const home = newHome();
+    mkdirSync(piStore(home), { recursive: true });
+    const idle = stored(home, "idle.jsonl");
+    const kept = stored(home, "kept.jsonl");
+    const canonicalIdle = realpathSync(idle);
+    const options = { readOnly: false, sessionDir: piStore(home), snapshot: async () => panes([]) };
+    const response = await remove({ agent: "pi", path: idle }, options);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: canonicalIdle });
+    expect(existsSync(idle)).toBe(false);
+    expect(existsSync(kept)).toBe(true);
+  });
+
+  it("refuses a path outside Pi's store, another agent, and a device that may only watch", async () => {
+    const home = newHome();
+    mkdirSync(piStore(home), { recursive: true });
+    const idle = stored(home, "idle.jsonl");
+    const outside = join(root, `outside-${homes}-delete.jsonl`);
+    writeFileSync(outside, piHeader(ID(8)) + piPrompt("outside the store"));
+    const options = { readOnly: false, sessionDir: piStore(home), snapshot: async () => panes([]) };
+    expect(await code(await remove({ agent: "pi", path: outside }, options))).toEqual([400, "invalid_session_path"]);
+    expect(existsSync(outside)).toBe(true);
+    expect(await code(await remove({ agent: "pi" }, options))).toEqual([400, "missing_path"]);
+    expect(await code(await remove({ agent: "codex", path: idle }, options))).toEqual([400, "invalid_agent"]);
+    expect(await code(await remove({ agent: "pi", path: idle }, { ...options, readOnly: true }))).toEqual([403, "read_only"]);
+    expect(existsSync(idle)).toBe(true);
+  });
+
+  it("refuses the session a native pane holds, and one herdr reports holding", async () => {
+    const home = newHome();
+    mkdirSync(piStore(home), { recursive: true });
+    const native = stored(home, "native.jsonl");
+    const reported = stored(home, "reported.jsonl");
+    const idle = stored(home, "idle.jsonl");
+    const held = {
+      readOnly: false,
+      sessionDir: piStore(home),
+      snapshot: async () => panes([{ pane_id: "p1", label: "feature", agent: "pi", holds: reported }, { pane_id: "p2" }]),
+      native: { sessionFile: (paneId: string) => paneId === "p2" ? native : null },
+    };
+    expect(await code(await remove({ agent: "pi", path: native }, held))).toEqual([409, "session_live"]);
+    const refusal = await remove({ agent: "pi", path: reported }, held);
+    expect(await code(refusal.clone())).toEqual([409, "session_live"]);
+    expect(((await refusal.json()) as { error: { message: string } }).error.message).toContain("feature");
+    expect(existsSync(native)).toBe(true);
+    expect(existsSync(reported)).toBe(true);
+    // an idle session in the same store is still the chat's to drop
+    expect((await remove({ agent: "pi", path: idle }, held)).status).toBe(200);
+    expect(existsSync(idle)).toBe(false);
   });
 });
