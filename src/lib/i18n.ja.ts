@@ -1543,4 +1543,9 @@ export const JA: Record<string, string> = {
   "Calls ({n})": "呼び出し ({n})",
   "+{n} more": "他 {n} 件",
 
+  // a script's calls, and an MCP call's own body (DS §4.6)
+  "Input": "入力",
+  "Calls ({n})": "呼び出し ({n})",
+  "+{n} more": "他 {n} 件",
+
 };

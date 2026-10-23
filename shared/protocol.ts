@@ -572,6 +572,9 @@ export type ConversationPart =
     images?: { media_type: string; ref: string }[];
     /** the call's own id as the agent recorded it (pi's `toolCallId`): a pane's live tool tail is keyed by it */
     tool_call_id?: string;
+    /** the tools a `codemode` script ran while it ran (pi's `nestedCalls`): what the card lists under Calls.
+     * `summary` is the same object a work row shows, read from the call's arguments by the same rules. */
+    nested_calls?: { name: string; summary: string; error?: boolean }[];
   }
   /** A native Claude/Codex user image, addressed by an opaque ref and fetched on demand: GET /api/pane/conversation/image?pane_id=…&ref=… */
   | { kind: "image"; media_type: string; ref: string }

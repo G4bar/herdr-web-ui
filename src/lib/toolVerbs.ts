@@ -213,3 +213,9 @@ export function toolCallLabel(part: { name: string; input: string }, object: str
 export function toolVerb(part: { name: string; input: string }, object: string): string | null {
   return toolCallLabel(part, object)?.verb ?? null;
 }
+
+/** The verb a tool id reads as, for a row with no input to check an object against: a script's nested calls. */
+export function toolVerbName(name: string): string | null {
+  const kind = toolVerbKind(name);
+  return kind === null ? null : VERB_LABEL[kind];
+}

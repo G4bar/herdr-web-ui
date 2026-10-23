@@ -5,10 +5,12 @@
  * stop arriving.
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import type { ConversationPart } from "../../shared/protocol.ts";
 import type { AskedAnswer } from "../lib/askQuestions.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
 import { CHAT_HIGHLIGHT_LIMIT, languageForPath } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
+import { toolVerbName } from "../lib/toolVerbs.ts";
 import { HighlightedCode } from "./HighlightedCode.tsx";
 
 /** What an opened card reads beyond its own part; ChatView provides it, a chat with no native Pi holds none. */
@@ -122,22 +124,32 @@ export function ToolFile({ path, suffix }: { path: string; suffix?: string }) {
 }
 
 /**
+ * A call's code in the code block's own colours, folded to its head, as a long code block folds
+ * (RD §Work block). A file body and a script both draw the same block.
+ */
+export function ToolCode({ code, language, head }: { code: string; language: string | null; head: number }) {
+  const t = useT();
+  const [expanded, setExpanded] = useState(false);
+  const lines = useMemo(() => code.split("\n"), [code]);
+  if (code.length === 0) return null;
+  return <div className="markdown-code">
+    <HighlightedCode code={expanded ? code : lines.slice(0, head).join("\n")} language={language} limit={CHAT_HIGHLIGHT_LIMIT} />
+    {lines.length > head && <button type="button" className="markdown-code-more" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
+      {expanded ? t("Show less") : t("Show all {n} lines", { n: lines.length })}
+    </button>}
+  </div>;
+}
+
+/**
  * A file body: the chip that opens it, the range a read covered, and its lines in the code block's
  * own colours. A body longer than its head folds to it, as a long code block does (RD §Work block).
  */
 export function ToolFileBody({ path, range, code, head }: FileBody) {
   const t = useT();
-  const [expanded, setExpanded] = useState(false);
-  const lines = useMemo(() => code.split("\n"), [code]);
   return <div className="chat-tool-file-body">
     <ToolFile path={path} />
     {range !== null && <p className="chat-tool-range">{t("Lines {range}", { range })}</p>}
-    {code.length > 0 && <div className="markdown-code">
-      <HighlightedCode code={expanded ? code : lines.slice(0, head).join("\n")} language={languageForPath(path)} limit={CHAT_HIGHLIGHT_LIMIT} />
-      {lines.length > head && <button type="button" className="markdown-code-more" aria-expanded={expanded} onClick={() => setExpanded(!expanded)}>
-        {expanded ? t("Show less") : t("Show all {n} lines", { n: lines.length })}
-      </button>}
-    </div>}
+    <ToolCode code={code} language={languageForPath(path)} head={head} />
   </div>;
 }
 
@@ -173,4 +185,88 @@ export function AskedCard({ answers }: { answers: readonly AskedAnswer[] }) {
       : <ul className="chat-asked-picks">{answer.picks.map((pick, at) => <li key={at} className="pill chat-asked-pick">{pick}</li>)}</ul>}
     {answer.preview !== null && <pre className="chat-ask-preview">{answer.preview}</pre>}
   </section>)}</div>;
+}
+
+/** The lines of a script its card shows before it folds, as a long code block does (RD §Work block). */
+export const SCRIPT_HEAD_LINES = 20;
+
+/**
+ * A script's own source, as its card draws it (DS §4.6): pi's `codemode` tool takes raw JavaScript
+ * in its `code` argument, written as a code block in the language it runs in. Every other call
+ * reads its own input, so only `codemode` answers here.
+ */
+export function toolScript(part: { name: string; input: string }): string | null {
+  if (part.name !== "codemode") return null;
+  const args = inputRecord(part.input);
+  const code = args?.["code"];
+  return typeof code === "string" && code.trim().length > 0 ? code : null;
+}
+
+type NestedCall = NonNullable<Extract<ConversationPart, { kind: "tool" }>["nested_calls"]>[number];
+
+/** How many nested calls a card lists before the rest are counted, a script can run hundreds. */
+export const NESTED_CALL_ROWS = 8;
+
+/**
+ * The tools a `codemode` script ran while it ran (DS §4.6): one row each in the work rows' own
+ * grammar, one level deep, and how many more it ran than the card lists.
+ */
+export function NestedCalls({ calls }: { calls: readonly NestedCall[] }) {
+  const t = useT();
+  const shown = calls.slice(0, NESTED_CALL_ROWS);
+  return <section className="chat-tool-output chat-nested">
+    <h4>{t("Calls ({n})", { n: calls.length })}</h4>
+    <ol className="chat-nested-calls">{shown.map((call, index) => {
+      const verb = toolVerbName(call.name);
+      return <li key={index} className={`chat-nested-call${call.error === true ? " is-error" : ""}`}>
+        {verb === null ? <span className="chat-nested-tool">{call.name}</span> : <span className="chat-nested-verb">{t(verb)}</span>}
+        {call.summary.length > 0 && call.summary !== call.name && <>{" "}<span className="chat-nested-object">{call.summary}</span></>}
+      </li>;
+    })}</ol>
+    {calls.length > shown.length && <p className="chat-nested-more">{t("+{n} more", { n: calls.length - shown.length })}</p>}
+  </section>;
+}
+
+/** A JSON text as a card draws it, its keys and values in the theme's syntax colours (DS §4.6). */
+const JSON_TOKEN = /("(?:[^"\\]|\\.)*")(\s*:)?|(-?\d[\d.eE+-]*)|\b(?:true|false|null)\b/g;
+
+export function JsonText({ text }: { text: string }) {
+  const parts: React.ReactNode[] = [];
+  let at = 0;
+  for (const match of text.matchAll(JSON_TOKEN)) {
+    const index = match.index;
+    if (index > at) parts.push(text.slice(at, index));
+    const [whole, key, colon, number] = match;
+    if (key !== undefined) parts.push(<span key={index} className={colon === undefined ? "chat-json-string" : "chat-json-key"}>{key}</span>, colon);
+    else if (number !== undefined) parts.push(<span key={index} className="chat-json-number">{number}</span>);
+    else parts.push(<span key={index} className="chat-json-literal">{whole}</span>);
+    at = index + whole.length;
+  }
+  if (at < text.length) parts.push(text.slice(at));
+  return <>{parts}</>;
+}
+
+/**
+ * An answer that is JSON, pretty-printed as the card draws it: an MCP server's result is often one
+ * long line. Null for text that is not JSON, which the card draws as the words it is.
+ */
+export function jsonBody(text: string): string | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) return null;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    return typeof parsed === "object" && parsed !== null ? JSON.stringify(parsed, null, 2) : null;
+  } catch { return null; }
+}
+
+/**
+ * A failed MCP call's answer, split as the card draws it (DS §4.6): the server's first line, and
+ * the rest behind Details. Null while the call did not fail or the answer is that one line.
+ */
+export function splitFailure(text: string): { first: string; rest: string } | null {
+  const lines = text.split("\n");
+  const first = lines[0]?.trim() ?? "";
+  const rest = lines.slice(1).join("\n").trim();
+  if (first.length === 0) return null;
+  return { first, rest };
 }

@@ -75,15 +75,39 @@ export function piMessage(value: unknown): Row | null {
  * page: the bytes stay in the file and are fetched when the row is opened, the same way a
  * user-pasted image is. `index` counts the images of that one result, which is what the
  * page's ref quotes, so a fetch never has to agree with the parse about anything else.
+ *
+ * `nested` are the calls the tool made while it ran (a codemode script's tools): pi records
+ * them on the result message as `nestedCalls`, and nothing else in the session names them.
  */
-export function piResults(message: Row): { id: string; text: string; error: boolean; images: string[] }[] {
+export function piResults(message: Row): { id: string; text: string; error: boolean; images: string[]; nested: NestedCall[] }[] {
   const blocks = message.role === "toolResult" ? [message] : Array.isArray(message.content) ? message.content.filter((block) => record(block).type === "toolResult") : [];
   return blocks.flatMap((value) => {
     const block = record(value);
     if (typeof block.toolCallId !== "string") return [];
     const images = (Array.isArray(block.content) ? block.content : []).map(piImageOf).filter((image): image is { media_type: string; data: string } => image !== null).map((image) => image.media_type);
-    return [{ id: block.toolCallId, text: resultText(block.content), error: block.isError === true, images }];
+    return [{ id: block.toolCallId, text: resultText(block.content), error: block.isError === true, images, nested: piNestedCalls(block) }];
   });
+}
+
+/** Enough nested calls for a card: a script that runs more says how many it ran, not each of them. */
+export const NESTED_CALLS_MAX = 20;
+
+type NestedCall = NonNullable<Extract<ConversationPart, { kind: "tool" }>["nested_calls"]>[number];
+
+/**
+ * The calls a tool made while it ran, as pi records them: `nestedCalls` is one record per call
+ * with its arguments, its status and, when it failed, the error it raised.
+ */
+export function piNestedCalls(block: Row): NestedCall[] {
+  if (!Array.isArray(block.nestedCalls)) return [];
+  const calls: NestedCall[] = [];
+  for (const value of block.nestedCalls.slice(0, NESTED_CALLS_MAX)) {
+    const call = record(value);
+    if (typeof call.name !== "string") continue;
+    const args = record(call.arguments);
+    calls.push({ name: call.name, summary: toolSummary(call.name, args).slice(0, 120), ...(call.status === "error" ? { error: true } : {}) });
+  }
+  return calls;
 }
 
 /** The image types a chat shows; pi names the type `mimeType` where Claude names it `media_type`. */
@@ -323,6 +347,8 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
           delete tool.result_missing;
           trimOutput(tool, result.text, result.id);
           if (result.error) tool.error = true;
+          // the tools a script ran are what its card lists under Calls (DS §4.6)
+          if (result.nested.length > 0) tool.nested_calls = result.nested;
           if (toolImages && result.images.length > 0) {
             // addressed by the call it answers: a nested result shares its entry with other
             // blocks, so the entry id alone could not say which one an image came from

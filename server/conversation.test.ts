@@ -1109,6 +1109,35 @@ describe("parseOmpTranscript", () => {
     parser.write(JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: "t", content: [{ type: "text", text: "" }] } }));
     expect(parser.snapshot()[0]?.parts[0]).not.toHaveProperty("result_missing");
   });
+
+  // pi records the tools a codemode script ran as `nestedCalls` on the script's own result
+  it("carries the calls a script ran, named the way a work row names them", () => {
+    const script = [
+      JSON.stringify({ type: "message", message: { role: "assistant", content: [
+        { type: "toolCall", id: "code", name: "codemode", arguments: { code: "await tools.read({ path: 'src/a.ts' });" } },
+      ] } }),
+      JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: "code", toolName: "codemode", content: [
+        { type: "text", text: "Script completed\nWall time 0.4 seconds\nOutput:\nsrc/a.ts" },
+      ], nestedCalls: [
+        { id: "code/0", name: "read", status: "ok", arguments: { path: "src/a.ts" }, durationMs: 12 },
+        { id: "code/1", name: "bash", status: "error", arguments: { command: "bun test" }, error: "1 fail" },
+      ] } }),
+    ].join("\n");
+    expect(parseOmpTranscript(script)[0]?.parts[0]).toMatchObject({ kind: "tool", name: "codemode", nested_calls: [
+      { name: "read", summary: "src/a.ts" },
+      { name: "bash", summary: "bun test", error: true },
+    ] });
+  });
+
+  it("keeps a script's nested calls off a call that made none", () => {
+    const plain = [
+      JSON.stringify({ type: "message", message: { role: "assistant", content: [
+        { type: "toolCall", id: "b", name: "bash", arguments: { command: "ls" } },
+      ] } }),
+      JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: "b", content: [{ type: "text", text: "a\nb" }] } }),
+    ].join("\n");
+    expect(parseOmpTranscript(plain)[0]?.parts[0]).not.toHaveProperty("nested_calls");
+  });
 });
 
 describe("omo transcript resolution", () => {

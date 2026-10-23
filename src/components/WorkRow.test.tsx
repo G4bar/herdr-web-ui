@@ -56,4 +56,29 @@ describe("WorkRow", () => {
     expect(renderOpened(call({ name: "edit", summary: "src/a.ts", input: '{"path":"src/a.ts","edits":[]}', output: "Couldn't find the text", error: true }))).toContain("chat-tool-io is-failed");
     expect(renderOpened(call({ output: "boom", error: true }))).not.toContain("chat-tool-io is-failed");
   });
+
+  // a codemode call's arguments are the script itself; the calls it ran are on its result
+  it("opens a codemode script as its code block, with the calls it ran under its output", () => {
+    const markup = renderOpened({ kind: "tool", name: "codemode", summary: "codemode", input: JSON.stringify({ code: "const a = await tools.read({ path: 'src/a.ts' });\nreturn a;" }), output: "Script completed\nWall time 0.4 seconds\nOutput:\nsrc/a.ts",
+      nested_calls: [{ name: "read", summary: "src/a.ts" }] });
+    expect(markup).toContain('class="markdown-code"');
+    expect(markup).toContain("tools.read");
+    expect(markup).toContain("Output");
+    expect(markup).toContain("Calls (1)");
+    expect(markup).toContain("Read");
+  });
+
+  it("draws an MCP call's arguments as the JSON it sent, and its answer as JSON", () => {
+    const markup = renderOpened({ kind: "tool", name: "mcp__notes__add", summary: "notes.md", input: '{\n  "path": "notes.md"\n}', output: '{"id":7,"saved":true}' });
+    expect(markup).toContain("Input");
+    expect(markup).toContain('class="chat-json-key"');
+    expect(markup).toContain('class="chat-json-literal">true');
+  });
+
+  it("draws a failed MCP call as the server's first line, the rest behind Details", () => {
+    const markup = renderOpened({ kind: "tool", name: "mcp__notes__add", summary: "notes.md", input: '{}', output: "MCP error -32000: unknown tool\n\nstack line one\nstack line two", error: true });
+    expect(markup).toContain("MCP error -32000: unknown tool");
+    expect(markup).toContain("<summary>Details</summary>");
+    expect(markup).toContain("stack line two");
+  });
 });

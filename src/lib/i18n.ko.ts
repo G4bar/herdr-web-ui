@@ -1541,4 +1541,9 @@ export const KO: Record<string, string> = {
   "Calls ({n})": "호출 ({n})",
   "+{n} more": "{n}개 더",
 
+  // a script's calls, and an MCP call's own body (DS §4.6)
+  "Input": "입력",
+  "Calls ({n})": "호출 ({n})",
+  "+{n} more": "{n}개 더",
+
 };

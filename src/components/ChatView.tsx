@@ -34,7 +34,7 @@ import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
 import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, toolRowState, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { ToolCardHead } from "./ToolCardHead.tsx";
-import { AskedCard, bashCard, PiToolCardContext, ToolFile, ToolFileBody, toolFileBody, ToolOutputCut, ToolStop, ToolTail, usePiToolCard, type PiToolCard } from "./ToolBodies.tsx";
+import { AskedCard, bashCard, JsonText, NestedCalls, PiToolCardContext, SCRIPT_HEAD_LINES, splitFailure, ToolCode, ToolFile, ToolFileBody, toolFileBody, ToolOutputCut, jsonBody, toolScript, ToolStop, ToolTail, usePiToolCard, type PiToolCard } from "./ToolBodies.tsx";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -53,7 +53,7 @@ import { OpenFileContext } from "../lib/filePaths.ts";
 import { linkFilePaths } from "./FilePathLink.tsx";
 import { patchText } from "../../shared/patch.ts";
 import { workRowLabel } from "../lib/workRowLabel.ts";
-import { toolVerbKind } from "../lib/toolVerbs.ts";
+import { mcpTarget, toolVerbKind } from "../lib/toolVerbs.ts";
 import { machinePath, paneStorageId } from "../../shared/machines.ts";
 import { chatRestoreIndex, chatTurnAnchor, readChatPosition, rememberChatPosition, type ChatPosition } from "../lib/chatScrollMemory.ts";
 import { fileUrl } from "../lib/api.ts";
@@ -342,6 +342,14 @@ function ToolInputView({ part }: { part: ToolPartType }) {
   try { parsed = JSON.parse(part.input) as Record<string, unknown>; }
   catch { return <pre className="chat-tool-io">{part.input}</pre>; }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return <pre className="chat-tool-io">{part.input}</pre>;
+  // an MCP call sends its arguments to a server: the card shows them as the JSON they are (DS §4.6)
+  if (mcpTarget(part.name) !== null) return <section className="chat-tool-output">
+    <h4>{t("Input")}</h4>
+    <pre className="chat-tool-io"><JsonText text={part.input} /></pre>
+  </section>;
+  // a codemode script is written as the code it is, in the language it runs in (DS §4.6)
+  const script = toolScript({ name: part.name, input: part.input });
+  if (script !== null) return <ToolCode code={script} language="javascript" head={SCRIPT_HEAD_LINES} />;
   // a question the agent asked: what it asked and offered, not its JSON (the answer is the output).
   // A settled pi card draws what was picked under each question (DS §4.6); another agent's answer,
   // or one still open, keeps the questions and the options offered.
@@ -484,6 +492,11 @@ export function WorkRow({ paneId, part, stateKey, live, waiting, last, expandRow
     [open, part.name, part.input, output, part.images, part.error]);
   // a failed edit draws the agent's own message on the error tint (DS §4.6)
   const editFailed = part.error === true && toolVerbKind(part.name, part.input) === "edit";
+  // an MCP call answers with what its server said: JSON draws as JSON, and a failure as the
+  // server's own line with the rest behind Details (DS §4.6)
+  const mcp = mcpTarget(part.name) !== null;
+  const mcpJson = mcp ? jsonBody(body) : null;
+  const mcpFailure = mcp && part.error === true ? splitFailure(body) : null;
   // the live tail of a call running on a native pane: only the id pi named, and only while it runs
   const tail = running ? piCard.tails?.[part.tool_call_id ?? ""] ?? null : null;
   const heading = <h4>{t(part.error ? "Error" : "Output")}</h4>;
@@ -507,10 +520,16 @@ export function WorkRow({ paneId, part, stateKey, live, waiting, last, expandRow
     {open && <div className="work-row-detail is-card"><ToolCardHead name={part.name} state={cardState} server={server} />{fileBody === null ? <>
       <ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{(body.length > 0 || tail !== null || stop !== null || (bash !== null && bash.exit !== null) || (bash?.cut ?? null) !== null) && <section className="chat-tool-output">
         {stop === null ? heading : <div className="chat-tool-output-head">{heading}{stop}</div>}
-        {tail !== null ? <ToolTail lines={tail} /> : body.length > 0 && <pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}${editFailed ? " is-failed" : ""}`}>{linkFilePaths(body, openFile)}</pre>}
+        {tail !== null ? <ToolTail lines={tail} /> : mcpFailure !== null ? <>
+          <pre className="chat-tool-io is-failed">{mcpFailure.first}</pre>
+          {mcpFailure.rest.length > 0 && <ChatDetails memoryKey={`mcp:${stateKey}`} className="chat-tool-details">
+            <summary>{t("Details")}</summary>
+            <pre className="chat-tool-io">{linkFilePaths(mcpFailure.rest, openFile)}</pre>
+          </ChatDetails>}
+        </> : body.length > 0 && <pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}${editFailed ? " is-failed" : ""}`}>{mcpJson !== null ? <JsonText text={mcpJson} /> : linkFilePaths(body, openFile)}</pre>}
         {bash !== null && bash.exit !== null && <p className="chat-tool-exit">{t("exit {code}", { code: bash.exit })}</p>}
         {bash !== null && bash.cut !== null && <ToolOutputCut path={bash.cut} />}
-      </section>}{more}</> : <>
+      </section>}{more}{part.nested_calls !== undefined && <NestedCalls calls={part.nested_calls} />}</> : <>
       <ToolFileBody {...fileBody} /><ToolImages paneId={paneId} part={part} alt={fileBody.path} />{more}</>}
     </div>}
   </div>;

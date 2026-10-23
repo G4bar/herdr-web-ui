@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import type { AskedAnswer } from "../lib/askQuestions.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
 import { SettingsProvider } from "../lib/settings.ts";
-import { AskedCard, bashCard, ToolFileBody, toolFileBody, ToolOutputCut, ToolStop, ToolTail } from "./ToolBodies.tsx";
+import { AskedCard, bashCard, JsonText, jsonBody, NESTED_CALL_ROWS, NestedCalls, splitFailure, ToolFileBody, toolFileBody, ToolOutputCut, ToolStop, ToolTail, toolScript } from "./ToolBodies.tsx";
 
 // the provider resolves the language from the browser, which react-dom's server render has not set up
 function render(element: React.ReactElement): string {
@@ -158,5 +158,71 @@ describe("AskedCard", () => {
     const markup = render(createElement(AskedCard, { answers: answered([], null) }));
     expect(markup).toContain("No answer");
     expect(markup).not.toContain("chat-asked-picks");
+  });
+});
+
+describe("toolScript", () => {
+  // a real codemode call's arguments: raw JavaScript in the tool's `code` field
+  it("reads the source a codemode call was given", () => {
+    const input = JSON.stringify({ code: "const tools = await Promise.allSettled([]);\nreturn 'done';" });
+    expect(toolScript({ name: "codemode", input })).toBe("const tools = await Promise.allSettled([]);\nreturn 'done';");
+  });
+
+  it("leaves another tool's input to its own rendering", () => {
+    expect(toolScript({ name: "bash", input: '{"command":"ls"}' })).toBeNull();
+    expect(toolScript({ name: "codemode", input: '{"code":"  "}' })).toBeNull();
+    expect(toolScript({ name: "codemode", input: "not json" })).toBeNull();
+  });
+});
+
+describe("NestedCalls", () => {
+  const nested = (n: number) => Array.from({ length: n }, (_, i) => ({ name: "read", summary: `src/${i}.ts` }));
+
+  it("lists the calls a script ran in the work rows' grammar", () => {
+    const markup = render(createElement(NestedCalls, { calls: [{ name: "read", summary: "src/a.ts" }, { name: "bash", summary: "bun test", error: true }] }));
+    expect(markup).toContain("Calls (2)");
+    expect(markup).toContain("Read");
+    expect(markup).toContain("src/a.ts");
+    expect(markup).toContain("Ran");
+    expect(markup).toContain("is-error");
+    expect(markup).not.toContain("more");
+  });
+
+  it("counts the calls past the rows it draws", () => {
+    const markup = render(createElement(NestedCalls, { calls: nested(NESTED_CALL_ROWS + 2) }));
+    expect(markup).toContain("Calls (10)");
+    expect(markup.match(/chat-nested-call"/g)).toHaveLength(NESTED_CALL_ROWS);
+    expect(markup).toContain("+2 more");
+  });
+});
+
+describe("jsonBody", () => {
+  // an MCP server answers with one long line of JSON as often as with prose
+  it("pretty-prints an answer that is JSON, and leaves prose alone", () => {
+    expect(jsonBody('{"a":1,"b":[true,null]}')).toBe('{\n  "a": 1,\n  "b": [\n    true,\n    null\n  ]\n}');
+    expect(jsonBody("the server said no")).toBeNull();
+    expect(jsonBody('"just a string"')).toBeNull();
+  });
+});
+
+describe("JsonText", () => {
+  it("draws keys, strings, numbers and literals in the syntax colours", () => {
+    const markup = render(createElement(JsonText, { text: '{\n  "path": "src/a.ts",\n  "n": 2,\n  "ok": true\n}' }));
+    expect(markup).toContain('class="chat-json-key"');
+    expect(markup).toContain('class="chat-json-string"');
+    expect(markup).toContain('class="chat-json-number"');
+    expect(markup).toContain('class="chat-json-literal"');
+    expect(markup).toContain("src/a.ts");
+  });
+});
+
+describe("splitFailure", () => {
+  it("takes the server's first line apart from the rest", () => {
+    expect(splitFailure("MCP error -32000: unknown tool\n\nmore from the log")).toEqual({ first: "MCP error -32000: unknown tool", rest: "more from the log" });
+  });
+
+  it("leaves a one-line answer with nothing behind Details", () => {
+    expect(splitFailure("MCP error -32000: unknown tool")).toEqual({ first: "MCP error -32000: unknown tool", rest: "" });
+    expect(splitFailure("")).toBeNull();
   });
 });

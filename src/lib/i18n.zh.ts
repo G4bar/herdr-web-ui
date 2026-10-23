@@ -1545,4 +1545,9 @@ export const ZH: Record<string, string> = {
   "Calls ({n})": "调用 ({n})",
   "+{n} more": "还有 {n} 个",
 
+  // a script's calls, and an MCP call's own body (DS §4.6)
+  "Input": "输入",
+  "Calls ({n})": "调用 ({n})",
+  "+{n} more": "还有 {n} 个",
+
 };
