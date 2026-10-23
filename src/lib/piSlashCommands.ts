@@ -22,6 +22,10 @@ export type PiSlashSurface =
   | { kind: "settings" }
   | { kind: "scopedModels" }
   | { kind: "context" }
+  // the session tree, and `/fork`'s own message picker: the same tree, opened on the newest message
+  // the user sent, since Pi forks only from those (DS §4.9, §4.12)
+  | { kind: "tree" }
+  | { kind: "fork" }
   // an OAuth dance needs Pi's own TUI, so these open the terminal (DS §4.12)
   | { kind: "terminal"; command: string };
 
@@ -45,6 +49,8 @@ const SURFACES: Readonly<Record<string, SurfaceFor>> = {
   settings: bare({ kind: "settings" }),
   "scoped-models": bare({ kind: "scopedModels" }),
   context: bare({ kind: "context" }),
+  tree: bare({ kind: "tree" }),
+  fork: bare({ kind: "fork" }),
   login: bare({ kind: "terminal", command: "/login" }),
   logout: bare({ kind: "terminal", command: "/logout" }),
 };

@@ -51,6 +51,7 @@ import { compactCommandText } from "../lib/compactContext.ts";
 import { piSlashSurface, type PiSlashSurface } from "../lib/piSlashCommands.ts";
 import { requestScopedModels } from "../lib/piScopedModels.ts";
 import { openSessionContext } from "../lib/sessionContext.ts";
+import { openSessionTree } from "../lib/sessionTree.ts";
 import { requestSettingsPage } from "../lib/paletteSettings.ts";
 import { composerStrip } from "../lib/composerStrip.ts";
 import { composerLabelDraw } from "../lib/composerLabelFit.ts";
@@ -161,6 +162,8 @@ const PREVIEW_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp", "im
 const SLASH_USAGE_KEY = "ovis:slash-usage";
 /** How long a Send tapped mid-composition waits for the keyboard to commit the word (as in TerminalInput). */
 const COMMIT_WAIT_MS = 300;
+/** DS §6.1: two Escapes this close together on an empty box are Pi's double escape (`/tree`). */
+const DOUBLE_ESCAPE_MS = 500;
 export const SOURCE_LABEL: Record<SlashCommand["source"], string> = {
   builtin: "Built in",
   user: "User",
@@ -449,6 +452,10 @@ export function Composer({
       case "settings": requestSettingsPage("pi"); onOpenSettings?.(); return;
       case "scopedModels": requestScopedModels(); requestSettingsPage("pi"); onOpenSettings?.(); return;
       case "context": openSessionContext(); return;
+      // DS §4.12, §4.9: `/tree` is the session tree, and `/fork` is the same tree opened on the newest
+      // message the user sent (a row's own Enter forks), since Pi forks only from those
+      case "tree":
+      case "fork": openSessionTree(); return;
       case "terminal":
         // DS §4.12: `/login` and `/logout` are Pi's own TUI, and their text left the box: the note
         // says what to type once the Terminal is the lens in front of the user
@@ -1181,6 +1188,8 @@ export function Composer({
   }), [chatView.thinking, chatView.toolOutput, clearBox, piRpc]);
   const piKeysOn = settings.piKeys && piSurfaces;
   const piKeyDown = usePiKeys(piKeysOn, piKeyHandlers);
+  // the first Escape of Pi's double escape, and when it was pressed (DS §6.1, 500 ms)
+  const lastEscape = useRef<number | null>(null);
 
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1236,6 +1245,19 @@ export function Composer({
         abort();
         return;
       }
+      // DS §6.1: Esc Esc on an empty box opens the session tree (Pi's doubleEscapeAction). Every Escape
+      // above was the menu's, a retry's or a run's, so only a pair nothing else took lands here
+      if (event.key === "Escape" && piSurfaces && textRef.current.trim() === "" && !streaming) {
+        const now = Date.now();
+        const first = lastEscape.current;
+        lastEscape.current = now;
+        if (first !== null && now - first <= DOUBLE_ESCAPE_MS) {
+          lastEscape.current = null;
+          event.preventDefault();
+          openSessionTree();
+        }
+        return;
+      }
       // Tab takes the suggestion into the empty box, as in Claude's own input
       if (event.key === "Tab" && !event.shiftKey && offered !== null && textRef.current === "") {
         event.preventDefault();
@@ -1259,7 +1281,7 @@ export function Composer({
       // every other Enter follows the Send-as row
       send(undefined, false);
     },
-    [agentStatus, abort, bashRunning, cancelRetry, choices, connected, menuDismissed, menuOpen, offered, piKeyDown, piRetry, restoreHeld, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, stopBash, streaming, trigger],
+    [agentStatus, abort, bashRunning, cancelRetry, choices, connected, lastEscape, menuDismissed, menuOpen, offered, piKeyDown, piRetry, piSurfaces, restoreHeld, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, stopBash, streaming, trigger],
   );
 
   const onPaste = useCallback(

@@ -1,6 +1,6 @@
 import { MachineContext, useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { Bell, Columns2, CornerLeftUp, Folder, FolderOpen, FolderSearch, History, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, Package, PanelLeft, Pin, Plus, Puzzle, RefreshCw, Rows2, Settings, SunMoon, SwitchCamera, X } from "lucide-react";
+import { Bell, Columns2, CornerLeftUp, Folder, FolderOpen, FolderSearch, GitFork, History, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, Package, PanelLeft, Pin, Plus, Puzzle, RefreshCw, Rows2, Settings, SunMoon, SwitchCamera, X } from "lucide-react";
 
 import "./CommandPalette.css";
 
@@ -32,6 +32,7 @@ import { browseEntries, folderQuery, folderQueryFor, homeRelative, matchFolders,
 import { currentSidebarPins, subscribeSidebarPins } from "../lib/sidebarPins.ts";
 import { recentDirectories } from "../lib/recent-directories.ts";
 import { openSessionContext } from "../lib/sessionContext.ts";
+import { openSessionTree } from "../lib/sessionTree.ts";
 
 import { availableTarget, groupMachinePanes, loadRecentTargets, rankMachinePanes, recentTargets, rememberTarget, targetKey, RECENT_KEY, type MachineBranches, type MachinePane, type RecentPane } from "../lib/machinePalette.ts";
 import { worktreeWorkspaceSignature, type WorkspaceBranch } from "../lib/worktreeBranches.ts";
@@ -50,6 +51,8 @@ interface CommandPaletteProps {
   online: boolean;
   selectedPaneId: string | null;
   view: PaneView;
+  /** the selected pane's Pi is driven over RPC: only then is there a session tree to read */
+  piNative: boolean;
   actions: AppActions;
 }
 
@@ -147,7 +150,7 @@ function ShortcutHint({ shortcutId }: { shortcutId?: ShortcutId }) {
   return <span className="palette-shortcut" aria-label={keys.join(" + ")}>{keys.map((key) => <kbd className="kbd" key={key}>{key}</kbd>)}</span>;
 }
 
-export function CommandPalette({ open, initialQuery = "", onClose, machines, onSelect, snapshot, online, selectedPaneId, view, actions }: CommandPaletteProps) {
+export function CommandPalette({ open, initialQuery = "", onClose, machines, onSelect, snapshot, online, selectedPaneId, view, piNative, actions }: CommandPaletteProps) {
   const t = useT();
   const machineId = useMachineId();
   const api = useMachineApi();
@@ -315,12 +318,14 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
     { id: "settings", label: t("Settings"), icon: Settings, shortcut: "settings", run: actions.openSettings },
     // what Pi loaded for the selected Pi pane (DS §4.10): the dialog is App's, asked for here
     ...(selectedPane?.agent === "pi" ? [{ id: "session-context", label: t("Session context"), icon: Package, run: openSessionContext }] : []),
+    // Pi's own entry tree, and the fork a row offers (DS §4.9): a pane the chat drives alone
+    ...(selectedPane?.agent === "pi" && piNative ? [{ id: "session-tree", label: t("Session tree"), icon: GitFork, run: openSessionTree }] : []),
     { id: "add-pc", label: t("Add PC"), icon: Monitor, run: actions.openAddPc },
     ...(actions.enableNotifications ? [{ id: "notifications", label: t("Enable notifications"), icon: Bell, run: actions.enableNotifications }] : []),
     ...(actions.openFiles ? [{ id: "files", label: t("Browse files"), icon: FolderOpen, run: actions.openFiles }] : []),
     ...(online ? [{ id: "browse-folders", label: t("Browse folders"), icon: FolderSearch, keepOpen: true, run: () => browseTo(browseStart ?? home ?? "~") }] : []),
     { id: "refresh", label: t("Refresh"), icon: RefreshCw, run: actions.refresh },
-  ], [actions, splitPane, zoomPane, tabPanes, zoom, view, t, selectedPaneId, selectedPane, online, browseTo, browseStart, home]);
+  ], [actions, splitPane, zoomPane, tabPanes, zoom, view, t, selectedPaneId, selectedPane, online, browseTo, browseStart, home, piNative]);
 
   // Settings pages are found by a query only, and open on the page itself: the dialog reads the request as it mounts
   const settingsActions = useMemo(() => {

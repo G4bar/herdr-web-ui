@@ -1,5 +1,5 @@
 import { lazy, Suspense, type CSSProperties, type DragEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Bell, Brain, ChevronDown, Ellipsis, FolderOpen, Link, Menu, MessageSquare, Package, PanelLeft, RefreshCw, Search, SquareTerminal, X } from "lucide-react";
+import { Bell, Brain, ChevronDown, Ellipsis, FolderOpen, GitFork, Link, Menu, MessageSquare, Package, PanelLeft, RefreshCw, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane, SessionHistoryAgent } from "../shared/protocol.ts";
 import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, routeMissing, sendTestPush, shareSeen, signOut, splitPane, verifySourceBoot, zoomPane, type HealthInfo } from "./lib/api.ts";
@@ -17,6 +17,7 @@ import { AgentMark } from "./components/AgentMark.tsx";
 import { NewSessionDialog, type NewTabTarget } from "./components/NewSessionDialog.tsx";
 import { SessionHistory } from "./components/SessionHistory.tsx";
 import { closeSessionContext, openSessionContext, sessionContextOpen, subscribeSessionContext } from "./lib/sessionContext.ts";
+import { closeSessionTree, openSessionTree, sessionTreeOpen, subscribeSessionTree } from "./lib/sessionTree.ts";
 import { composerDrafts } from "./lib/composerDraft.ts";
 import { sessionHistoryAgent, sessionHistoryListAgent } from "./lib/sessionHistory.ts";
 import { useRecentResumes } from "./lib/useRecentResumes.ts";
@@ -223,6 +224,8 @@ function Brand() {
 
 /** Session context is read only when it is opened (DS §10: the dialog loads lazily). */
 const SessionContextDialog = lazy(() => import("./components/SessionContextDialog.tsx").then((module) => ({ default: module.SessionContextDialog })));
+/** The session tree reads `get_tree` over RPC when it opens, so it loads lazily too (DS §10). */
+const SessionTree = lazy(() => import("./components/SessionTree.tsx").then((module) => ({ default: module.SessionTree })));
 
 export function App() {
   const t = useT();
@@ -570,6 +573,8 @@ export function App() {
   const [sessionHistory, setSessionHistory] = useState<{ machineId: string; workspaceId: string; agent: SessionHistoryAgent } | null>(null);
   // the Session context dialog (lib/sessionContext.ts): App holds it for the selected pane
   const contextOpen = useSyncExternalStore(subscribeSessionContext, sessionContextOpen);
+  // the session tree (lib/sessionTree.ts): App holds it for the selected pane too
+  const treeOpen = useSyncExternalStore(subscribeSessionTree, sessionTreeOpen);
   const [connected, setConnected] = useState(false);
   /** the active terminal's socket has been connected on this page before (PaneTerminal reports it): not
    *  connected, the chip says reconnecting; before this page's first connection to the PC, connecting */
@@ -1659,6 +1664,8 @@ export function App() {
     { id: "expand-tool-output", label: t("Expand tool output"), icon: ChevronDown, checked: settings.expandToolOutput, run: chatView.toolOutput },
     // what Pi loaded for this session (DS §4.10): a Pi pane's alone, in either mode
     ...(piPane ? [{ id: "session-context", label: t("Session context"), icon: Package, run: openSessionContext }] : []),
+    // the session tree, and the fork a row offers (DS §4.9): a pane the chat drives has one
+    ...(piPane && piMode === "native" ? [{ id: "session-tree", label: t("Session tree"), icon: GitFork, run: openSessionTree }] : []),
     ...(bellVisible ? [{ id: "alerts", label: t("Alerts"), hint: bell.state, checked: bell.on, title: bell.title, icon: Bell, run: () => void bell.run() }] : []),
   ];
 
@@ -2054,6 +2061,15 @@ export function App() {
           </Suspense>
         </MachineContext.Provider>
       )}
+      {treeOpen && selectedPane && piMode === "native" && (
+        <MachineContext.Provider value={selectedMachineId}>
+          <Suspense fallback={null}>
+            <SessionTree key={`${selectedMachineId}:${selectedPane.pane_id}`} paneId={selectedPane.pane_id} machineId={selectedMachineId}
+              streaming={piLane.state?.isStreaming === true} onClose={closeSessionTree}
+              onFork={(text) => { composerDrafts.set(`ovis:composer-draft:${paneStorageId(selectedMachineId, selectedPane.pane_id)}`, text); closeSessionTree(); }} />
+          </Suspense>
+        </MachineContext.Provider>
+      )}
       <SettingsDialog auth={auth} herdrVersion={shownHealth?.herdr?.version ?? null} open={settingsOpen} section={settingsSection} linkPage={settingsLinkPage} linkSection={settingsLinkSection} onPage={onSettingsPage} onClose={closeSettings} onUsageLogin={(paneId) => { closeSettings(); selectTarget("local", paneId, "terminal"); void load(); }} actions={actions} updates={updates} onEnableNotifications={enableNotifications} saveError={settingsSaveError} savePaused={settingsSavePaused} saveRetrying={settingsSaveRetrying} onRetrySave={retrySettingsSave} overPreview={(viewing !== null && !fileDocked) || diffViewing !== null} piPane={piPane ? { paneId: piPane.pane_id, name: selectedTitle ?? piPane.pane_id, machineId: selectedMachineId } : null} />
       {filesOpen && selectedPane && (
         <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} paneId={selectedPane.pane_id} viewing={(viewing !== null && !fileDocked) || diffViewing !== null} onOpenFile={viewFile}
@@ -2076,7 +2092,7 @@ export function App() {
       </MachineContext.Provider>}
       <CommandPalette key={selectedMachineId} machines={machines} onSelect={selectTarget} open={paletteOpen} initialQuery={paletteQuery} onClose={() => setPaletteOpen(false)} snapshot={snapshot} online={selectedMachine?.state === "connected"} selectedPaneId={selectedPaneId}
         // a peek shows the terminal: its toggle says Switch to chat, which ends the peek
-        view={terminalPeek !== null ? "terminal" : view} actions={actions} />
+        view={terminalPeek !== null ? "terminal" : view} piNative={piMode === "native"} actions={actions} />
     </div></MachineContext.Provider></MachineSessionsProvider>
   );
 }

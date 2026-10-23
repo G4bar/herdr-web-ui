@@ -1,0 +1,234 @@
+/* Session tree (DS §4.9): a `.modal` card of Pi's entries, a filter row of its five views and the
+   search beside them, and the branch segments as indented rows. The path the conversation is on
+   carries the accent rail; a side branch stays dim. A finger gets a row's --touch-target, and on a
+   phone the filters scroll sideways instead of wrapping away from the search. */
+
+.pi-tree-dialog {
+  width: min(100%, var(--content-w));
+}
+
+.pi-tree-tools {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-bottom: var(--hairline) solid var(--border);
+}
+
+.pi-tree-filters {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.pi-tree-search {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+
+.pi-tree-body {
+  display: flex;
+  flex-direction: column;
+  min-height: min(70dvh, 40rem);
+  padding: var(--space-2) var(--space-4);
+}
+
+.pi-tree-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pi-tree-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: auto 0;
+  padding: var(--space-4);
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+}
+
+.pi-tree-empty p {
+  margin: 0;
+}
+
+.pi-tree-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 var(--space-2);
+  border-left: var(--rail-w) solid transparent;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  color: var(--text-dim);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+/* the conversation as it stands: the accent rail on the path to the leaf, its words strong */
+.pi-tree-row.is-active {
+  border-left-color: var(--accent);
+  color: var(--text-strong);
+}
+
+.pi-tree-row.is-selected {
+  background: var(--bg-hover);
+}
+
+.pi-tree-guide {
+  flex: none;
+  align-self: stretch;
+  width: var(--space-3);
+}
+
+.pi-tree-guide.is-line {
+  border-left: var(--hairline) solid var(--border);
+}
+
+/* the caret's cell keeps every row's words on the same column, folded or not */
+.pi-tree-step {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  width: var(--pointer-target);
+}
+
+.pi-tree-caret {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--pointer-target);
+  height: var(--pointer-target);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.pi-tree-caret svg {
+  width: 14px;
+  height: 14px;
+}
+
+.pi-tree-role {
+  flex: none;
+  min-width: 2.5rem;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.pi-tree-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pi-tree-more,
+.pi-tree-time {
+  flex: none;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.pi-tree-label {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.pi-tree-label svg {
+  width: 12px;
+  height: 12px;
+}
+
+.pi-tree-here {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+}
+
+.pi-tree-footer {
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-start;
+  gap: var(--space-3);
+}
+
+.pi-tree-error {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.pi-tree-hint {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.pi-tree-keys {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.pi-tree-key {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  .pi-tree-row {
+    min-height: var(--touch-target);
+  }
+
+  .pi-tree-step,
+  .pi-tree-caret {
+    width: var(--touch-target);
+    height: var(--touch-target);
+  }
+}
+
+/* a phone: the five views scroll sideways and the search keeps its own room under them */
+@media (max-width: 480px) {
+  .pi-tree-tools {
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4);
+  }
+
+  .pi-tree-filters,
+  .pi-tree-search {
+    flex: 1 1 100%;
+  }
+
+  /* the words wrap to two lines rather than run off the row (DS §7) */
+  .pi-tree-text {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    white-space: normal;
+  }
+}

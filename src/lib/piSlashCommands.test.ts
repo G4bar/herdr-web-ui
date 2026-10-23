@@ -14,6 +14,9 @@ describe("piSlashSurface", () => {
     expect(kind("/settings")).toBe("settings");
     expect(kind("/scoped-models")).toBe("scopedModels");
     expect(kind("/context")).toBe("context");
+    // the session tree, and the /fork that opens it on the newest message the user sent (DS §4.9)
+    expect(kind("/tree")).toBe("tree");
+    expect(kind("/fork")).toBe("fork");
   });
 
   it("takes the argument a command is defined to take", () => {
@@ -34,7 +37,6 @@ describe("piSlashSurface", () => {
     expect(kind("/tmp/file.txt")).toBeNull();
     expect(kind("/model\nand then explain it")).toBeNull();
     expect(kind("/resume")).toBeNull();
-    expect(kind("/tree")).toBeNull();
     // built into Pi's TUI: `prompt` would only hand it to the model as a message (docs/rpc-commands.md)
     expect(kind("/reload")).toBeNull();
     expect(kind("")).toBeNull();
