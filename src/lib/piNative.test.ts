@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "bun:test";
 import { initialPiNativeState } from "../../server/pi-rpc.ts";
-import { clearedQueue, clearPiQueue, queuedTexts, PiNativeLanes, piNativeLanes, takeOverPi, handBackPi } from "./piNative.ts";
+import { clearedQueue, clearPiQueue, queueRows, queuedTexts, removeQueued, requeueCommands, PiNativeLanes, piNativeLanes, takeOverPi, handBackPi } from "./piNative.ts";
 
 const native = (extra: Record<string, unknown> = {}) => ({ ...initialPiNativeState(), mode: "native" as const, ...extra });
 const realFetch = globalThis.fetch;
@@ -90,4 +90,22 @@ it("takes Pi's queue out whole for Alt+Up, and reads a refused clear_queue as no
   // a command the bridge refused answered nothing: the box stays as the user left it
   expect(await clearPiQueue(async () => null)).toEqual({ steering: [], followUp: [] });
   expect(clearedQueue({ steering: ["only steers"] })).toEqual(["only steers"]);
+});
+
+it("rows a native Held list as delivery order, and takes one out and the rest back", () => {
+  const queue = { steering: ["stop this"], followUp: ["then this", "and this"] };
+  expect(queueRows(queue)).toEqual([
+    { kind: "steer", text: "stop this" },
+    { kind: "followUp", text: "then this" },
+    { kind: "followUp", text: "and this" },
+  ]);
+  // Pi holds no per-item dequeue: a Remove is the whole queue taken out and the other rows put back
+  expect(removeQueued(queueRows(queue), 1)).toEqual([{ kind: "steer", text: "stop this" }, { kind: "followUp", text: "and this" }]);
+  expect(requeueCommands(removeQueued(queueRows(queue), 0))).toEqual([
+    { type: "prompt", message: "then this", streamingBehavior: "followUp" },
+    { type: "prompt", message: "and this", streamingBehavior: "followUp" },
+  ]);
+  // a queue taken back after the turn stopped goes in as ordinary turns
+  expect(requeueCommands([{ kind: "steer", text: "now" }], false)).toEqual([{ type: "prompt", message: "now" }]);
+  expect(removeQueued([], 3)).toEqual([]);
 });

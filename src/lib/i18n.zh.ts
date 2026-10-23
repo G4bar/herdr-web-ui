@@ -1516,4 +1516,10 @@ export const ZH: Record<string, string> = {
   "High": "高",
   "Extra high": "极高",
   "Max": "最大",
+  "Held": "已保留",
+  "Restore all": "全部恢复",
+  "Clear queue": "清空队列",
+  "Clear queue?": "清空队列？",
+  "Restore to message box": "恢复到输入框",
+  "Couldn't take Pi's queue. Try again.": "无法读取 Pi 的队列。请重试。",
 };

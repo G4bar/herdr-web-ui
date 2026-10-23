@@ -1514,4 +1514,10 @@ export const JA: Record<string, string> = {
   "High": "高",
   "Extra high": "最高",
   "Max": "最大",
+  "Held": "保持中",
+  "Restore all": "すべて戻す",
+  "Clear queue": "キューを消去",
+  "Clear queue?": "キューを消去しますか？",
+  "Restore to message box": "入力欄に戻す",
+  "Couldn't take Pi's queue. Try again.": "Pi のキューを取得できませんでした。再試行してください。",
 };

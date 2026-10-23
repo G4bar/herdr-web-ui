@@ -105,6 +105,8 @@ export interface ComposerProps {
   suggestion?: string | null;
   /** a cancelled send the agent put back in its input box: the empty box takes it again, for editing and resending */
   restored?: string | null;
+  /** messages a Held row's Restore took out of Pi's queue (DS §4.4): they come into the box once per request, under the draft */
+  queuedBack?: { id: number; texts: readonly string[] } | null;
   /** an empty chat's greeting: it stands over the composer's column and takes no row of its own */
   greeting?: ReactNode;
   /** the pane's notices over the input card (PaneTerminal builds them): rows of its own, above the replies */
@@ -263,6 +265,7 @@ export function Composer({
   answerHint = null,
   suggestion = null,
   restored = null,
+  queuedBack = null,
   greeting = null,
   notices = null,
   role = "interact",
@@ -675,6 +678,14 @@ export function Composer({
     if (piRpc === undefined || piNative === null) return;
     void clearPiQueue(piRpc).then((queue) => putBack(queuedTexts(queue)), () => undefined);
   }, [piNative, piRpc, putBack]);
+
+  // a Held row's Restore (DS §4.4) comes into the box exactly as Alt+Up's texts do, once per request
+  const queuedDrawn = useRef(0);
+  useEffect(() => {
+    if (queuedBack === null || queuedBack.id === queuedDrawn.current) return;
+    queuedDrawn.current = queuedBack.id;
+    putBack(queuedBack.texts);
+  }, [queuedBack, putBack]);
 
   // an upload finishes while the user may be typing: its mention goes to the start (insertLeadingMention),
   // and the caret and selection only move along with the text they sit in, without taking focus

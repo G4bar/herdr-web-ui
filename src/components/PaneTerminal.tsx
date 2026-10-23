@@ -52,7 +52,7 @@ import { TrustCard } from "./PromptCard.tsx";
 import type { AgentStatus, ClientRole, ConversationMetadata, InteractivePrompt, PlanSummary, ServerMessage } from "../../shared/protocol.ts";
 import type { PaneControls, PaneView } from "../lib/actions.ts";
 import { usePaneLane } from "../lib/chatLane.ts";
-import { clearedQueue, usePiNative } from "../lib/piNative.ts";
+import { clearedQueue, queueRows, usePiNative } from "../lib/piNative.ts";
 import { useSettings, terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings.ts";
 import { loadFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "../lib/fontFamily.ts";
 import { useT } from "../lib/i18n.ts";
@@ -807,6 +807,14 @@ export function PaneTerminal({
     if (note) heldRowNotes.set(note.owner, note);
     setQueueErrorState(note);
   }, []);
+  // Pi's queue is not the bridge's: a Held row's Restore takes texts out of it (DS §4.4), and the
+  // composer draws them under the draft exactly as Alt+Up's texts come back
+  const [piQueuedBack, setPiQueuedBack] = useState<{ id: number; texts: readonly string[] } | null>(null);
+  const queuedBackId = useRef(0);
+  const restoreQueuedTexts = useCallback((texts: readonly string[]): void => {
+    setPiQueuedBack({ id: ++queuedBackId.current, texts });
+  }, []);
+  const piQueue = piNative.state?.mode === "native" ? queueRows(piNative.state.queue) : [];
 
   paneRef.current = paneId;
   endedRef.current = ended;
@@ -3616,12 +3624,17 @@ export function PaneTerminal({
           </ol>
         </section>
       )}
-      {presented && paneId !== null && chatMounted && !observing && queueOwner !== null && pending.length > 0 && <PendingMessages
+      {presented && paneId !== null && chatMounted && !observing && queueOwner !== null && (pending.length > 0 || piQueue.length > 0) && <PendingMessages
         key={`pending-${queueOwner}`}
         active={active}
         inert={peek !== null}
         messages={pending.map((message) => !message.serverOwned || pendingMessages.isOwned(queueOwner, message.id, pendingScopeRef.current)
           ? message : { ...message, serverOwned: false, state: "uncertain" as const })}
+        // a native Pi holds its own queue (DS §4.4): its rows come first, in the order they will be delivered
+        queue={piQueue.length > 0 ? piQueue : undefined}
+        piRpc={piNative.piRpc}
+        streaming={piNative.state?.mode === "native" && piNative.state.isStreaming}
+        onRestoreText={restoreQueuedTexts}
         connected={connected}
         agent={agent}
         blocked={held || secretActive || ended || heldByOpenQueue || answering !== null}
@@ -3667,6 +3680,7 @@ export function PaneTerminal({
           // no suggestion under any card, a fallback or queued one included
           suggestion={chatPrompt?.pane !== paneId && chatSuggestion?.pane === paneId ? chatSuggestion.value : null}
           restored={chatPrompt?.pane !== paneId && chatRestored?.pane === paneId ? chatRestored.value : null}
+          queuedBack={piQueuedBack}
           notices={composerNotices}
           role={observing ? "observe" : role}
           onOpenHistory={historyOffered ? onOpenHistory : undefined}

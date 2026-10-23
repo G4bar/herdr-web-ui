@@ -152,6 +152,25 @@ export async function clearPiQueue(piRpc: (command: PiRpcCommand) => Promise<unk
   return asQueue(await piRpc({ type: "clear_queue" }));
 }
 
+/** One Held row: the kind it was sent as, which is also the behavior that puts it back (DS §4.4). */
+export interface PiQueueRow { kind: PiDeliver; text: string }
+
+/** Pi's queue as rows in delivery order: steers first, then follow-ups (DS §4.4). */
+export function queueRows(queue: PiQueue): PiQueueRow[] {
+  return [...queue.steering.map((text) => ({ kind: "steer" as const, text })), ...queue.followUp.map((text) => ({ kind: "followUp" as const, text }))];
+}
+
+/** `rows` without the one at `index`: what goes back after the queue left whole (`clear_queue`). */
+export function removeQueued(rows: readonly PiQueueRow[], index: number): PiQueueRow[] {
+  return rows.filter((_, at) => at !== index);
+}
+
+/** The prompts that put `rows` back into Pi in order, each with the kind it was sent as. Pi takes them as
+ * ordinary turns once it stopped, so `streaming` says whether it is still running. */
+export function requeueCommands(rows: readonly PiQueueRow[], streaming = true): PiRpcCommand[] {
+  return rows.map(({ kind, text }) => ({ type: "prompt", message: text, ...(streaming ? { streamingBehavior: kind } : {}) }));
+}
+
 export interface PiNativeHandle {
   /** null: this pane is not driven over RPC (Terminal mode): the chat behaves as it always did */
   state: PiNativeState | null;

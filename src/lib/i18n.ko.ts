@@ -1512,4 +1512,10 @@ export const KO: Record<string, string> = {
   "High": "높음",
   "Extra high": "매우 높음",
   "Max": "최대",
+  "Held": "보관됨",
+  "Restore all": "모두 복원",
+  "Clear queue": "대기열 비우기",
+  "Clear queue?": "대기열을 비울까요?",
+  "Restore to message box": "입력란으로 복원",
+  "Couldn't take Pi's queue. Try again.": "Pi의 대기열을 가져오지 못했습니다. 다시 시도하세요.",
 };
