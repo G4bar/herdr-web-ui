@@ -10,12 +10,21 @@ export const TOOL_OUTPUT_CHARS = 4000;
 const WHOLE_OUTPUT_TOOLS = new Set(["create_goal", "update_goal", "get_goal"]);
 const WHOLE_OUTPUT_CHARS = 16_000;
 
+/**
+ * pi's bash tool keeps a command's whole output in a file and ends the text it answers with the
+ * line naming it. The page's own cut must not swallow that line: the card draws it as the way to
+ * the file (`Output cut · Open full output`, DS §4.6), and it sits at the end of a text long
+ * enough to be cut.
+ */
+const PI_FULL_OUTPUT = /\n*\[Showing (?:lines|last)[^\]]*Full output: [^\]\n]+\]/g;
+
 /** Sets a tool part's output, cut to what a page carries, keeping what it takes to fetch the rest. */
 export function trimOutput(tool: Extract<ConversationPart, { kind: "tool" }>, output: string, ref: string, fullSize?: number): void {
   const limit = WHOLE_OUTPUT_TOOLS.has(tool.name) ? WHOLE_OUTPUT_CHARS : TOOL_OUTPUT_CHARS;
   const size = fullSize ?? output.length;
   if (size <= limit) { tool.output = output; return; }
-  tool.output = `${output.slice(0, limit)}\n… trimmed`;
+  const named = [...output.matchAll(PI_FULL_OUTPUT)].at(-1)?.[0].trim();
+  tool.output = `${output.slice(0, limit)}\n… trimmed${named === undefined ? "" : `\n\n${named}`}`;
   tool.output_ref = ref;
   tool.output_size = size;
 }

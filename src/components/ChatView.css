@@ -926,6 +926,17 @@
   border-left: var(--hairline) solid var(--border);
 }
 
+/* an opened tool card's own surface under its head strip (DS §4.6): the body sits on the
+   elevated plane, a hairline around it and no rail of its own, on the row's left edge */
+.work-row-detail.is-card {
+  margin: var(--space-1) 0 var(--space-2);
+  padding: var(--space-2) var(--space-3) var(--space-3);
+  overflow: hidden;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
 .work-thinking-text {
   color: var(--text-dim);
   font-style: italic;
@@ -1010,6 +1021,15 @@
   font-family: var(--font-mono);
   font-size: var(--fs-2xs);
 }
+
+/* a command whose output pi cut: the way to the file holding the whole of it (DS §4.6) */
+.chat-tool-cut {
+  margin: var(--space-1) 0 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.chat-tool-cut-path { font-family: var(--font-mono); overflow-wrap: anywhere; }
 
 /* a failed call's own message, on the error tint: only an edit's (DS §4.6 puts no tint on a whole card) */
 .chat-tool-io.is-failed {
@@ -1718,6 +1738,25 @@
 .chat-ask-text, .chat-ask-label { font-weight: var(--fw-semibold); }
 .chat-ask-options { margin: var(--space-2) 0 0; padding-left: var(--space-5); }
 .chat-ask-options > li + li { margin-top: var(--space-2); }
+/* a settled pi question: the option that was picked, in the picked PromptCard row's colours */
+.chat-asked-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
+  padding: 0;
+  list-style: none;
+}
+.pill.chat-asked-pick {
+  height: auto;
+  padding: var(--space-1) var(--space-2);
+  border-color: var(--accent);
+  background: var(--accent-tint);
+  color: var(--text-strong);
+  font-family: var(--font-ui);
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
 .chat-ask-preview {
   margin: var(--space-1) 0 0;
   padding: var(--space-2);

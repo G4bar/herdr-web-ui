@@ -24,3 +24,12 @@ test("reports true stored output size when a tool result was cut before reaching
   expect(tool.output_ref).toBe("ref");
   expect(tool.output_size).toBe(50_000);
 });
+
+test("keeps the line naming pi's whole-output file past the page's own cut", () => {
+  const tool: Extract<ConversationPart, { kind: "tool" }> = { kind: "tool", name: "bash", summary: "", input: "{}", output: "" };
+  const body = `${"x".repeat(TOOL_OUTPUT_CHARS)}\n\n[Showing lines 450-715 of 715 (50.0KB limit). Full output: /tmp/pi-bash-2a93cf9321281ff6.log]\n\nCommand exited with code 1`;
+  trimOutput(tool, body, "call-1");
+  expect(tool.output.startsWith("x".repeat(100))).toBe(true);
+  expect(tool.output.endsWith("\n… trimmed\n\n[Showing lines 450-715 of 715 (50.0KB limit). Full output: /tmp/pi-bash-2a93cf9321281ff6.log]")).toBe(true);
+  expect(tool.output_ref).toBe("call-1");
+});

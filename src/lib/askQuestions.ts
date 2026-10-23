@@ -23,6 +23,15 @@ export interface AskedQuestion {
   options: AskedOption[];
 }
 
+/** What an answer put to one asked question: the option labels (or the typed reply) that were picked. */
+export interface AskedAnswer {
+  question: AskedQuestion;
+  /** one per picked option, or the single thing the user typed; empty when nothing was answered */
+  picks: string[];
+  /** the preview the picked option showed, as the call recorded it */
+  preview: string | null;
+}
+
 const ASK_TOOLS: ReadonlySet<string> = new Set(["ask", "ask_user_question", "request_user_input", "AskUserQuestion"]);
 
 const optionalText = (value: unknown): value is string | null | undefined => value == null || typeof value === "string";
@@ -56,4 +65,31 @@ export function askedQuestions(tool: string, args: unknown): AskedQuestion[] | n
     });
   }
   return asked;
+}
+
+/**
+ * What pi recorded once its questions were answered: `User has answered your questions:
+ * "<question>"="<answer>"`, then what the picked option previewed and pi's closing sentence; a
+ * skipped card says `User declined to answer questions`. Null for any other tool's answer, which
+ * keeps the call's own rendering: this reads pi's sentence alone.
+ */
+export function settledAsk(questions: AskedQuestion[], output: string): AskedAnswer[] | null {
+  const declined = /^User declined to answer questions\b/.test(output.trim());
+  const prefix = "User has answered your questions: ";
+  if (!declined && !output.trim().startsWith(prefix)) return null;
+  const rest = declined ? "" : output.trim().slice(prefix.length)
+    .replace(/\. selected preview: [\s\S]*$/, "")
+    .replace(/\. You can now continue[\s\S]*$/, "");
+  return questions.map((question) => {
+    const at = rest.indexOf(`"${question.question}"="`);
+    if (at < 0) return { question, picks: [], preview: null };
+    const start = at + `"${question.question}"="`.length;
+    // the answer ends at the last quote before the next question's own quoted text
+    const next = rest.slice(start).search(/", "/);
+    const chunk = next < 0 ? rest.slice(start) : rest.slice(start, start + next);
+    const answer = chunk.replace(/"$/, "");
+    const picks = question.multi ? answer.split(", ").map((pick) => pick.trim()).filter((pick) => pick.length > 0) : [answer];
+    const option = picks.length === 1 ? question.options.find((choice) => choice.label === picks[0]) : undefined;
+    return { question, picks, preview: option?.preview ?? null };
+  });
 }

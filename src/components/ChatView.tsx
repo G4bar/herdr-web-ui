@@ -34,7 +34,7 @@ import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
 import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, toolRowState, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { ToolCardHead } from "./ToolCardHead.tsx";
-import { bashCard, PiToolCardContext, ToolFile, ToolFileBody, toolFileBody, ToolStop, ToolTail, usePiToolCard, type PiToolCard } from "./ToolBodies.tsx";
+import { AskedCard, bashCard, PiToolCardContext, ToolFile, ToolFileBody, toolFileBody, ToolOutputCut, ToolStop, ToolTail, usePiToolCard, type PiToolCard } from "./ToolBodies.tsx";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -43,7 +43,7 @@ import { PAGE_OVERLAP_ROWS, pageScrollDistance } from "../lib/pageScroll.ts";
 import { followGlides } from "../lib/followScroll.ts";
 import { useMediaQuery } from "../lib/useMediaQuery.ts";
 import { statusEdgeRead } from "../lib/status.ts";
-import { askedQuestions } from "../lib/askQuestions.ts";
+import { askedQuestions, settledAsk } from "../lib/askQuestions.ts";
 import { ConversationRefresh } from "../lib/conversationRefresh.ts";
 import { teammateMessageParts, type TeammateMessage } from "../lib/teammateMessage.ts";
 import { usePageVisible } from "../lib/visibility.ts";
@@ -342,18 +342,24 @@ function ToolInputView({ part }: { part: ToolPartType }) {
   try { parsed = JSON.parse(part.input) as Record<string, unknown>; }
   catch { return <pre className="chat-tool-io">{part.input}</pre>; }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return <pre className="chat-tool-io">{part.input}</pre>;
-  // a question the agent asked: what it asked and offered, not its JSON (the answer is the output)
+  // a question the agent asked: what it asked and offered, not its JSON (the answer is the output).
+  // A settled pi card draws what was picked under each question (DS §4.6); another agent's answer,
+  // or one still open, keeps the questions and the options offered.
   const asked = askedQuestions(part.name, parsed);
-  if (asked !== null) return <ol className="chat-ask-questions">{asked.map((question, index) => <li key={index} className="chat-ask-question">
-    {question.header !== null && <p className="chat-ask-header">{question.header}</p>}
-    <p className="chat-ask-text">{question.question}</p>
-    {question.multi && <p className="chat-ask-meta">{t("More than one could be picked")}</p>}
-    {question.options.length > 0 && <ol className="chat-ask-options">{question.options.map((option, at) => <li key={at}>
-      <p className="chat-ask-label">{option.label}{question.recommended === at && <> <span className="chat-ask-meta">({t("Recommended")})</span></>}</p>
-      {option.description !== null && <p className="chat-ask-description">{option.description}</p>}
-      {option.preview !== null && <pre className="chat-ask-preview">{option.preview}</pre>}
-    </li>)}</ol>}
-  </li>)}</ol>;
+  if (asked !== null) {
+    const answers = settledAsk(asked, part.output);
+    if (answers !== null) return <AskedCard answers={answers} />;
+    return <ol className="chat-ask-questions">{asked.map((question, index) => <li key={index} className="chat-ask-question">
+      {question.header !== null && <p className="chat-ask-header">{question.header}</p>}
+      <p className="chat-ask-text">{question.question}</p>
+      {question.multi && <p className="chat-ask-meta">{t("More than one could be picked")}</p>}
+      {question.options.length > 0 && <ol className="chat-ask-options">{question.options.map((option, at) => <li key={at}>
+        <p className="chat-ask-label">{option.label}{question.recommended === at && <> <span className="chat-ask-meta">({t("Recommended")})</span></>}</p>
+        {option.description !== null && <p className="chat-ask-description">{option.description}</p>}
+        {option.preview !== null && <pre className="chat-ask-preview">{option.preview}</pre>}
+      </li>)}</ol>}
+    </li>)}</ol>;
+  }
   // an OmO or omp `task` call: the tasks it starts, not its JSON or a checklist nobody ticks
   const spawned = part.name === "task" ? taskCallItems(parsed) : null;
   if (spawned !== null) return <ol className="chat-task-calls">{spawned.map((item, index) => <li key={index} className="chat-task-call">
@@ -482,7 +488,7 @@ export function WorkRow({ paneId, part, stateKey, live, waiting, last, expandRow
   const tail = running ? piCard.tails?.[part.tool_call_id ?? ""] ?? null : null;
   const heading = <h4>{t(part.error ? "Error" : "Output")}</h4>;
   const stop = running && piCard.abort !== null ? <ToolStop onAbort={piCard.abort} /> : null;
-  const more = part.output_ref !== undefined && whole.text === null && <section className="chat-tool-output">
+  const more = part.output_ref !== undefined && whole.text === null && (bash?.cut ?? null) === null && <section className="chat-tool-output">
     <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
       {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}
     </button></section>;
@@ -498,11 +504,12 @@ export function WorkRow({ paneId, part, stateKey, live, waiting, last, expandRow
       {running && <>{" "}<span className="work-row-running">{t("Running…")}<span className="work-row-dot" aria-hidden="true" /></span></>}
       {stopped && <>{" "}<span className="work-row-stopped">{t("stopped")}</span></>}
     </button>
-    {open && <div className="work-row-detail"><ToolCardHead name={part.name} state={cardState} server={server} />{fileBody === null ? <>
-      <ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{(body.length > 0 || tail !== null || stop !== null || (bash !== null && bash.exit !== null)) && <section className="chat-tool-output">
+    {open && <div className="work-row-detail is-card"><ToolCardHead name={part.name} state={cardState} server={server} />{fileBody === null ? <>
+      <ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{(body.length > 0 || tail !== null || stop !== null || (bash !== null && bash.exit !== null) || (bash?.cut ?? null) !== null) && <section className="chat-tool-output">
         {stop === null ? heading : <div className="chat-tool-output-head">{heading}{stop}</div>}
         {tail !== null ? <ToolTail lines={tail} /> : body.length > 0 && <pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}${editFailed ? " is-failed" : ""}`}>{linkFilePaths(body, openFile)}</pre>}
         {bash !== null && bash.exit !== null && <p className="chat-tool-exit">{t("exit {code}", { code: bash.exit })}</p>}
+        {bash !== null && bash.cut !== null && <ToolOutputCut path={bash.cut} />}
       </section>}{more}</> : <>
       <ToolFileBody {...fileBody} /><ToolImages paneId={paneId} part={part} alt={fileBody.path} />{more}</>}
     </div>}

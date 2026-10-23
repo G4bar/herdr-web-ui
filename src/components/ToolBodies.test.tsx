@@ -1,8 +1,10 @@
 import { describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type { AskedAnswer } from "../lib/askQuestions.ts";
+import { OpenFileContext } from "../lib/filePaths.ts";
 import { SettingsProvider } from "../lib/settings.ts";
-import { bashCard, ToolFileBody, toolFileBody, ToolStop, ToolTail } from "./ToolBodies.tsx";
+import { AskedCard, bashCard, ToolFileBody, toolFileBody, ToolOutputCut, ToolStop, ToolTail } from "./ToolBodies.tsx";
 
 // the provider resolves the language from the browser, which react-dom's server render has not set up
 function render(element: React.ReactElement): string {
@@ -20,18 +22,29 @@ describe("bashCard", () => {
   // the sentence a real pi session records under a command that exited non-zero
   it("takes pi's exit line out of the output and names the code", () => {
     const output = "ls: unrecognized option '--all'\nTry 'ls --help' for more information.\n\nCommand exited with code 1";
-    expect(bashCard(output)).toEqual({ text: "ls: unrecognized option '--all'\nTry 'ls --help' for more information.", exit: 1 });
+    expect(bashCard(output)).toEqual({ text: "ls: unrecognized option '--all'\nTry 'ls --help' for more information.", exit: 1, cut: null });
   });
 
   it("leaves an output that finished clean alone, and draws no exit 0", () => {
-    expect(bashCard("12 pass\n0 fail")).toEqual({ text: "12 pass\n0 fail", exit: null });
-    expect(bashCard("")).toEqual({ text: "", exit: null });
-    expect(bashCard("done\n\nCommand exited with code 0")).toEqual({ text: "done", exit: null });
+    expect(bashCard("12 pass\n0 fail")).toEqual({ text: "12 pass\n0 fail", exit: null, cut: null });
+    expect(bashCard("")).toEqual({ text: "", exit: null, cut: null });
+    expect(bashCard("done\n\nCommand exited with code 0")).toEqual({ text: "done", exit: null, cut: null });
   });
 
   it("reads the line only at the end, so a command that prints one is not cut", () => {
     const output = "Command exited with code 2\nmore output";
-    expect(bashCard(output)).toEqual({ text: output, exit: null });
+    expect(bashCard(output)).toEqual({ text: output, exit: null, cut: null });
+  });
+
+  // the sentence a real pi session records under a command whose output it cut itself
+  it("draws pi's own cut as the file holding the whole output, and its exit code apart", () => {
+    const output = "line one\nline two\n\n[Showing lines 450-715 of 715 (50.0KB limit). Full output: /tmp/pi-bash-2a93cf9321281ff6.log]\n\nCommand exited with code 1";
+    expect(bashCard(output)).toEqual({ text: "line one\nline two", exit: 1, cut: "/tmp/pi-bash-2a93cf9321281ff6.log" });
+  });
+
+  it("keeps the page's own cut off the text when the file names the rest", () => {
+    expect(bashCard("head\n… trimmed\n\n[Showing last 4.0KB of line 715 (line is 8.2KB). Full output: /tmp/pi-bash-abc.log]"))
+      .toEqual({ text: "head", exit: null, cut: "/tmp/pi-bash-abc.log" });
   });
 });
 
@@ -108,5 +121,42 @@ describe("ToolStop", () => {
     const markup = render(createElement(ToolStop, { onAbort: () => undefined }));
     expect(markup).toContain('class="btn btn-ghost chat-tool-stop"');
     expect(markup).toContain(">Stop<");
+  });
+});
+
+describe("ToolOutputCut", () => {
+  it("draws the words and opens the file holding the rest", () => {
+    const markup = render(createElement(OpenFileContext.Provider, { value: () => undefined, children: createElement(ToolOutputCut, { path: "/tmp/pi-bash-abc.log" }) }));
+    expect(markup).toContain("Output cut");
+    expect(markup).toContain("Open full output");
+    expect(markup).toContain('class="chat-tool-file-link"');
+  });
+
+  it("names the path where nothing here can open a file", () => {
+    expect(render(createElement(ToolOutputCut, { path: "/tmp/pi-bash-abc.log" }))).toContain("/tmp/pi-bash-abc.log");
+  });
+});
+
+describe("AskedCard", () => {
+  const answered = (picks: string[], preview: string | null): AskedAnswer[] => [{
+    question: { header: "Layout", question: "Which layout?", multi: false, recommended: null, options: [] },
+    picks,
+    preview,
+  }];
+
+  it("draws each question over the option that was picked, and the preview it showed", () => {
+    const markup = render(createElement(AskedCard, { answers: answered(["Tabs"], "+--+\n| a |") }));
+    expect(markup).toContain("Layout");
+    expect(markup).toContain("Which layout?");
+    expect(markup).toContain('class="pill chat-asked-pick"');
+    expect(markup).toContain("Tabs");
+    expect(markup).toContain("+--+\n| a |");
+    expect(markup).not.toContain("No answer");
+  });
+
+  it("says no answer where nothing was picked", () => {
+    const markup = render(createElement(AskedCard, { answers: answered([], null) }));
+    expect(markup).toContain("No answer");
+    expect(markup).not.toContain("chat-asked-picks");
   });
 });

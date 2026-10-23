@@ -5,6 +5,7 @@
  * stop arriving.
  */
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
+import type { AskedAnswer } from "../lib/askQuestions.ts";
 import { OpenFileContext } from "../lib/filePaths.ts";
 import { CHAT_HIGHLIGHT_LIMIT, languageForPath } from "../lib/highlight.ts";
 import { useT } from "../lib/i18n.ts";
@@ -29,12 +30,20 @@ export function usePiToolCard(): PiToolCard {
 /**
  * A bash call's output as its card shows it: pi ends a failed command's text with its own exit
  * line, which the card draws apart in the error tint, and a command that finished clean has none.
+ * A command whose output pi itself cut ends with the lines it kept and the file holding all of it,
+ * which the card draws as the way to that file (`cut`), not as output.
  */
-export function bashCard(output: string): { text: string; exit: number | null } {
-  const match = /\n*Command exited with code (\d+)\s*$/.exec(output);
-  if (match === null) return { text: output, exit: null };
-  const code = Number(match[1]);
-  return { text: output.slice(0, match.index).replace(/\n+$/, ""), exit: code > 0 ? code : null };
+export function bashCard(output: string): { text: string; exit: number | null; cut: string | null } {
+  const exited = /\n*Command exited with code (\d+)\s*$/.exec(output);
+  const code = exited === null ? null : Number(exited[1]);
+  const whole = exited === null ? output : output.slice(0, exited.index).replace(/\n+$/, "");
+  const cut = /\n*\[Showing (?:lines|last)[^\]]*Full output: ([^\]\n]+)\]\s*$/.exec(whole);
+  if (cut === null) return { text: whole, exit: code !== null && code > 0 ? code : null, cut: null };
+  return {
+    text: whole.slice(0, cut.index).replace(/\n… trimmed$/, "").replace(/\n+$/, ""),
+    exit: code !== null && code > 0 ? code : null,
+    cut: cut[1]!.trim(),
+  };
 }
 
 /**
@@ -136,4 +145,32 @@ export function ToolFileBody({ path, range, code, head }: FileBody) {
 export function ToolStop({ onAbort }: { onAbort: () => void }) {
   const t = useT();
   return <button type="button" className="btn btn-ghost chat-tool-stop" onClick={onAbort}>{t("Stop")}</button>;
+}
+
+/**
+ * A cut output's way to the whole of it (DS §4.6): pi keeps the rest in a file, which opens where
+ * the card opens any other path. Where nothing can open a file it names the path instead.
+ */
+export function ToolOutputCut({ path }: { path: string }) {
+  const t = useT();
+  const open = useContext(OpenFileContext);
+  return <p className="chat-tool-cut">{t("Output cut")}{" · "}{open === null
+    ? <span className="chat-tool-cut-path">{path}</span>
+    : <button type="button" className="chat-tool-file-link" onClick={() => open(path)}>{t("Open full output")}</button>}</p>;
+}
+
+/**
+ * A question pi asked and had answered (DS §4.6): each question over the option that was picked
+ * and, where it showed one, that option's preview; a question nobody answered says so.
+ */
+export function AskedCard({ answers }: { answers: readonly AskedAnswer[] }) {
+  const t = useT();
+  return <div className="chat-asked">{answers.map((answer, index) => <section key={index} className="chat-ask-question">
+    {answer.question.header !== null && <p className="chat-ask-header">{answer.question.header}</p>}
+    <p className="chat-ask-text">{answer.question.question}</p>
+    {answer.picks.length === 0
+      ? <p className="chat-ask-meta">{t("No answer")}</p>
+      : <ul className="chat-asked-picks">{answer.picks.map((pick, at) => <li key={at} className="pill chat-asked-pick">{pick}</li>)}</ul>}
+    {answer.preview !== null && <pre className="chat-ask-preview">{answer.preview}</pre>}
+  </section>)}</div>;
 }
