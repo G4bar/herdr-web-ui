@@ -4,11 +4,24 @@ import * as reactDom from "react-dom";
 import TestRenderer, { act } from "react-test-renderer";
 
 import { ApiError, type PiRpcCommand } from "../lib/api.ts";
+import * as actualApi from "../lib/api.ts";
 import { SHEET_QUERY } from "../lib/sheets.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 
+/** every write Save as default sent */
+const writes: Record<string, string | readonly string[]>[] = [];
+
 // the menu is a portal so a transformed composer cannot clip it; the test renders it where it is
 mock.module("react-dom", () => ({ ...reactDom, createPortal: (node: unknown) => node }));
+// Save as default writes Pi's settings file
+mock.module("../lib/api.ts", () => ({
+  ...actualApi,
+  fetchPiSettings: async () => ({ path: "/home/dev/.pi/agent/settings.json", settings: {} }),
+  savePiSettings: async (changes: Record<string, string | readonly string[]>) => {
+    writes.push(changes);
+    return { path: "/home/dev/.pi/agent/settings.json", settings: changes };
+  },
+}));
 const { PiThinkingMenu, PiPips, orderedLevels } = await import("./PiThinkingMenu.tsx");
 
 const browserGlobals = ["window", "document", "HTMLElement", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "getComputedStyle"] as const;
@@ -173,6 +186,28 @@ describe("the thinking menu", () => {
     } finally {
       sheetMode = false;
     }
+  });
+
+  it("saves the highlighted level as the default, from the footer's button and from Ctrl+S", async () => {
+    const onSavedAsDefault = mock(() => {});
+    writes.length = 0;
+    const renderer = await mount(answers({ levels: ["off", "high"] }), { onSavedAsDefault });
+    await open(renderer);
+
+    // the list opens on High, the top of the two; a move is not a pick
+    await act(async () => { rows(renderer)[1]!.props.onPointerEnter(); });
+    await act(async () => { renderer.root.findByProps({ className: "btn pi-thinking-save" }).props.onClick(); });
+    expect(writes[0]).toEqual({ defaultThinkingLevel: "off" });
+    expect(onSavedAsDefault).toHaveBeenCalledTimes(1);
+
+    // Ctrl+S is the menu's while it is open: the browser's save page never runs
+    await act(async () => { rows(renderer)[0]!.props.onPointerEnter(); });
+    let prevented = 0;
+    const key = (): Record<string, unknown> => ({ key: "s", ctrlKey: true, altKey: false, metaKey: false, preventDefault: () => { prevented += 1; } });
+    await act(async () => { renderer.root.findByProps({ role: "menu" }).props.onKeyDown(key()); });
+    expect(prevented).toBe(1);
+    expect(writes[1]).toEqual({ defaultThinkingLevel: "high" });
+    expect(onSavedAsDefault).toHaveBeenCalledTimes(2);
   });
 
   it("draws a level as five bars, lit to its height", () => {

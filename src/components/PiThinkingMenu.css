@@ -50,6 +50,22 @@
   white-space: normal;
 }
 
+/* the footer (DS §4.3): Save as default with its key, under the list and outside its scroll */
+.pi-thinking-footer {
+  display: flex;
+  flex: none;
+  align-items: center;
+  padding-top: var(--space-1);
+  border-top: var(--hairline) solid var(--border);
+}
+
+.pi-thinking-save {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
 .pi-thinking-row {
   display: flex;
   align-items: center;
@@ -130,6 +146,10 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.pi-thinking-sheet .pi-thinking-list {
+  flex: 1 1 auto;
 }
 
 @media (pointer: coarse), (max-width: 640px) {

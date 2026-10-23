@@ -12,7 +12,7 @@ import { Check, ChevronDown, LoaderCircle, X } from "lucide-react";
 
 import "./PiThinkingMenu.css";
 
-import { ApiError, type PiRpcCommand } from "../lib/api.ts";
+import { ApiError, savePiSettings, type PiRpcCommand } from "../lib/api.ts";
 import { useT } from "../lib/i18n.ts";
 import { SHEET_QUERY, useSheetSwipe } from "../lib/sheets.ts";
 import { useSheetHistory } from "../lib/sheetHistory.ts";
@@ -35,6 +35,10 @@ export interface PiThinkingMenuProps {
   pipsOnly?: boolean;
   /** after a pick: the focus goes back to the message box, not the chip */
   onPicked?: () => void;
+  /** the PC whose Pi settings file Save as default writes */
+  machineId?: string;
+  /** Save as default wrote the level: the composer says so through its status line (DS §4.3) */
+  onSavedAsDefault?: () => void;
 }
 
 /**
@@ -89,7 +93,7 @@ const refusal = (error: unknown): string => error instanceof ApiError ? error.de
 /** How far from a screen edge the popover keeps. */
 const EDGE = 8;
 
-export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, pipsOnly, onPicked }: PiThinkingMenuProps) {
+export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, pipsOnly, onPicked, machineId = "local", onSavedAsDefault }: PiThinkingMenuProps) {
   const t = useT();
   const sheet = useMediaQuery(SHEET_QUERY);
   const listId = useId();
@@ -105,6 +109,8 @@ export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, 
   const [active, setActive] = useState(0);
   const [switching, setSwitching] = useState<string | null>(null);
   const [switchError, setSwitchError] = useState<string | null>(null);
+  const [savingDefault, setSavingDefault] = useState(false);
+  const [defaultError, setDefaultError] = useState<string | null>(null);
   const trap = useFocusTrap<HTMLDivElement>(open && sheet, { initialFocus: menuRef, shouldRestore: () => !toBox.current });
 
   const rows = levels ?? [];
@@ -129,6 +135,7 @@ export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, 
     setLevels(null);
     setLoadError(false);
     setSwitchError(null);
+    setDefaultError(null);
     void piRpc({ type: "get_available_thinking_levels" }).then(
       (data) => setLevels(orderedLevels(data)),
       () => { setLoadError(true); setLevels([]); },
@@ -227,6 +234,31 @@ export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, 
     }
   };
 
+  /** Ctrl+S and the footer's button: the highlighted level becomes the one a new Pi session starts
+   *  with (DS §4.3). A refusal says Pi's own sentence and leaves the chip as it was. */
+  const saveDefault = async (): Promise<void> => {
+    const option = rows[active];
+    if (option === undefined || savingDefault) return;
+    setSavingDefault(true);
+    setDefaultError(null);
+    try {
+      await savePiSettings({ defaultThinkingLevel: option }, machineId);
+      onSavedAsDefault?.();
+    } catch (error) {
+      setDefaultError(t("Couldn't change {setting}: {reason}", { setting: t("Default thinking level"), reason: refusal(error) }));
+    } finally {
+      setSavingDefault(false);
+    }
+  };
+
+  // Ctrl+S is the menu's while it is open, so the browser's save page never runs (DS §6.1). The rows
+  // are what holds the focus in both forms; the sheet's footer is beside them, so it takes the key itself.
+  const saveShortcut = (event: KeyboardEvent<HTMLElement>): void => {
+    if (!event.ctrlKey || event.altKey || event.metaKey || event.key.toLocaleLowerCase() !== "s") return;
+    event.preventDefault();
+    void saveDefault();
+  };
+
   const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -234,6 +266,7 @@ export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, 
       close();
       return;
     }
+    saveShortcut(event);
     if (rows.length === 0) return;
     const last = rows.length - 1;
     if (event.key === "ArrowDown") { event.preventDefault(); setActive((index) => Math.min(last, index + 1)); }
@@ -246,6 +279,18 @@ export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, 
       if (option !== undefined) void pick(option);
     }
   };
+
+  // the footer (DS §4.3): the level the list holds is what a Ctrl+S writes as the default for a new session
+  const footer = (
+    <>
+      <div className="pi-thinking-footer" onKeyDown={sheet ? (event) => { saveShortcut(event); } : undefined}>
+        <button type="button" className="btn pi-thinking-save" disabled={rows.length === 0 || savingDefault} onClick={() => void saveDefault()}>
+          {t("Save as default")}<kbd className="kbd" aria-hidden="true">Ctrl+S</kbd>
+        </button>
+      </div>
+      {defaultError !== null && <p className="pi-thinking-error" role="alert">{defaultError}</p>}
+    </>
+  );
 
   // the rows are the same in both forms; only what holds them and the scrim around the sheet differ
   const list = (
@@ -296,6 +341,7 @@ export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, 
             aria-activedescendant={rows.length > 0 ? `${listId}-${active}` : undefined} aria-busy={switching !== null || undefined} onKeyDown={onKeyDown}>
             {list}
           </div>
+          {footer}
         </div>
       </div>
     </div>
@@ -315,6 +361,7 @@ export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, 
       }}
     >
       {list}
+      {footer}
     </div>;
 
   return (

@@ -4,10 +4,25 @@ import * as reactDom from "react-dom";
 import TestRenderer, { act } from "react-test-renderer";
 
 import { ApiError, type PiRpcCommand } from "../lib/api.ts";
+import * as actualApi from "../lib/api.ts";
 import { SettingsProvider } from "../lib/settings.ts";
+
+/** the models Pi's settings file scopes the cycle to; null: it scopes none, so every model cycles */
+let scoped: string[] | null = null;
+/** every write Save as default sent */
+const writes: Record<string, string | readonly string[]>[] = [];
 
 // the picker is a portal so a transformed composer cannot clip it; the test renders it where it is
 mock.module("react-dom", () => ({ ...reactDom, createPortal: (node: unknown) => node }));
+// the picker reads the cycle from Pi's settings file, and writes the default there
+mock.module("../lib/api.ts", () => ({
+  ...actualApi,
+  fetchPiSettings: async () => ({ path: "/home/dev/.pi/agent/settings.json", settings: scoped === null ? {} : { enabledModels: scoped } }),
+  savePiSettings: async (changes: Record<string, string | readonly string[]>) => {
+    writes.push(changes);
+    return { path: "/home/dev/.pi/agent/settings.json", settings: changes };
+  },
+}));
 const { PiModelPicker, groupModels, piModels } = await import("./PiModelPicker.tsx");
 
 const MODELS = {
@@ -53,7 +68,7 @@ afterAll(() => {
   }
 });
 
-const mount = async (piRpc: (command: PiRpcCommand) => Promise<unknown>) => {
+const mount = async (piRpc: (command: PiRpcCommand) => Promise<unknown>, props: Record<string, unknown> = {}) => {
   let renderer: TestRenderer.ReactTestRenderer | null = null;
   await act(async () => {
     renderer = TestRenderer.create(createElement(SettingsProvider, {
@@ -61,6 +76,7 @@ const mount = async (piRpc: (command: PiRpcCommand) => Promise<unknown>) => {
         label: "Claude Sonnet 4.5",
         current: { provider: "anthropic", id: "claude-sonnet-4-5" },
         piRpc,
+        ...props,
       }),
     }));
   });
@@ -120,6 +136,57 @@ describe("the model picker", () => {
     expect(piRpc).toHaveBeenCalledWith({ type: "set_model", provider: "anthropic", modelId: "claude-sonnet-4-5" });
     expect(renderer.root.findAllByProps({ role: "dialog" })).toHaveLength(1);
     expect(words(renderer)).toContain("Couldn't switch: Model not found: invalid/model");
+  });
+
+  it("offers the cycle beside the whole list only when Pi scopes one, and splits the rows by it", async () => {
+    scoped = ["anthropic/claude-sonnet-4-5"];
+    try {
+      const renderer = await mount(answers(MODELS));
+      await act(async () => { chip(renderer).props.onClick(); });
+      await act(async () => {});
+
+      const modes = renderer.root.findByProps({ className: "segmented pi-picker-modes" });
+      const buttons = modes.findAll((node) => node.type === "button");
+      expect(buttons.map((button) => button.children.join(""))).toEqual(["Scoped 1", "All 3"]);
+      expect(buttons[1]!.props["aria-pressed"]).toBe(true);
+
+      await act(async () => { buttons[0]!.props.onClick(); });
+      const options = renderer.root.findAllByProps({ role: "option" });
+      expect(options).toHaveLength(1);
+      expect(options[0]!.findAllByProps({ className: "pi-picker-name" })[0]!.children.join("")).toBe("Claude Sonnet 4.5");
+      await act(async () => { renderer.unmount(); });
+    } finally {
+      scoped = null;
+    }
+
+    // a file that scopes nothing names no second list: the footer is Save as default alone
+    const plain = await mount(answers(MODELS));
+    await act(async () => { chip(plain).props.onClick(); });
+    await act(async () => {});
+    expect(plain.root.findAllByProps({ className: "segmented pi-picker-modes" })).toHaveLength(0);
+    expect(plain.root.findByProps({ className: "btn pi-picker-save" })).toBeTruthy();
+  });
+
+  it("saves the highlighted model as the default, from the footer's button and from Ctrl+S", async () => {
+    const onSavedAsDefault = mock(() => {});
+    writes.length = 0;
+    const renderer = await mount(answers(MODELS), { onSavedAsDefault });
+    await act(async () => { chip(renderer).props.onClick(); });
+    await act(async () => {});
+
+    await act(async () => { renderer.root.findAllByProps({ role: "option" })[1]!.props.onPointerEnter(); });
+    await act(async () => { renderer.root.findByProps({ className: "btn pi-picker-save" }).props.onClick(); });
+    expect(writes[0]).toEqual({ defaultProvider: "anthropic", defaultModel: "claude-opus-4-1" });
+    expect(onSavedAsDefault).toHaveBeenCalledTimes(1);
+
+    // Ctrl+S is the picker's while it is open: the browser's save page never runs
+    const dialog = renderer.root.findByProps({ className: "menu pi-picker" });
+    await act(async () => { renderer.root.findAllByProps({ role: "option" })[2]!.props.onPointerEnter(); });
+    let prevented = 0;
+    await act(async () => { dialog.props.onKeyDown({ key: "s", ctrlKey: true, altKey: false, metaKey: false, preventDefault: () => { prevented += 1; } }); });
+    expect(prevented).toBe(1);
+    expect(writes[1]).toEqual({ defaultProvider: "openai", defaultModel: "gpt-5" });
+    expect(onSavedAsDefault).toHaveBeenCalledTimes(2);
   });
 
   it("reads Pi's list into rows, and groups it in the order Pi gave", () => {

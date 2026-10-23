@@ -1353,6 +1353,8 @@ export function Composer({
       readOnly={pi.readOnly}
       onPicked={() => textareaRef.current?.focus({ preventScroll: true })}
       openRequest={modelPickerRequest}
+      machineId={machineId}
+      onSavedAsDefault={() => announce(t("Saved as default"))}
     />
     {piThinkingLevel !== null && <PiThinkingMenu
       level={piThinkingLevel}
@@ -1362,6 +1364,8 @@ export function Composer({
       readOnly={pi.readOnly}
       pipsOnly={piChipsRow}
       onPicked={() => textareaRef.current?.focus({ preventScroll: true })}
+      machineId={machineId}
+      onSavedAsDefault={() => announce(t("Saved as default"))}
     />}
   </> : null;
   // what the chips last said, so a change is announced and the first value is not

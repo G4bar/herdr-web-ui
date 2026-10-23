@@ -13,7 +13,7 @@ import { Check, ChevronDown, LoaderCircle, X } from "lucide-react";
 
 import "./PiModelPicker.css";
 
-import { ApiError, type PiRpcCommand } from "../lib/api.ts";
+import { ApiError, fetchPiSettings, savePiSettings, type PiRpcCommand, type PiSettingsFile } from "../lib/api.ts";
 import { formatTokens } from "../lib/compose.ts";
 import { useT } from "../lib/i18n.ts";
 import { SHEET_QUERY, useSheetSwipe } from "../lib/sheets.ts";
@@ -36,6 +36,10 @@ export interface PiModelPickerProps {
   onPicked?: () => void;
   /** a key outside the chip asked for the picker (Ctrl+L, DS §6.1): each new value opens it once */
   openRequest?: number;
+  /** the PC whose Pi settings say which models cycle, and whose file Save as default writes */
+  machineId?: string;
+  /** Save as default wrote the model: the composer says so through its status line (DS §4.2) */
+  onSavedAsDefault?: () => void;
 }
 
 /** One entry of `get_available_models`, cut to what a row says of it. */
@@ -95,9 +99,17 @@ export function groupModels(models: readonly PickerModel[], query: string): Mode
 }
 
 const keyOf = (model: PickerModel): string => `${model.provider}:${model.id}`;
+/** A model as Pi's `enabledModels` names it. */
+const entryOf = (model: PickerModel): string => `${model.provider}/${model.id}`;
+
+/** The models Pi's own cycling is scoped to, or null when the file scopes none: every model cycles. */
+function scopedOf(file: PiSettingsFile): string[] | null {
+  const list = file.settings["enabledModels"];
+  return Array.isArray(list) && list.length > 0 ? list.filter((entry): entry is string => typeof entry === "string") : null;
+}
 const refusal = (error: unknown): string => error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error);
 
-export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPicked, openRequest = 0 }: PiModelPickerProps) {
+export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPicked, openRequest = 0, machineId = "local", onSavedAsDefault }: PiModelPickerProps) {
   const t = useT();
   const sheet = useMediaQuery(SHEET_QUERY);
   const listId = useId();
@@ -115,9 +127,18 @@ export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPic
   const [active, setActive] = useState(0);
   const [switching, setSwitching] = useState<string | null>(null);
   const [switchError, setSwitchError] = useState<{ key: string; text: string } | null>(null);
+  /** the cycle Pi's file scopes the list to; null: the file scopes none, so both modes hold every model */
+  const [scoped, setScoped] = useState<string[] | null>(null);
+  /** which of the footer's two lists is drawn; the whole list, as the picker always drew it */
+  const [showing, setShowing] = useState<"scoped" | "all">("all");
+  const [savingDefault, setSavingDefault] = useState(false);
+  const [defaultError, setDefaultError] = useState<string | null>(null);
   const trap = useFocusTrap<HTMLDivElement>(open && sheet, { initialFocus: searchRef, shouldRestore: () => !toBox.current });
 
-  const groups = groupModels(models ?? [], query);
+  const scopedSet = new Set(scoped ?? []);
+  const scopedCount = (models ?? []).filter((model) => scopedSet.has(entryOf(model))).length;
+  const listed = showing === "scoped" && scopedCount > 0 ? (models ?? []).filter((model) => scopedSet.has(entryOf(model))) : models ?? [];
+  const groups = groupModels(listed, query);
   const rows = groups.flatMap((group) => group.models);
 
   const dismiss = useCallback((): void => {
@@ -148,6 +169,20 @@ export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPic
   useEffect(() => {
     if (open) load();
   }, [load, open]);
+
+  // the cycle is read with it, and only then can choose between the two lists; a file that cannot be
+  // read leaves the footer to Save as default alone, as a Pi the web has no settings for reads
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    setShowing("all");
+    setDefaultError(null);
+    void fetchPiSettings(machineId).then(
+      (file) => { if (live) setScoped(scopedOf(file)); },
+      () => { if (live) setScoped(null); },
+    );
+    return () => { live = false; };
+  }, [machineId, open]);
 
   // Ctrl+L opens the same picker the chip does, and only where the chip could be pressed
   const lastOpenRequest = useRef(openRequest);
@@ -240,11 +275,35 @@ export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPic
     }
   };
 
+  /** Ctrl+S and the footer's button: the highlighted model becomes the one a new Pi session starts
+   *  with (DS §4.2). A refusal says Pi's own sentence and leaves the chip as it was. */
+  const saveDefault = async (): Promise<void> => {
+    const model = rows[active];
+    if (model === undefined || savingDefault) return;
+    setSavingDefault(true);
+    setDefaultError(null);
+    try {
+      await savePiSettings({ defaultProvider: model.provider, defaultModel: model.id }, machineId);
+      onSavedAsDefault?.();
+    } catch (error) {
+      setDefaultError(t("Couldn't change {setting}: {reason}", { setting: t("Default model"), reason: refusal(error) }));
+    } finally {
+      setSavingDefault(false);
+    }
+  };
+
   const onKeyDown = (event: KeyboardEvent<HTMLElement>): void => {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
       close();
+      return;
+    }
+    // Ctrl+S is the picker's while it is open, whatever holds the focus in it: the browser's save page
+    // never runs, and the key reaches neither the browser nor the page behind (DS §6.1)
+    if (event.ctrlKey && !event.altKey && !event.metaKey && event.key.toLocaleLowerCase() === "s") {
+      event.preventDefault();
+      void saveDefault();
       return;
     }
     if (rows.length === 0) return;
@@ -342,6 +401,29 @@ export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPic
     </>
   );
 
+  // the footer (DS §4.2): the cycle or the whole list, when Pi's file scopes one, and the Save as
+  // default a Ctrl+S presses for the highlighted row
+  const footer = (
+    <>
+      <div className="pi-picker-footer">
+        {scopedCount > 0 && (
+          <div className="segmented pi-picker-modes" role="group" aria-label={t("Models to show")}>
+            <button type="button" aria-pressed={showing === "scoped"} onClick={() => { setShowing("scoped"); setActive(0); setSwitchError(null); }}>
+              {t("Scoped {count}", { count: scopedCount })}
+            </button>
+            <button type="button" aria-pressed={showing === "all"} onClick={() => { setShowing("all"); setActive(0); setSwitchError(null); }}>
+              {t("All {count}", { count: models?.length ?? 0 })}
+            </button>
+          </div>
+        )}
+        <button type="button" className="btn pi-picker-save" disabled={rows.length === 0 || savingDefault} onClick={() => void saveDefault()}>
+          {t("Save as default")}<kbd className="kbd" aria-hidden="true">Ctrl+S</kbd>
+        </button>
+      </div>
+      {defaultError !== null && <p className="pi-picker-error" role="alert">{defaultError}</p>}
+    </>
+  );
+
   // a finger holds the sheet from its head; a press on the scrim or the X closes it, as Back does
   const onScrim = (event: MouseEvent<HTMLDivElement>): void => { if (event.target === event.currentTarget) close(); };
   const surface = sheet
@@ -354,6 +436,7 @@ export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPic
         <div className="modal-body">
           {search}
           {list}
+          {footer}
         </div>
       </div>
     </div>
@@ -373,6 +456,7 @@ export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPic
     >
       {search}
       {list}
+      {footer}
     </div>;
 
   return (
