@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
@@ -288,14 +288,49 @@ describe("native Pi settings", () => {
     });
   });
 
-  it("creates the file for an agent directory that has none", async () => {
-    await withAgentDir(async (dir) => {
+  it("creates the file for an agent directory that has none", async () => {    await withAgentDir(async (dir) => {
       const nested = join(dir, "nested");
       mkdirSync(nested);
       process.env["PI_CODING_AGENT_DIR"] = nested;
       const response = await call("/api/pi/settings", post("/api/pi/settings", { defaultModel: "gpt-5" }));
       expect(response?.status).toBe(200);
       expect(JSON.parse(readFileSync(join(nested, "settings.json"), "utf8"))).toEqual({ defaultModel: "gpt-5" });
+    });
+  });
+
+  it("keeps the link a dotfile manager made, and writes through to its file", async () => {
+    await withAgentDir(async (dir) => {
+      const target = join(dir, "dotfiles", "settings.json");
+      mkdirSync(join(dir, "dotfiles"));
+      writeFileSync(target, JSON.stringify({ theme: "rose-pine" }));
+      symlinkSync(target, join(dir, "settings.json"));
+      const response = await call("/api/pi/settings", post("/api/pi/settings", { defaultModel: "gpt-5" }));
+      expect(response?.status).toBe(200);
+      expect(lstatSync(join(dir, "settings.json")).isSymbolicLink()).toBe(true);
+      expect(JSON.parse(readFileSync(target, "utf8"))).toEqual({ theme: "rose-pine", defaultModel: "gpt-5" });
+    });
+  });
+
+  it("keeps a mode only the owner may read, and one other than the default", async () => {
+    await withAgentDir(async (dir) => {
+      const path = join(dir, "settings.json");
+      writeFileSync(path, JSON.stringify({}));
+      chmodSync(path, 0o600);
+      const response = await call("/api/pi/settings", post("/api/pi/settings", { defaultModel: "gpt-5" }));
+      expect(response?.status).toBe(200);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    });
+  });
+
+  it("keeps both keys of two writes that overlap", async () => {
+    await withAgentDir(async (dir) => {
+      const responses = await Promise.all([
+        call("/api/pi/settings", post("/api/pi/settings", { defaultProvider: "anthropic" })),
+        call("/api/pi/settings", post("/api/pi/settings", { defaultModel: "gpt-5" })),
+      ]);
+      expect(responses.map((response) => response?.status)).toEqual([200, 200]);
+      expect(readSettings(dir)).toEqual({ defaultProvider: "anthropic", defaultModel: "gpt-5" });
+      expect(readdirSync(dir)).toEqual(["settings.json"]);
     });
   });
 

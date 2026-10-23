@@ -9,7 +9,7 @@
  * terminal no longer has is a 404 and its map entry is dropped, not a child spawned for nobody.
  */
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, realpath, rename, stat, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { sessionSnapshot } from "./herdr/client.ts";
@@ -161,6 +161,33 @@ async function piSettings(): Promise<PiSettings | Response> {
 }
 
 /**
+ * The settings writes already under way: each one re-reads Pi's file and replaces it, so two that
+ * overlapped would each write back the document they read and one key would be lost.
+ */
+let settingsWrites: Promise<unknown> = Promise.resolve();
+
+function serialized<T>(run: () => Promise<T>): Promise<T> {
+  const next = settingsWrites.then(run, run);
+  settingsWrites = next.catch(() => undefined);
+  return next;
+}
+
+/**
+ * Where a settings document is actually written, and the mode it keeps. A `settings.json` a dotfile
+ * manager symlinked to its own store stays a link: the write goes beside the file it names, under
+ * that file's mode, so neither the link nor a mode the user chose is replaced by a rename.
+ */
+async function settingsTarget(path: string): Promise<{ path: string; mode: number }> {
+  try {
+    const real = await realpath(path);
+    return { path: real, mode: (await stat(real)).mode & 0o777 };
+  } catch {
+    // shortcut: a dangling symlink writes a regular file over the link, not to its target
+    return { path, mode: 0o600 };
+  }
+}
+
+/**
  * Writes the keys a client sent, and only those: every other key of Pi's file is carried over as it
  * was, the file is re-read right before it is replaced, and the new document reaches the disk under a
  * temp name so a reader never sees half of one (PLAN D8).
@@ -176,20 +203,25 @@ async function writePiSettings(request: Request): Promise<Response> {
     changes[key] = value;
   }
   const path = join(piAgentDir(), "settings.json");
-  const read = await readPiSettings(path);
-  if ("error" in read) return jsonResponse({ error: { code: "invalid_settings_file", message: `${path}: ${read.error}` } }, 409);
-  // nothing to write: Pi's own file is left alone rather than rewritten with the same content
-  if (Object.keys(changes).length === 0) return jsonResponse({ path, settings: piSettingsOf(read.file) });
-  const next = { ...read.file, ...changes };
-  const temp = join(dirname(path), `.settings-${randomUUID()}.tmp`);
-  try {
+  return serialized(async () => {
+    // the directory exists before the file is read, so the first write creates it, not a temp file
     await mkdir(dirname(path), { recursive: true });
-    await writeFile(temp, JSON.stringify(next, null, 2), "utf8");
-    await rename(temp, path);
-  } finally {
-    await unlink(temp).catch(() => undefined);
-  }
-  return jsonResponse({ path, settings: piSettingsOf(next) });
+    const read = await readPiSettings(path);
+    if ("error" in read) return jsonResponse({ error: { code: "invalid_settings_file", message: `${path}: ${read.error}` } }, 409);
+    // nothing to write: Pi's own file is left alone rather than rewritten with the same content
+    if (Object.keys(changes).length === 0) return jsonResponse({ path, settings: piSettingsOf(read.file) });
+    const next = { ...read.file, ...changes };
+    const target = await settingsTarget(path);
+    const temp = join(dirname(target.path), `.settings-${randomUUID()}.tmp`);
+    try {
+      await writeFile(temp, JSON.stringify(next, null, 2), { encoding: "utf8", mode: target.mode });
+      await chmod(temp, target.mode);
+      await rename(temp, target.path);
+    } finally {
+      await unlink(temp).catch(() => undefined);
+    }
+    return jsonResponse({ path, settings: piSettingsOf(next) });
+  });
 }
 
 /**
