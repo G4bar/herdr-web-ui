@@ -1551,4 +1551,9 @@ export const ZH: Record<string, string> = {
   "Calls ({n})": "调用 ({n})",
   "+{n} more": "还有 {n} 个",
 
+  // a composer draft that runs as a shell command (DS §4.1)
+  "Run a shell command · !! keeps output out of Pi's context": "运行 shell 命令 · !! 不会把输出放进 Pi 的上下文",
+  "Couldn't run the command: {reason}": "无法运行该命令：{reason}",
+  "Couldn't run the command.": "无法运行该命令。",
+
 };

@@ -52,3 +52,22 @@ export function piChipChange(before: PiChipsDrawn | null, next: PiChipsDrawn | n
   if (next.level !== null && before.level !== next.level) return "level";
   return null;
 }
+
+/**
+ * What a draft runs as a direct shell command instead of a prompt (DS §4.1): `!` as Pi's bash mode
+ * reads it, which ignores the whitespace before the bang, and `!!` for a command whose output Pi
+ * keeps out of its context. Null for every other draft, and for a bang with nothing after it, which
+ * Pi sends as an ordinary message.
+ */
+export interface PiBashCommand {
+  command: string;
+  excludeFromContext: boolean;
+}
+
+export function piBashCommand(draft: string): PiBashCommand | null {
+  const trimmed = draft.trimStart();
+  if (!trimmed.startsWith("!")) return null;
+  const excludeFromContext = trimmed.startsWith("!!");
+  const command = trimmed.slice(excludeFromContext ? 2 : 1).trim();
+  return command === "" ? null : { command, excludeFromContext };
+}

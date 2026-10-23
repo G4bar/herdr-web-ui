@@ -1547,4 +1547,9 @@ export const KO: Record<string, string> = {
   "Calls ({n})": "호출 ({n})",
   "+{n} more": "{n}개 더",
 
+  // a composer draft that runs as a shell command (DS §4.1)
+  "Run a shell command · !! keeps output out of Pi's context": "셸 명령 실행 · !!는 출력을 Pi 컨텍스트에서 제외합니다",
+  "Couldn't run the command: {reason}": "명령을 실행하지 못했습니다: {reason}",
+  "Couldn't run the command.": "명령을 실행하지 못했습니다.",
+
 };

@@ -1549,4 +1549,9 @@ export const JA: Record<string, string> = {
   "Calls ({n})": "呼び出し ({n})",
   "+{n} more": "他 {n} 件",
 
+  // a composer draft that runs as a shell command (DS §4.1)
+  "Run a shell command · !! keeps output out of Pi's context": "シェルコマンドを実行 · !! は出力を Pi のコンテキストに含めません",
+  "Couldn't run the command: {reason}": "コマンドを実行できませんでした: {reason}",
+  "Couldn't run the command.": "コマンドを実行できませんでした。",
+
 };

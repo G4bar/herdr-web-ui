@@ -400,10 +400,15 @@ export class PiRpc {
    * Send one command and wait for its own response, which resolves with the response's `data`. A
    * refused command rejects with pi's `error`. A prompt's answer only means it was taken (see
    * `data.disposition`): the run ends at `agent_settled`, and the state says when it does.
+   *
+   * A command may bring its own id (`bash`: pi streams a command's output under it, and the chat that
+   * ran one draws its own lines by the name it chose). An id another command still waits on is not
+   * taken again: that call gets a generated one, and its caller simply finds no lines of its own.
    */
   call(command: PiRpcRecord & { type: string }): Promise<unknown> {
     if (this.ending) return Promise.reject(new Error("pi has exited"));
-    const id = `req-${++this.sequence}`;
+    const named = typeof command.id === "string" ? command.id : null;
+    const id = named !== null && !this.pending.has(named) ? named : `req-${++this.sequence}`;
     return new Promise((resolve, reject) => {
       // the command as it went out, its id included: the response reports what that command answered
       const sent = { ...command, id };

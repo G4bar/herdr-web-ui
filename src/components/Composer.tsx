@@ -62,11 +62,12 @@ import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent
 import { AgentMark } from "./AgentMark.tsx";
 import { PiModelPicker } from "./PiModelPicker.tsx";
 import { PiThinkingMenu, thinkingLevelLabel } from "./PiThinkingMenu.tsx";
-import { PI_ANNOUNCE_MS, piChipChange, piComposerMode } from "../lib/piComposer.ts";
+import { PI_ANNOUNCE_MS, piBashCommand, piChipChange, piComposerMode, type PiBashCommand } from "../lib/piComposer.ts";
 import { clearPiQueue, queuedTexts } from "../lib/piNative.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { ContextPopover } from "./ContextPopover.tsx";
+import { ToolStop, ToolTail } from "./ToolBodies.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { usePaneCommands } from "../lib/usePaneCommands.ts";
 import { useT } from "../lib/i18n.ts";
@@ -300,6 +301,9 @@ export function Composer({
   /** the card's own width: a narrow one shows the task chip's count */
   const [cardWidth, setCardWidth] = useState(0);
   const [contextShown, setContextShown] = useState(false);
+  /** the direct shell command this box runs, by the id its output streams under (DS §4.1, §4.6) */
+  const [bashRunning, setBashRunning] = useState<string | null>(null);
+  const bashOrder = useRef(0);
   const composingRef = useRef(false);
   // the chat lens's input surface takes the keyboard when it appears (a pane switch remounts
   // it), as the grid does in the terminal lens: a pane picked from the drawer is typed into
@@ -380,8 +384,12 @@ export function Composer({
   const offlineSentence = t(connectedBefore ? "Reconnecting…" : "Connecting…");
   // DS §9: a Pi that is running is steered, and Alt+Enter says when its follow-up lands
   const streaming = piNative?.mode === "native" && piNative.isStreaming;
+  // DS §4.1: a draft that starts with a bang is a shell command on a pane the chat drives, never a
+  // prompt; `!!` keeps its output out of Pi's context. A Pi the terminal owns runs nothing here
+  const bash = piNative?.mode === "native" && piRpc !== undefined ? piBashCommand(text) : null;
   const placeholder = !connected
     ? offlineSentence
+    : bash !== null ? t("Run a shell command · !! keeps output out of Pi's context")
     : answerHint ?? offered ?? (streaming ? t("Steer Pi… (Alt+Enter: after it finishes)") : t("Message {agent}…", { agent: agentLabel }));
 
   // A cancelled send the agent put back in its input box fills an empty box again — without
@@ -688,6 +696,27 @@ export function Composer({
     void clearPiQueue(piRpc).then((queue) => putBack(queuedTexts(queue)), () => undefined);
   }, [piNative, piRpc, putBack]);
 
+  // DS §4.1: a `!` draft runs through pi's `bash`, never through `prompt`. The id named here is what
+  // pi streams the command's output under, so the tail drawn while it runs is this command's own.
+  const runPiBash = useCallback((next: PiBashCommand): boolean => {
+    if (piRpc === undefined) return false;
+    const id = `web-bash-${Date.now().toString(36)}-${++bashOrder.current}`;
+    setBashRunning(id);
+    void piRpc({ type: "bash", id, command: next.command, excludeFromContext: next.excludeFromContext })
+      .catch((error: unknown) => {
+        if (mounted.current) setNote(error instanceof Error ? t("Couldn't run the command: {reason}", { reason: error.message }) : t("Couldn't run the command."));
+      })
+      .finally(() => {
+        if (mounted.current) setBashRunning((current) => (current === id ? null : current));
+      });
+    return true;
+  }, [piRpc, t]);
+
+  const stopBash = useCallback(() => {
+    if (piRpc === undefined) return;
+    void piRpc({ type: "abort_bash" }).catch(() => undefined);
+  }, [piRpc]);
+
   // a Held row's Restore (DS §4.4) comes into the box exactly as Alt+Up's texts do, once per request
   const queuedDrawn = useRef(0);
   useEffect(() => {
@@ -907,7 +936,10 @@ export function Composer({
     // a polish landing before the acknowledgement would count as an edit and keep the sent message here
     dictation.forget();
     try {
-      const result = onSend(text, clearDraft, sendAnyway, streaming ? deliver ?? sendAs : undefined);
+      // DS §4.1: a bang draft is the shell command Pi's `bash` runs, never a message to the model
+      const result = bash === null
+        ? onSend(text, clearDraft, sendAnyway, streaming ? deliver ?? sendAs : undefined)
+        : runPiBash(bash);
       if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return true; }
       void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey));
     } catch {
@@ -915,7 +947,7 @@ export function Composer({
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
     return true;
-  }, [attachments, connected, dictation.forget, draftKey, onOpenHistory, onSend, role, roomless, sendAs, sending, streaming, terminalTyped, text, uploading]);
+  }, [attachments, bash, connected, dictation.forget, draftKey, onOpenHistory, onSend, role, roomless, runPiBash, sendAs, sending, streaming, terminalTyped, text, uploading]);
   const sendRef = useRef(send);
   sendRef.current = send;
   const connectedRef = useRef(connected);
@@ -1042,6 +1074,12 @@ export function Composer({
         cancelRetry();
         return;
       }
+      // DS §4.1, §6.1: a `!` command still running is what Escape cancels here, not the run behind it
+      if (event.key === "Escape" && bashRunning !== null) {
+        event.preventDefault();
+        stopBash();
+        return;
+      }
       // a draft puts Send where Stop was: Escape is then the Stop the agent's own input has
       if (event.key === "Escape" && connected && agentStatus === "working" && textRef.current.trim().length > 0) {
         event.preventDefault();
@@ -1069,7 +1107,7 @@ export function Composer({
       // every other Enter follows the Send-as row
       send(undefined, false);
     },
-    [agentStatus, abort, cancelRetry, choices, connected, menuDismissed, menuOpen, offered, piRetry, restoreHeld, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, streaming, trigger],
+    [agentStatus, abort, bashRunning, cancelRetry, choices, connected, menuDismissed, menuOpen, offered, piRetry, restoreHeld, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, stopBash, streaming, trigger],
   );
 
   const onPaste = useCallback(
@@ -1305,11 +1343,21 @@ export function Composer({
         </div>
       )}
 
+      {/* DS §4.1, §4.6: the shell command the box ran, its last lines following as they arrive, and
+          the one control that stops it (Escape does the same) */}
+      {bashRunning !== null && (
+        <div className="composer-bash-run">
+          <ToolTail lines={piNative?.toolTails[bashRunning] ?? []} />
+          <ToolStop onAbort={stopBash} />
+        </div>
+      )}
+
       <div
         ref={surfaceRef}
         className={`composer-surface${dragging ? " is-dragging" : ""}`}
         data-compact={statusCompact ? "" : undefined}
         data-pi-chips={piChips !== null ? "" : undefined}
+        data-bash={bash !== null ? "" : undefined}
         onDragEnter={(event) => {
           event.preventDefault();
           setDragging(true);
@@ -1466,6 +1514,13 @@ export function Composer({
               <button type="button" aria-pressed={sendAs === "followUp"} onClick={() => setSendAs("followUp")}>{t("Follow-up")}</button>
             </div>
             <span className="composer-send-as-hint" aria-hidden="true">{t("Enter · Alt+Enter follows up")}</span>
+          </div>
+        )}
+
+        {/* DS §4.1: the `$` that marks the whole message as a shell command, before its first line */}
+        {bash !== null && (
+          <div className="composer-bash">
+            <span className="composer-bash-chip" aria-hidden="true">$</span>
           </div>
         )}
 

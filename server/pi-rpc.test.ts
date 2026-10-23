@@ -209,6 +209,15 @@ describe("PiRpc", () => {
     await rpc.call({ type: "bash", command: "printf one" });
     expect(rpc.state.toolTails).toEqual({});
   });
+
+  it("streams a direct bash under the id its caller named, and drops that tail once it answered", async () => {
+    const { rpc } = start();
+    const tails: (string[] | undefined)[] = [];
+    rpc.onState((state) => tails.push(state.toolTails["web-bash-7"]));
+    await rpc.call({ type: "bash", id: "web-bash-7", command: "printf one" });
+    expect(tails.filter((tail) => tail !== undefined).at(-1)).toEqual(["one", "two", "three", ""]);
+    expect(rpc.state.toolTails).toEqual({});
+  });
 });
 
 describe("reducePiEvent", () => {

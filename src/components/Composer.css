@@ -145,9 +145,60 @@
 .composer-quick,
 .composer-surface,
 .composer-note,
-.composer-notices {
+.composer-notices,
+.composer-bash-run {
   width: min(100%, var(--chat-w));
   margin-inline: auto;
+}
+
+/* DS §4.1: a `!` draft is a shell command: a `$` chip at the start of the message and a rail down
+   the box's left edge in Pi's bashMode colour (--status-done); the card's own focus border stays
+   the accent's */
+.composer-bash {
+  grid-area: bash;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-3) 0;
+}
+
+.composer-bash-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: var(--chip-h);
+  height: var(--chip-h);
+  padding: 0 var(--space-2);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--status-done);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+
+.composer-surface[data-bash]::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: var(--rail-w);
+  border-start-start-radius: var(--radius-2xl);
+  border-end-start-radius: var(--radius-2xl);
+  background: var(--status-done);
+  pointer-events: none;
+}
+
+/* DS §4.6: a direct `!` command's last lines, over the card, with the Stop that cancels it */
+.composer-bash-run {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin-bottom: var(--space-2);
+}
+
+.composer-bash-run > .chat-tool-io {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 /* the dictation pill floats above the composer, on the same column edge */
@@ -201,6 +252,7 @@
 .composer-surface[data-compact]:has(> .composer-status[data-hint]) {
   grid-template-areas:
     "send-as send-as send-as"
+    "bash bash bash"
     "attachments attachments attachments"
     "text text text"
     "status status status"
@@ -219,6 +271,7 @@
 .composer-surface[data-pi-chips] {
   grid-template-areas:
     "send-as send-as send-as"
+    "bash bash bash"
     "attachments attachments attachments"
     "text text text"
     "pi pi pi"
@@ -228,6 +281,7 @@
 .composer-surface[data-pi-chips]:has(> .composer-status[data-hint]) {
   grid-template-areas:
     "send-as send-as send-as"
+    "bash bash bash"
     "attachments attachments attachments"
     "text text text"
     "pi pi pi"
@@ -559,6 +613,7 @@
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas:
     "send-as send-as send-as"
+    "bash bash bash"
     "attachments attachments attachments"
     "text text text"
     "left status right";

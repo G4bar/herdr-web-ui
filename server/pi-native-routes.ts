@@ -27,7 +27,9 @@ const NATIVE_PATHS = new Set(["/api/pi/takeover", "/api/pi/handback", "/api/pi/r
 /**
  * The RPC commands the chat may send to a native pane's child, and the fields each may carry: the
  * allowlist is the trust boundary, so a type or field not named here never reaches pi. `bash` runs
- * a shell command as the pane's own Pi would (`!`), the same trust as typing it in the terminal.
+ * a shell command as the pane's own Pi would (`!`), the same trust as typing it in the terminal, and
+ * may name itself: pi streams a command's output under the id it was sent with, so the chat that
+ * started one finds its own lines by the id it chose.
  */
 const RPC_COMMANDS: Record<string, Record<string, "string" | "boolean">> = {
   abort: {},
@@ -45,7 +47,7 @@ const RPC_COMMANDS: Record<string, Record<string, "string" | "boolean">> = {
   set_auto_compaction: { enabled: "boolean" },
   set_auto_retry: { enabled: "boolean" },
   abort_retry: {},
-  bash: { command: "string", excludeFromContext: "boolean" },
+  bash: { id: "string", command: "string", excludeFromContext: "boolean" },
   abort_bash: {},
   get_session_stats: {},
   // the command's own output path is never a client's: the route names a temp file and streams it
@@ -71,6 +73,9 @@ const RPC_VALUES: Record<string, readonly string[]> = {
 
 const isTrust = (value: unknown): value is PiTrust => value === "approve" || value === "deny";
 
+/** A bash command's own name for itself, as a JSON-RPC id pi echoes back on every line it streams. */
+const RPC_ID = /^[A-Za-z0-9._:-]{1,64}$/;
+
 /**
  * The command a client sent, cut to the allowlist: an unknown type, an unknown field, a field of
  * another kind or a value outside its closed set is refused, and nothing outside it reaches pi.
@@ -94,6 +99,8 @@ function checkedCommand(value: unknown): { command: { type: string } & Record<st
   for (const key of Object.keys(sent)) {
     if (key !== "type" && !Object.hasOwn(fields, key)) return { error: `${type} takes no ${key}` };
   }
+  const id = command["id"];
+  if (typeof id === "string" && !RPC_ID.test(id)) return { error: `${type}'s id may hold only letters, digits and . _ : -` };
   return { command };
 }
 
