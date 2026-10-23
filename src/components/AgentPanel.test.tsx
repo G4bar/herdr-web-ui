@@ -4,6 +4,7 @@ import * as reactDom from "react-dom";
 import TestRenderer, { act } from "react-test-renderer";
 
 import type { HerdsmanAgent } from "../../shared/protocol.ts";
+import { dropAgentDraft } from "../lib/herdsman.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 
 // the close confirmation is a portal so a transformed page cannot clip it; the test renders it where it is
@@ -256,6 +257,33 @@ describe("AgentPanel", () => {
     expect(sheet.commands).toEqual([]);
     await press(sheet.renderer, "Interrupt now?");
     expect(sheet.commands).toEqual(["/hm interrupt scout_ui also check Composer.tsx"]);
+  });
+
+  it("clears the draft when the panel is dropped for a docked file, so the next open starts empty", async () => {
+    const draftKey = "pane:scout_dock";
+    const docked = await mount(agentOf(), ["steer"], { draftKey });
+    await type(docked.renderer, "half a message");
+    // a file docks in the panel's slot: the panel is dropped, and its unsent draft goes with it
+    await docked.unmount();
+    dropAgentDraft({ paneId: "pane", label: "scout_dock" });
+
+    const reopened = await mount(agentOf(), ["steer"], { draftKey });
+    expect(reopened.renderer.root.findByProps({ className: "input agent-panel-field" }).props.value).toBe("");
+  });
+
+  it("opens in Reply mode from the transcript's Reply even with an unsent steer draft", async () => {
+    const draftKey = "pane:scout_reply";
+    const earlier = await mount(agentOf(), ["steer", "reply"], { draftKey });
+    await type(earlier.renderer, "half a message");
+    expect(button(earlier.renderer, "Steer").props["aria-pressed"]).toBe(true);
+    await earlier.unmount();
+
+    // the agent asked since: the transcript's Reply leads to Reply, and what was typed is its answer
+    const asked = agentOf({ state: "asks", question: { text: "Which colour?", files: [] } });
+    const reply = await mount(asked, ["steer", "reply"], { draftKey, focusField: true });
+    expect(button(reply.renderer, "Reply").props["aria-pressed"]).toBe(true);
+    await press(reply.renderer, "Send");
+    expect(reply.commands).toEqual(["/hm reply scout_ui half a message"]);
   });
 
   it("opens at the reply field when the transcript's Reply asks for it, or the agent asks", async () => {

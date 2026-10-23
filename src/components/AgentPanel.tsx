@@ -67,8 +67,10 @@ interface Props {
   back?: { label: string; run: () => void };
 }
 
-/** The mode the panel opens in: the reader's own from an unsent draft, else Reply when the agent asks. */
-function startMode(draft: AgentDraftMode | undefined, modes: readonly Mode[], canReply: boolean): Mode {
+/** The mode the panel opens in: the transcript's Reply leads to Reply, else the reader's own from an
+ *  unsent draft, else Reply when the agent asks. */
+function startMode(draft: AgentDraftMode | undefined, modes: readonly Mode[], canReply: boolean, replyField: boolean): Mode {
+  if (replyField && canReply) return "reply";
   if (draft !== undefined && modes.includes(draft) && (draft !== "reply" || canReply)) return draft;
   return canReply ? "reply" : modes[0] ?? "steer";
 }
@@ -88,7 +90,7 @@ export function AgentPanel({ agent, draftKey, capabilities, focusField, onComman
   const canReply = question !== undefined && modes.includes("reply");
 
   const [draft] = useState(() => readAgentDraft(draftKey));
-  const [mode, setMode] = useState<Mode>(() => startMode(draft?.mode, modes, canReply));
+  const [mode, setMode] = useState<Mode>(() => startMode(draft?.mode, modes, canReply, focusField === true));
   const [text, setText] = useState(draft?.text ?? "");
   /** Interrupt's first press only arms the button: the run ends on the second */
   const [armed, setArmed] = useState(false);

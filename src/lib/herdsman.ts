@@ -198,7 +198,11 @@ const AGENT_DRAFTS = new Map<string, AgentDraft>();
 
 export const readAgentDraft = (key: string): AgentDraft | undefined => AGENT_DRAFTS.get(key);
 export const writeAgentDraft = (key: string, draft: AgentDraft): void => { AGENT_DRAFTS.set(key, draft); };
-export const clearAgentDraft = (key: string): void => { AGENT_DRAFTS.delete(key); };
+/** A panel that is dropped or replaced (closed, its file docked, its agent gone, another agent
+ *  opened) takes its draft with it; one only moved to another parent keeps it. */
+export const dropAgentDraft = (panel: { paneId: string; label: string } | null): void => {
+  if (panel !== null) AGENT_DRAFTS.delete(`${panel.paneId}:${panel.label}`);
+};
 
 /** The calls that start an agent, and so the turn an agent reads back in. */
 const DELEGATING_CALLS: readonly string[] = ["delegate_agent", "continue_agent"];

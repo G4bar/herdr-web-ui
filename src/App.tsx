@@ -64,7 +64,7 @@ import { PaneLenses } from "./lib/paneLens.ts";
 import { handBackPi, piNativeLanes, reconnectPi, refusal, takeOverPi, usePiNativeLane } from "./lib/piNative.ts";
 import { draftAfterFork, piMoveCancelled } from "./lib/piFork.ts";
 import { paneContextPress } from "./lib/paneCanvas.ts";
-import { clearAgentDraft } from "./lib/herdsman.ts";
+import { dropAgentDraft } from "./lib/herdsman.ts";
 import type { AppActions, PaneView, PaneControls } from "./lib/actions.ts";
 import {
   notificationState,
@@ -517,20 +517,27 @@ export function App() {
   // `replyField` is the transcript's Reply: the panel opens at the field it leads to (DS §4.8)
   const openAgentPanel = useCallback((machineId: string, paneId: string, label: string, replyField = false) => {
     if (viewing !== null && fileDocked) closeFile();
+    // another agent takes the panel's place: what was typed for the old one is done with
+    if (agentPanel?.paneId !== paneId || agentPanel.label !== label) dropAgentDraft(agentPanel);
     setAgentPanel({ machineId, paneId, label, replyField });
     setAgentSheet(!filePanelAvailable);
-  }, [viewing, fileDocked, closeFile, filePanelAvailable]);
-  // the roster's chip opened it, so the focus goes back there once the panel is gone (DS §6.2)
-  const closeAgentPanel = useCallback(() => {
-    // what was typed and never sent is done with: the next open starts clean
-    if (agentPanel !== null) clearAgentDraft(`${agentPanel.paneId}:${agentPanel.label}`);
+  }, [agentPanel, viewing, fileDocked, closeFile, filePanelAvailable]);
+  // the panel leaves this unmounted, and what was typed in it but never sent goes with it: a close, a
+  // docked file, an agent gone from the roster, another agent opened. Moving it to another parent (the
+  // expand glyph, a window crossing 980px) remounts it instead, and there the draft is the point
+  const dropAgentPanel = useCallback(() => {
+    dropAgentDraft(agentPanel);
     setAgentPanel(null);
     setAgentSheet(false);
-    requestAnimationFrame(() => document.querySelector<HTMLElement>(".hm-chip")?.focus());
   }, [agentPanel]);
+  // the roster's chip opened it, so the focus goes back there once the panel is gone (DS §6.2)
+  const closeAgentPanel = useCallback(() => {
+    dropAgentPanel();
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(".hm-chip")?.focus());
+  }, [dropAgentPanel]);
   useEffect(() => {
-    if (viewing !== null && fileDocked) setAgentPanel(null);
-  }, [viewing, fileDocked]);
+    if (viewing !== null && fileDocked) dropAgentPanel();
+  }, [viewing, fileDocked, dropAgentPanel]);
   // a collapse (below) whose two steps back have not landed: a second click on Show beside the
   // pane, or the kind correction in the same moment, must not queue two steps more and the file twice
   const collapsing = useRef(false);
@@ -1680,8 +1687,8 @@ export function App() {
   // the roster is the truth: an agent closed elsewhere (its own Close, the bridge restarting) takes the
   // panel with it rather than leaving a column about nothing
   useEffect(() => {
-    if (agentPanel !== null && panelLane.state !== null && panelAgent === null) setAgentPanel(null);
-  }, [agentPanel, panelLane.state, panelAgent]);
+    if (agentPanel !== null && panelLane.state !== null && panelAgent === null) dropAgentPanel();
+  }, [agentPanel, panelLane.state, panelAgent, dropAgentPanel]);
   // once the window is too narrow for a column the sheet is the only form; the next open asks again
   useEffect(() => { if (!filePanelAvailable && agentSheet) setAgentSheet(false); }, [filePanelAvailable, agentSheet]);
   useEffect(() => {
