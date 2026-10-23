@@ -72,6 +72,7 @@ import { clearPiQueue, queuedTexts } from "../lib/piNative.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { usePiKeys } from "../lib/usePiKeys.ts";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
+import { HerdsmanChip } from "./HerdsmanChip.tsx";
 import { ContextPopover } from "./ContextPopover.tsx";
 import { ToolStop, ToolTail } from "./ToolBodies.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
@@ -1807,6 +1808,9 @@ export function Composer({
             </button>
           )}
           <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} claude={agent === "claude"} plan={plan} />
+          {/* the Agents chip follows the Plan one (DS §3.1), only where the session publishes a Herdsman roster,
+              and its finished/failed/asks announcements ride the composer's persistent status region below */}
+          {piNative?.herdsman && <HerdsmanChip herdsman={piNative.herdsman} onAnnounce={announce} />}
         </div>
         {/* between the two control groups of the card's last row. The agent's name, its separator and the
             state word are read, not drawn: the mark and the header name the agent, and Stop, the live row and
