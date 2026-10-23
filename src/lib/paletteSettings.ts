@@ -1,6 +1,6 @@
 import type { Translate } from "./i18n.ts";
 
-export type SettingsPageId = "appearance" | "chat" | "terminal" | "alerts" | "voice" | "usage" | "shortcuts" | "devices" | "remote" | "integrations" | "about";
+export type SettingsPageId = "appearance" | "chat" | "pi" | "terminal" | "alerts" | "voice" | "usage" | "shortcuts" | "devices" | "remote" | "integrations" | "about";
 
 /** What the palette shows for one Settings page: its name and the words a user may look for it by. */
 export interface SettingsPageEntry {
@@ -18,6 +18,7 @@ export function settingsPageEntries(t: Translate): SettingsPageEntry[] {
   return [
     { id: "appearance", label: t("Appearance"), aliases: t("theme themes palette dark light mode colors density language sidebar logos") },
     { id: "chat", label: t("Chat"), aliases: t("chat font size message width composer enter send thinking code") },
+    { id: "pi", label: t("Pi"), aliases: t("pi agent model thinking defaults steering compaction keys") },
     { id: "terminal", label: t("Terminal"), aliases: t("terminal font size key bar keyboard clipboard") },
     { id: "alerts", label: t("Alerts"), aliases: t("notifications sound push bell needs input finished") },
     { id: "voice", label: t("Voice input"), aliases: t("dictation microphone speech openai") },

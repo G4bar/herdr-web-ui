@@ -1,0 +1,217 @@
+/**
+ * Settings → Pi (DS §4.11): what a new Pi session starts with, how the selected pane holds a message
+ * that arrives while a turn runs, its context switches, and where Pi's own keys are changed. The file
+ * rows are Pi's `settings.json`, which the server writes for the keys the web owns; the session rows
+ * are the pane's live RPC commands. A pane the terminal owns has no RPC, so its rows are drawn disabled
+ * and say where they are changed instead. A control only moves once Pi or the file has answered: a
+ * refusal leaves it as it was and puts the server's sentence under its label.
+ */
+import { useEffect, useState, type ReactNode } from "react";
+
+import { ApiError, fetchPiNativeState, fetchPiSettings, savePiSettings, sendPiRpc, type PiSettingsFile } from "../lib/api.ts";
+import { useT } from "../lib/i18n.ts";
+import { useSettings } from "../lib/settings.ts";
+import { piModels, type PickerModel } from "./PiModelPicker.tsx";
+import { THINKING_LEVELS, thinkingLevelLabel } from "./PiThinkingMenu.tsx";
+import { Segmented, SettingsGroup, SettingsRow, Toggle } from "./SettingsControls.tsx";
+
+export interface PiSettingsPageProps {
+  /** the selected Pi pane, whose Pi the session rows command; null: no Pi pane is selected */
+  pane: { paneId: string; name: string; machineId: string } | null;
+  /** Settings → Shortcuts, which holds the read-only list of Pi's keys */
+  onOpenShortcuts: () => void;
+  /** the Scoped models dialog (a later phase): the row's Edit… waits for it */
+  onEditScopedModels?: (() => void) | null;
+}
+
+/** How Pi takes a message that arrives while a turn runs (`set_steering_mode`, `set_follow_up_mode`). */
+type Delivery = "one-at-a-time" | "all";
+
+/** The session-level rows, as `get_state` reports them. */
+interface PiSessionSettings {
+  steeringMode: Delivery;
+  followUpMode: Delivery;
+  autoCompaction: boolean;
+  autoRetry: boolean;
+}
+
+const deliveryOf = (value: unknown): Delivery | null => value === "all" || value === "one-at-a-time" ? value : null;
+
+/** Pi's `get_state` answer, or null when it is not the shape this page draws. */
+function sessionSettings(state: unknown): PiSessionSettings | null {
+  const fields = (state ?? {}) as Record<string, unknown>;
+  const steeringMode = deliveryOf(fields["steeringMode"]);
+  const followUpMode = deliveryOf(fields["followUpMode"]);
+  if (steeringMode === null || followUpMode === null) return null;
+  // shortcut: `get_state` names no auto-retry flag (docs/rpc-commands.md), so that switch starts from Pi's
+  // documented default, on, and from what this page set; a flag Pi adds later is read where it appears
+  return { steeringMode, followUpMode, autoCompaction: fields["autoCompactionEnabled"] === true, autoRetry: fields["autoRetryEnabled"] !== false };
+}
+
+/** The server's or Pi's own sentence for a refused write, without the URL and status around it. */
+const reason = (error: unknown): string => error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error);
+
+const modelKey = (provider: string, id: string): string => `${provider}:${id}`;
+
+export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = null }: PiSettingsPageProps) {
+  const t = useT();
+  const { settings, update } = useSettings();
+  const [file, setFile] = useState<PiSettingsFile | null>(null);
+  const [models, setModels] = useState<PickerModel[]>([]);
+  const [session, setSession] = useState<PiSessionSettings | null>(null);
+  const [readFailure, setReadFailure] = useState<string | null>(null);
+  /** the terminal owns the pane's Pi: no RPC, so its rows only say where they are changed */
+  const [terminal, setTerminal] = useState(false);
+  const [failure, setFailure] = useState<{ row: string; message: string } | null>(null);
+  // a select is the DOM's once opened: a write that changed nothing re-mounts it on the value that stands
+  const [attempt, setAttempt] = useState(0);
+  const machineId = pane?.machineId ?? "local";
+
+  useEffect(() => {
+    if (pane === null) return;
+    let live = true;
+    setFile(null);
+    setModels([]);
+    setSession(null);
+    setReadFailure(null);
+    setFailure(null);
+    setTerminal(false);
+    void fetchPiSettings(machineId).then(
+      (next) => { if (live) setFile(next); },
+      (error: unknown) => { if (live) setReadFailure(reason(error)); },
+    );
+    void fetchPiNativeState(pane.paneId, machineId).then(async (state) => {
+      if (!live) return;
+      if (state === null || state.mode !== "native") { setTerminal(true); return; }
+      const [values, listed] = await Promise.allSettled([
+        sendPiRpc(pane.paneId, { type: "get_state" }, machineId),
+        sendPiRpc(pane.paneId, { type: "get_available_models" }, machineId),
+      ]);
+      if (!live) return;
+      if (values.status === "fulfilled") setSession(sessionSettings(values.value));
+      if (listed.status === "fulfilled") setModels(piModels(listed.value));
+    }, () => { if (live) setTerminal(true); });
+    return () => { live = false; };
+  }, [machineId, pane]);
+
+  const refused = (row: string, error: unknown): void => {
+    setFailure({ row, message: t("Couldn't change {setting}: {reason}", { setting: row, reason: reason(error) }) });
+    setAttempt((count) => count + 1);
+  };
+
+  /** One write of Pi's file: the answer is the file as it now is, and only then does the row move. */
+  const writeFile = async (row: string, changes: Record<string, string | readonly string[]>): Promise<void> => {
+    try {
+      setFile(await savePiSettings(changes, machineId));
+      setFailure(null);
+    } catch (error) {
+      refused(row, error);
+    }
+  };
+
+  /** One session command: the page takes the values only once Pi answered, so a refusal changes nothing. */
+  const writeSession = async (row: string, next: PiSessionSettings, command: { type: string } & Record<string, unknown>): Promise<void> => {
+    if (pane === null) return;
+    try {
+      await sendPiRpc(pane.paneId, command, machineId);
+      setSession(next);
+      setFailure(null);
+    } catch (error) {
+      refused(row, error);
+    }
+  };
+
+  /** A row's own sentence, with the reason a write it took was refused under it. The row is named by
+   * its own label, which is also what the sentence says the setting is. */
+  const described = (row: string, text: string): ReactNode => <>
+    {text}
+    {failure?.row === row && <span className="settings-error" role="alert">{failure.message}</span>}
+  </>;
+  // a Terminal-mode pane's rows are the terminal's: they say there where they are changed
+  const hinted = (control: ReactNode): ReactNode => <span title={readOnlyHint}>{control}</span>;
+
+  if (pane === null) return <p className="settings-hint">{t("Select a Pi agent to change its settings.")}</p>;
+
+  const saved = file?.settings ?? {};
+  const savedProvider = typeof saved["defaultProvider"] === "string" ? saved["defaultProvider"] : "";
+  const savedModel = typeof saved["defaultModel"] === "string" ? saved["defaultModel"] : "";
+  const savedThinking = typeof saved["defaultThinkingLevel"] === "string" ? saved["defaultThinkingLevel"] : "";
+  const scoped = Array.isArray(saved["enabledModels"]) ? saved["enabledModels"] : null;
+  // the saved model stays an option even while Pi's list is unknown (a Terminal-mode pane has no list)
+  const modelOptions = savedModel === "" ? models : models.some((model) => model.id === savedModel && model.provider === savedProvider) ? models : [...models, { provider: savedProvider, id: savedModel, name: savedModel, reasoning: false, images: false, contextWindow: null }];
+  const providers = [...new Set(modelOptions.map((model) => model.provider))];
+  const readOnlyHint = terminal ? t("Change it in the terminal") : undefined;
+  const deliveryOptions = [
+    { value: "one-at-a-time" as const, label: t("One at a time") },
+    { value: "all" as const, label: t("All at once") },
+  ];
+
+  return <>
+    <p className="settings-hint">{t("Applies to: {pane}", { pane: pane.name })}</p>
+    {readFailure !== null && <p className="settings-hint settings-error" role="alert">{readFailure}</p>}
+
+    <SettingsGroup title={t("Model")} note={t("A new Pi session starts with these. A running Pi reads them again with /reload.")}>
+      <SettingsRow label={t("Default model")} htmlFor="pi-default-model" description={described(t("Default model"), selectedModelText(modelOptions, savedProvider, savedModel))}>
+        <select key={`model-${attempt}`} id="pi-default-model" className="select settings-select" value={modelKey(savedProvider, savedModel)} onChange={(event) => {
+          const [provider = "", id = ""] = event.target.value.split(":");
+          void writeFile(t("Default model"), { defaultProvider: provider, defaultModel: id });
+        }}>
+          {savedModel === "" && <option value=":" disabled>{t("Automatic")}</option>}
+          {providers.map((provider) => <optgroup key={provider} label={provider === "" ? t("Other") : provider}>
+            {modelOptions.filter((model) => model.provider === provider).map((model) => <option key={modelKey(model.provider, model.id)} value={modelKey(model.provider, model.id)}>{model.name}</option>)}
+          </optgroup>)}
+        </select>
+      </SettingsRow>
+      <SettingsRow label={t("Default thinking level")} htmlFor="pi-default-thinking" description={described(t("Default thinking level"), "")}>
+        <select key={`thinking-${attempt}`} id="pi-default-thinking" className="select settings-select" value={savedThinking === "" ? "medium" : savedThinking} onChange={(event) => void writeFile(t("Default thinking level"), { defaultThinkingLevel: event.target.value })}>
+          {THINKING_LEVELS.map((level) => <option key={level} value={level}>{t(thinkingLevelLabel(level))}</option>)}
+        </select>
+      </SettingsRow>
+      <SettingsRow label={t("Scoped models")} description={models.length === 0 ? undefined : scoped === null ? t("Every model is in the cycle") : t("{scoped} of {total} in the cycle", { scoped: scoped.length, total: models.length })}>
+        <button type="button" className="btn" disabled={onEditScopedModels === null} onClick={() => onEditScopedModels?.()}>{t("Edit…")}</button>
+      </SettingsRow>
+    </SettingsGroup>
+
+    <SettingsGroup title={t("Messages")} note={terminal ? readOnlyHint : undefined}>
+      <SettingsRow label={t("Steering delivery")} wide description={described(t("Steering delivery"), t("A message sent while Pi works."))}>
+        {hinted(<Segmented label={t("Steering delivery")} value={session?.steeringMode ?? "one-at-a-time"} disabled={terminal || session === null} options={deliveryOptions} onChange={(mode) => {
+          if (session !== null) void writeSession(t("Steering delivery"), { ...session, steeringMode: mode }, { type: "set_steering_mode", mode });
+        }} />)}
+      </SettingsRow>
+      <SettingsRow label={t("Follow-up delivery")} wide description={described(t("Follow-up delivery"), t("A message sent to run after the turn."))}>
+        {hinted(<Segmented label={t("Follow-up delivery")} value={session?.followUpMode ?? "one-at-a-time"} disabled={terminal || session === null} options={deliveryOptions} onChange={(mode) => {
+          if (session !== null) void writeSession(t("Follow-up delivery"), { ...session, followUpMode: mode }, { type: "set_follow_up_mode", mode });
+        }} />)}
+      </SettingsRow>
+    </SettingsGroup>
+
+    <SettingsGroup title={t("Context")} note={terminal ? readOnlyHint : undefined}>
+      <SettingsRow label={t("Compact automatically")} description={described(t("Compact automatically"), t("Compacts when the window is nearly full."))}>
+        {hinted(<Toggle label={t("Compact automatically")} checked={session?.autoCompaction === true} disabled={terminal || session === null} onChange={(enabled) => {
+          if (session !== null) void writeSession(t("Compact automatically"), { ...session, autoCompaction: enabled }, { type: "set_auto_compaction", enabled });
+        }} />)}
+      </SettingsRow>
+      <SettingsRow label={t("Retry on provider errors")} description={described(t("Retry on provider errors"), t("Waits and tries the turn again when a provider fails."))}>
+        {hinted(<Toggle label={t("Retry on provider errors")} checked={session?.autoRetry === true} disabled={terminal || session === null} onChange={(enabled) => {
+          if (session !== null) void writeSession(t("Retry on provider errors"), { ...session, autoRetry: enabled }, { type: "set_auto_retry", enabled });
+        }} />)}
+      </SettingsRow>
+    </SettingsGroup>
+
+    <SettingsGroup title={t("Keys")}>
+      <SettingsRow label={t("Pi keys in the message box")} description={t("Ctrl+L model · Ctrl+P next model · Shift+Tab thinking · Ctrl+T thinking blocks · Ctrl+O tool output")}>
+        <Toggle label={t("Pi keys in the message box")} checked={settings.piKeys} onChange={(checked) => update({ piKeys: checked })} />
+      </SettingsRow>
+      <SettingsRow label={t("Shortcut list")} description={t("Your keybindings.json is applied.")}>
+        <button type="button" className="btn" onClick={onOpenShortcuts}>{t("View")}</button>
+      </SettingsRow>
+    </SettingsGroup>
+  </>;
+}
+
+/** What a row under the model field adds: the model's name and provider once it is known. */
+function selectedModelText(models: readonly PickerModel[], provider: string, id: string): string {
+  if (id === "") return "";
+  const model = models.find((candidate) => candidate.id === id && candidate.provider === provider);
+  return model === undefined || model.provider === "" ? id : `${model.name} · ${model.provider}`;
+}

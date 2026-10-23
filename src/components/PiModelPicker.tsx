@@ -39,7 +39,7 @@ export interface PiModelPickerProps {
 }
 
 /** One entry of `get_available_models`, cut to what a row says of it. */
-interface PickerModel {
+export interface PickerModel {
   provider: string;
   id: string;
   name: string;

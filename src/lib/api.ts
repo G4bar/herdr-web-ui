@@ -911,6 +911,29 @@ export async function fetchPiContext(paneId: string, machineId = "local"): Promi
   return (await getJson<{ files: PiContextFile[] }>(`${machinePath(machineId, "pi/context")}?pane_id=${encodeURIComponent(paneId)}`, { cache: "no-store" })).files;
 }
 
+/**
+ * The keys of Pi's own `settings.json` the web may write (server/pi-native-routes.ts, PLAN D8): the
+ * startup provider, model and thinking level, and the models Pi's cycling is scoped to. Every other
+ * key of that file is Pi's and its TUI's alone.
+ */
+export type PiSettingsFile = {
+  /** the file that was read, or would be written */
+  path: string;
+  /** the allowlisted keys the file holds; a key Pi has not set is absent */
+  settings: Record<string, string | readonly string[]>;
+};
+
+/** GET /api/pi/settings: those keys; a file Pi cannot parse is a 409 with its own sentence. */
+export async function fetchPiSettings(machineId = "local"): Promise<PiSettingsFile> {
+  return getJson<PiSettingsFile>(machinePath(machineId, "pi/settings"), { cache: "no-store" });
+}
+
+/** POST /api/pi/settings: writes only the keys given, keeps every other key of Pi's file, and answers the
+ * file as it now is. An unknown key or a value Pi would refuse is a 400, and nothing is written. */
+export async function savePiSettings(changes: Record<string, string | readonly string[]>, machineId = "local"): Promise<PiSettingsFile> {
+  return (await sendJson(machinePath(machineId, "pi/settings"), "POST", changes)).json() as Promise<PiSettingsFile>;
+}
+
 /** POST /api/pi/rpc: one allowlisted command, answered with what Pi answered; a refusal throws ApiError. */
 export async function sendPiRpc(paneId: string, command: PiRpcCommand, machineId = "local"): Promise<unknown> {
   const response = await sendJson(machinePath(machineId, "pi/rpc"), "POST", { pane_id: paneId, command });

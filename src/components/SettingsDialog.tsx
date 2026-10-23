@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
-import { ArrowLeft, Bell, Check, ChevronRight, Gauge, Info, Keyboard, MessageSquare, Mic, Monitor, Palette, Plug, Plus, Search, Smartphone, SquareTerminal, Star, X, type LucideIcon } from "lucide-react";
+import { ArrowLeft, Bell, Check, ChevronRight, Gauge, Info, Keyboard, MessageSquare, Mic, Monitor, Palette, Plug, Plus, Search, Smartphone, Sparkles, SquareTerminal, Star, X, type LucideIcon } from "lucide-react";
 
 import "./SettingsDialog.css";
 
@@ -34,6 +34,8 @@ import { loadIntegrations, outcomeFor, type IntegrationsResult } from "../lib/in
 import type { VoiceStatus } from "../../shared/voice.ts";
 import { dictationLocale, VOICE_CONFIG_EVENT } from "../lib/voice.ts";
 import { DevicesPanel } from "./DevicesPanel.tsx";
+import { AgentMark } from "./AgentMark.tsx";
+import { PiSettingsPage } from "./PiSettingsPage.tsx";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { PhonePanel } from "./PhonePanel.tsx";
 import { PortalPanel } from "./PortalPanel.tsx";
@@ -78,6 +80,8 @@ export interface SettingsDialogProps {
   onRetrySave: () => void;
   /** a file preview is open beneath: the dialog is drawn above it */
   overPreview?: boolean;
+  /** the selected pane, when it runs Pi: Settings → Pi's session rows are that pane's own Pi (DS §4.11) */
+  piPane?: { paneId: string; name: string; machineId: string } | null;
 }
 
 function compactKeys(keys: readonly string[]): string {
@@ -210,9 +214,11 @@ function FontFamilyInput({ value, label, onCommit, fixedWidthFor = null }: { val
 type SettingsPage = SettingsPageId;
 
 /** The pages in the order the list shows them: what is looked at first, then what is set once. */
-export const PAGES: readonly { id: SettingsPage; icon: LucideIcon }[] = [
+export const PAGES: readonly { id: SettingsPage; icon: LucideIcon; /** an agent whose brand mark the tab draws instead of the glyph (DS §4.11) */ mark?: string }[] = [
   { id: "appearance", icon: Palette },
   { id: "chat", icon: MessageSquare },
+  // DS §4.11: Pi's own settings, on a machine that has Pi (the pages the dialog draws drop it otherwise)
+  { id: "pi", icon: Sparkles, mark: "pi" },
   { id: "terminal", icon: SquareTerminal },
   { id: "alerts", icon: Bell },
   { id: "voice", icon: Mic },
@@ -1079,19 +1085,29 @@ function SaveFailure({ error, paused, retrying, onRetry }: { error: UserError; p
   </div>;
 }
 
-function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false }: SettingsDialogProps) {
+function OpenSettingsDialog({ section = null, linkPage = null, linkSection = null, onPage, onClose, onUsageLogin, actions, updates, auth, herdrVersion, onEnableNotifications, saveError, savePaused, saveRetrying, onRetrySave, overPreview = false, piPane = null }: SettingsDialogProps) {
   const t = useT();
   const narrow = useNarrow();
   // opened by Forward, the dialog shows what that entry of the history showed
   const [restored] = useState(() => shownBy(settingsEntry(window.history.state)));
+  // DS §4.11: the Pi page is on a machine that has Pi, and the agents list the app loads is what says so
+  const machineApi = useMachineApi();
+  const [piInstalled, setPiInstalled] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    void machineApi.fetchAgentKinds().then((agents) => { if (live) setPiInstalled(agents.some((agent) => agent.kind === "pi")); }, () => { if (live) setPiInstalled(null); });
+    return () => { live = false; };
+  }, [machineApi]);
+  // nothing is hidden before the answer: a page that came and went would move the list under a reader
+  const pages = piInstalled === false ? PAGES.filter((entry) => entry.id !== "pi") : PAGES;
   // a phone opens on the list of pages; a wider dialog shows the list beside the first page. A
   // button that points at Updates opens on About whatever an entry still landing would restore
-  const linked = PAGES.find((candidate) => candidate.id === linkPage)?.id ?? null;
+  const linked = pages.find((candidate) => candidate.id === linkPage)?.id ?? null;
   // a page the command palette named opens first; the request is read, not taken, so a remount in development finds it again
   const [asked] = useState(requestedSettingsPage);
   useEffect(() => requestSettingsPage(null), []);
   const [chosen, setChosen] = useState<SettingsPage | null>(section === "updates" ? "about" : asked ?? (restored ? restored.page : linked));
-  const page = chosen ?? (narrow ? null : PAGES[0]!.id);
+  const page = chosen ?? (narrow ? null : pages[0]!.id);
   const [keyBarOpen, setKeyBarOpen] = useState(section === "updates" ? false : restored?.keyBar ?? false);
   // every step in is an entry of the history, so the system Back button takes one step out
   // (lib/settingsHistory.ts); the Back control, the X and Escape take the same entries off
@@ -1112,7 +1128,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
   const surface = useFocusTrap<HTMLElement>(true, { initialFocus: backRef });
   useSheetSwipe(surface, onClose);
   const shown = useRef<{ page: SettingsPage | null; keyBar: boolean } | null>(null);
-  const label = (id: SettingsPage): string => t(id === "appearance" ? "Appearance" : id === "chat" ? "Chat" : id === "terminal" ? "Terminal" : id === "alerts" ? "Alerts" : id === "voice" ? "Voice input"
+  const label = (id: SettingsPage): string => t(id === "appearance" ? "Appearance" : id === "chat" ? "Chat" : id === "pi" ? "Pi" : id === "terminal" ? "Terminal" : id === "alerts" ? "Alerts" : id === "voice" ? "Voice input"
     : id === "usage" ? "Subscription usage" : id === "shortcuts" ? "Shortcuts" : id === "devices" ? "Phone & devices" : id === "remote" ? "Remote PCs" : id === "integrations" ? "Agent integrations" : "About");
   const openPage = (id: SettingsPage): void => { setKeyBarOpen(false); setChosen(id); };
   const openKeyBar = (): void => {
@@ -1173,10 +1189,10 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
 
   /** the list is one Tab stop: the arrows walk it, and beside an open page they turn the page too */
   const onTabKey = (event: ReactKeyboardEvent<HTMLButtonElement>, index: number): void => {
-    const to = event.key === "ArrowDown" ? index + 1 : event.key === "ArrowUp" ? index - 1 : event.key === "Home" ? 0 : event.key === "End" ? PAGES.length - 1 : null;
+    const to = event.key === "ArrowDown" ? index + 1 : event.key === "ArrowUp" ? index - 1 : event.key === "Home" ? 0 : event.key === "End" ? pages.length - 1 : null;
     if (to === null) return;
     event.preventDefault();
-    const next = PAGES[(to + PAGES.length) % PAGES.length]!.id;
+    const next = pages[(to + pages.length) % pages.length]!.id;
     tab(next)?.focus();
     if (!narrow) openPage(next);
   };
@@ -1185,6 +1201,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
     switch (page) {
       case "appearance": return <AppearancePage />;
       case "chat": return <ChatPage />;
+      case "pi": return <PiSettingsPage pane={piPane} onOpenShortcuts={() => openPage("shortcuts")} />;
       case "terminal": return <TerminalPage keyBarButtonRef={keyBarButtonRef} onEditKeyBar={openKeyBar} />;
       case "alerts": return <AlertsPage onEnableNotifications={onEnableNotifications} />;
       case "voice": return <VoicePage />;
@@ -1198,7 +1215,7 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
     }
   };
   const listShown = !narrow || (page === null && !keyBarOpen);
-  const focusable = page ?? PAGES[0]!.id;
+  const focusable = page ?? pages[0]!.id;
 
   return (
     <div className={overPreview ? "modal-scrim settings-over-preview" : "modal-scrim"} onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
@@ -1213,9 +1230,9 @@ function OpenSettingsDialog({ section = null, linkPage = null, linkSection = nul
           <nav className="settings-nav" aria-label={t("Settings")}>
             <p className="settings-nav-title" aria-hidden="true">{t("Settings")}</p>
             <div ref={tabsRef} className="settings-tabs" role="tablist" aria-orientation="vertical">
-              {PAGES.map(({ id, icon: Icon }, index) => (
+              {pages.map(({ id, icon: Icon, mark }, index) => (
                 <button key={id} type="button" role="tab" className="settings-tab" data-settings-page={id} aria-selected={page === id} aria-controls={page === id ? "settings-panel" : undefined} tabIndex={focusable === id ? 0 : -1} onClick={() => openPage(id)} onKeyDown={(event) => onTabKey(event, index)}>
-                  <Icon aria-hidden="true" />
+                  {mark === undefined ? <Icon aria-hidden="true" /> : <span aria-hidden="true"><AgentMark agent={mark} /></span>}
                   <span>{label(id)}</span>
                   <ChevronRight className="settings-tab-chevron" aria-hidden="true" />
                 </button>

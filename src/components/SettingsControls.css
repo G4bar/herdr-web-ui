@@ -83,6 +83,11 @@
   font-size: var(--fs-xs);
 }
 
+/* a change the server or Pi refused, under the row it was about */
+.settings-error {
+  color: var(--status-blocked);
+}
+
 /* a sentence under a label stays a column of text, not a line as wide as the card */
 .settings-row-text > .settings-description,
 .settings-row-text > .settings-hint {
