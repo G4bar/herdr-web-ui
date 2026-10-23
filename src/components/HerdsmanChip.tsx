@@ -94,7 +94,8 @@ export function HerdsmanChip({ herdsman, onOpenAgent, onAnnounce }: {
       <div className="menu-heading hm-head">
         <span>{t("Agents")}</span>
         <span className="hm-head-counts">{countsLine}</span>
-        <button type="button" className="hm-open-panel" onClick={() => onOpenAgent?.(herdsmanRows(herdsman)[0]?.agent.label ?? "")}>{t("Open panel")}</button>
+        {/* the panel exists from slice 5 on: until then the header offers nothing to open */}
+        {onOpenAgent && <button type="button" className="hm-open-panel" onClick={() => onOpenAgent(herdsmanRows(herdsman)[0]?.agent.label ?? "")}>{t("Open panel")}</button>}
       </div>
       <HerdsmanRoster herdsman={herdsman} now={now} onOpenAgent={onOpenAgent} />
     </div>}

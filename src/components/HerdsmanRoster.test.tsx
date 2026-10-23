@@ -73,11 +73,57 @@ const strings = (node: TestRenderer.ReactTestInstance): string[] =>
   node.children.flatMap((child) => (typeof child === "string" || typeof child === "number" ? [String(child)] : strings(child)));
 const headers = (renderer: TestRenderer.ReactTestRenderer) =>
   renderer.root.findAll((node) => node.type === "button" && node.props.className === "hm-section");
-const rows = (renderer: TestRenderer.ReactTestRenderer) => renderer.root.findAll((node) => node.type === "li" && node.props.role === "treeitem");
-const rowButtons = (renderer: TestRenderer.ReactTestRenderer) => rows(renderer).map((row) => row.findByProps({ className: "hm-row" }));
+/** the rows: a treeitem button once a row can open the panel, a plain div before that */
+const rows = (renderer: TestRenderer.ReactTestRenderer) =>
+  renderer.root.findAll((node) => typeof node.type === "string" && node.props.role === "treeitem" && node.props.className === "hm-row");
+const sectionButton = (renderer: TestRenderer.ReactTestRenderer, section: string): TestRenderer.ReactTestInstance =>
+  headers(renderer).find((header) => header.props["data-hm-section"] === section)!;
+const rowButton = (renderer: TestRenderer.ReactTestRenderer, label: string): TestRenderer.ReactTestInstance =>
+  rows(renderer).find((row) => row.props["data-hm-label"] === label)!;
 const labels = (renderer: TestRenderer.ReactTestRenderer): string[] =>
   rows(renderer).map((row) => String(row.findAllByProps({ className: "hm-row-label" })[0]!.children[0]));
-const sectionOf = (button: TestRenderer.ReactTestInstance): string => String(button.props["data-hm-section"]);
+const sectionOf = (element: TestRenderer.ReactTestInstance): string => String(element.props["data-hm-section"]);
+
+/** the document here is the test's stub, so the focus is written and read through it */
+const setFocused = (element: unknown): void => { (document as unknown as { activeElement: unknown }).activeElement = element; };
+
+/** Stands in for the focused DOM node: `closest` finds the row or the header the arrow acts on. */
+interface FocusStub {
+  dataset: Record<string, string | undefined>;
+  getAttribute(name: string): string | null;
+  focus(): void;
+}
+
+/**
+ * Presses an arrow on one row or header. The tree is not a DOM here, so the event carries a stub of the
+ * node it came from, built from the rendered props, and a `querySelector` that finds the section header.
+ */
+const arrow = async (renderer: TestRenderer.ReactTestRenderer, instance: TestRenderer.ReactTestInstance, key: "ArrowLeft" | "ArrowRight") => {
+  const stubOf = (node: TestRenderer.ReactTestInstance): FocusStub => {
+    const stub: FocusStub = {
+      dataset: { hmLabel: node.props["data-hm-label"], hmSection: node.props["data-hm-section"] },
+      getAttribute: (name) => (node.props[name] === undefined ? null : String(node.props[name])),
+      // what a focused element does to the document, so the test can say where the focus landed
+      focus: () => { setFocused(stub); },
+    };
+    return stub;
+  };
+  const target = stubOf(instance);
+  const tree = renderer.root.findAllByProps({ role: "tree" })[0]!;
+  const event = {
+    key,
+    target: { closest: (selector: string) => (selector === "[data-hm-section]" && target.dataset["hmSection"] !== undefined ? target : null) },
+    currentTarget: { querySelector: (selector: string) => stubOf(sectionButton(renderer, /data-hm-section="(\w+)"/.exec(selector)![1]!)) },
+  };
+  setFocused(null);
+  await act(async () => { tree.props.onKeyDown(event); });
+};
+
+/** where the arrow left the focus, or null when it stayed */
+const focused = (): { section: string | undefined; label: string | undefined } | null => {
+  const element = (document as unknown as { activeElement: FocusStub | null }).activeElement;
+  return element === null ? null : { section: element.dataset["hmSection"], label: element.dataset["hmLabel"] };
+};
 
 describe("HerdsmanRoster", () => {
   it("draws the sections in the popover's order, each counting its whole subtree", async () => {
@@ -87,7 +133,7 @@ describe("HerdsmanRoster", () => {
 
   it("keeps a root and its delegates together, in the root's section", async () => {
     const renderer = await mount(agents);
-    const inSection = (section: string) => rowButtons(renderer).filter((button) => sectionOf(button) === section).map((button) => String(button.findAllByProps({ className: "hm-row-label" })[0]!.children[0]));
+    const inSection = (section: string) => rows(renderer).filter((row) => sectionOf(row) === section).map((row) => String(row.findAllByProps({ className: "hm-row-label" })[0]!.children[0]));
     expect(inSection("running")).toEqual(["lead", "visual_designer", "scout_ui", "implementer", "deep_1", "researcher", "researcher_old", "old_agent"]);
     expect(inSection("closed")).toEqual(["orphan"]);
   });
@@ -99,16 +145,17 @@ describe("HerdsmanRoster", () => {
     ]);
     expect(labels(renderer)).toEqual(["lead", "implementer"]);
     expect(headers(renderer).map((header) => strings(header).join(" "))).toEqual(["Asks you 2"]);
-    expect(sectionOf(rowButtons(renderer)[1]!)).toBe("asks");
-    expect(rows(renderer)[1]!.props["aria-level"]).toBe(2);
+    expect(sectionOf(rows(renderer)[1]!)).toBe("asks");
+    // the section header is the tree's first level, so its rows start one below it
+    expect(rows(renderer)[1]!.props["aria-level"]).toBe(3);
   });
 
   it("indents a child under its parent and keeps its state word for a screen reader", async () => {
     const renderer = await mount(agents);
     const lead = rows(renderer).find((row) => labels(renderer)[rows(renderer).indexOf(row)] === "lead")!;
     const child = rows(renderer).find((row) => row.findAllByProps({ className: "hm-row-label" })[0]!.children[0] === "visual_designer")!;
-    expect(lead.props["aria-level"]).toBe(1);
-    expect(child.props["aria-level"]).toBe(2);
+    expect(lead.props["aria-level"]).toBe(2);
+    expect(child.props["aria-level"]).toBe(3);
     expect(strings(child)).toContain("Asks you");
     const icon = child.findAll((node) => String(node.props.className ?? "").includes("hm-row-icon"))[0]!;
     expect(icon.props.className).toBe("hm-row-icon is-asks");
@@ -117,7 +164,7 @@ describe("HerdsmanRoster", () => {
   it("draws an agent whose parent is unknown at the top level", async () => {
     const renderer = await mount(agents);
     const orphan = rows(renderer).find((row) => row.findAllByProps({ className: "hm-row-label" })[0]!.children[0] === "orphan")!;
-    expect(orphan.props["aria-level"]).toBe(1);
+    expect(orphan.props["aria-level"]).toBe(2);
   });
 
   it("summarises the agents deeper than the last drawn level", async () => {
@@ -134,6 +181,39 @@ describe("HerdsmanRoster", () => {
     expect(labels(renderer)).toEqual(["orphan"]);
     expect(headers(renderer).map((header) => strings(header).join(" "))).toContain("Running 8");
     expect(running.props["aria-expanded"]).toBe(false);
+  });
+
+  it("folds a section with the left arrow on its header, and unfolds it with the right one", async () => {
+    const renderer = await mount(agents);
+    await arrow(renderer, sectionButton(renderer, "running"), "ArrowLeft");
+    expect(labels(renderer)).toEqual(["orphan"]);
+    expect(sectionButton(renderer, "running").props["aria-expanded"]).toBe(false);
+    await arrow(renderer, sectionButton(renderer, "running"), "ArrowRight");
+    expect(labels(renderer)).toHaveLength(9);
+    expect(sectionButton(renderer, "running").props["aria-expanded"]).toBe(true);
+    // a header is never unmounted by its own fold, so the focus stays where the user put it
+    expect(focused()).toBeNull();
+  });
+
+  it("folds a parent row's children only, leaving its section and the focus alone", async () => {
+    const renderer = await mount(agents);
+    await arrow(renderer, rowButton(renderer, "lead"), "ArrowLeft");
+    expect(labels(renderer)).toEqual(["lead", "orphan"]);
+    expect(rowButton(renderer, "lead").props["aria-expanded"]).toBe(false);
+    expect(focused()).toBeNull();
+    await arrow(renderer, rowButton(renderer, "lead"), "ArrowRight");
+    expect(labels(renderer)).toHaveLength(9);
+    // a row without children folds nothing of its own, so it says nothing about folding
+    expect(rowButton(renderer, "visual_designer").props["aria-expanded"]).toBeUndefined();
+  });
+
+  it("folds a childless row's section, moving the focus to its header as the row goes", async () => {
+    const renderer = await mount(agents);
+    await arrow(renderer, rowButton(renderer, "researcher"), "ArrowLeft");
+    expect(labels(renderer)).toEqual(["orphan"]);
+    expect(focused()).toEqual({ section: "running", label: undefined });
+    await arrow(renderer, sectionButton(renderer, "running"), "ArrowRight");
+    expect(labels(renderer)).toHaveLength(9);
   });
 
   it("says how agents start when there are none", async () => {
@@ -200,6 +280,15 @@ describe("HerdsmanChip", () => {
     expect(asking.renderer.root.findAllByProps({ className: "hm-chip-dot" }).length).toBe(1);
     const running = await mountChip({ agents: agents.filter((agent) => agent.state !== "asks"), capabilities: [] });
     expect(running.renderer.root.findAllByProps({ className: "hm-chip-dot" }).length).toBe(0);
+  });
+
+  it("offers no panel and no pressable row until the panel exists", async () => {
+    const { renderer } = await mountChip({ agents, capabilities: [] });
+    await act(async () => { chipToggle(renderer).props.onClick(); });
+    expect(renderer.root.findAllByProps({ className: "hm-open-panel" })).toEqual([]);
+    expect(chipRows(renderer)).toEqual([]);
+    expect(labels(renderer)).toContain("scout_ui");
+    await act(async () => { renderer.unmount(); });
   });
 
   it("hands a pressed row's label, and the first row's for the panel, to the caller", async () => {
