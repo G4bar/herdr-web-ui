@@ -18,7 +18,7 @@ import "./SessionTree.css";
 
 import { ApiError, sendPiRpc } from "../lib/api.ts";
 import { paneStorageId } from "../../shared/machines.ts";
-import { forkNoteName, piForks } from "../lib/piFork.ts";
+import { forkNoteName, piForks, piMoveCancelled } from "../lib/piFork.ts";
 import { piNativeLanes } from "../lib/piNative.ts";
 import { formatChatTimestamp } from "../lib/chatTimestamp.ts";
 import { useLocale, useT } from "../lib/i18n.ts";
@@ -150,6 +150,12 @@ export function SessionTree({ paneId, machineId, streaming, onFork, onClose }: S
     const previous = piNativeLanes.get(paneStorageId(machineId, paneId)).state?.sessionFile ?? null;
     void sendPiRpc(paneId, { type: "fork", entryId: row.id }, machineId).then(
       (data) => {
+        // an extension vetoed the fork: the tree stays where it was, and says so
+        if (piMoveCancelled(data)) {
+          setError(t("Fork was cancelled"));
+          setForking(false);
+          return;
+        }
         const text = (data as { text?: unknown } | null)?.text;
         // Pi hands the message back; a child that answers nothing keeps the row's own words
         const message = typeof text === "string" && text !== "" ? text : row.text;

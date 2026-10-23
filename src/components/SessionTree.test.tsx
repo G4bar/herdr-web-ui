@@ -4,6 +4,7 @@ import * as reactDom from "react-dom";
 import TestRenderer, { act } from "react-test-renderer";
 
 import * as actualApi from "../lib/api.ts";
+import { piForks } from "../lib/piFork.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 
 /** what the dialog asked Pi, in order: the read and any fork */
@@ -12,6 +13,7 @@ const calls: { type: string; entryId?: string }[] = [];
 let tree: unknown = null;
 let readFails = false;
 let forkText = "";
+let forkCancelled = false;
 
 // the dialog is a portal so a transformed page cannot clip it; the test renders it where it is
 mock.module("react-dom", () => ({ ...reactDom, createPortal: (node: unknown) => node }));
@@ -23,7 +25,7 @@ mock.module("../lib/api.ts", () => ({
       if (readFails) throw new Error("the child is gone");
       return tree;
     }
-    return { text: forkText };
+    return forkCancelled ? { cancelled: true } : { text: forkText };
   },
 }));
 const { SessionTree } = await import("./SessionTree.tsx");
@@ -103,6 +105,8 @@ beforeEach(() => {
   tree = answer;
   readFails = false;
   forkText = "";
+  forkCancelled = false;
+  piForks.clear("local:w:p1");
 });
 
 let closed = 0;
@@ -247,6 +251,19 @@ describe("the session tree", () => {
     await key(renderer, { key: "T", shiftKey: true });
     // the fixture records a timestamp on u1, a1, u2 and u3; a row without one draws none
     expect(renderer.root.findAllByProps({ className: "pi-tree-time" }).length).toBe(3);
+  });
+
+  it("keeps the tree open and says so when Pi's extension cancels the fork", async () => {
+    forkCancelled = true;
+    const renderer = await mount();
+    await key(renderer, { key: "Enter" });
+    expect(calls.at(-1)).toMatchObject({ type: "fork", entryId: "u3" });
+    // nothing came back: no draft, no note, and the tree stays where it was
+    expect(forked).toEqual([]);
+    expect(closed).toBe(0);
+    expect(piForks.get("local:w:p1")).toBeNull();
+    expect(words(renderer)).toContain("Fork was cancelled");
+    expect(renderer.root.findByProps({ role: "tree" }).props["aria-busy"]).toBe(false);
   });
 
   it("draws a window of a long tree, and widens it with Show more", async () => {
