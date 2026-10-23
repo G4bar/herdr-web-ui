@@ -135,6 +135,9 @@ export interface ComposerProps {
   /** opens the New tab dialog on this pane's workspace, to start another agent with its model, effort, skills
    * and first message (NewSessionDialog); none: the pane has no workspace to add a tab to */
   onOpenNewSession?: () => void;
+  /** opens a Herdsman agent in the panel beside the pane (App's AgentPanel): the roster's rows and its
+   * Open panel; none: the roster lists the agents without a way into one */
+  onOpenAgent?: (label: string) => void;
   /** the pane's working folder, named in the strip tucked under the card; nothing is drawn for it while absent */
   cwd?: string | null;
   /** the pane's branch, beside the folder in that strip; nothing is drawn for it while absent */
@@ -291,6 +294,7 @@ export function Composer({
   onOpenSettings,
   onOpenTerminal,
   onOpenNewSession,
+  onOpenAgent,
   cwd = null,
   branch = null,
   worktreeRepo = null,
@@ -1810,7 +1814,7 @@ export function Composer({
           <BackgroundTasks paneId={paneId} count={backgroundTasks} omo={agent === "omo"} claude={agent === "claude"} plan={plan} />
           {/* the Agents chip follows the Plan one (DS §3.1), only where the session publishes a Herdsman roster,
               and its finished/failed/asks announcements ride the composer's persistent status region below */}
-          {piNative?.herdsman && <HerdsmanChip herdsman={piNative.herdsman} onAnnounce={announce} />}
+          {piNative?.herdsman && <HerdsmanChip herdsman={piNative.herdsman} onOpenAgent={onOpenAgent} onAnnounce={announce} />}
         </div>
         {/* between the two control groups of the card's last row. The agent's name, its separator and the
             state word are read, not drawn: the mark and the header name the agent, and Stop, the live row and

@@ -4,12 +4,14 @@
  * once it is done, its answer and Continue. The panel is a leaf: every command leaves as the
  * extension's `/hm …` prompt (§4.8, Phase 15) through `onCommand`, so nothing here knows piRpc or the
  * store. The owner docks it in the file panel's slot and gives the focus back to the Agents chip when
- * it closes; the resizer and the grip seam are the owner's too.
+ * it closes; the resizer and the grip seam are the owner's too, drawn inside the panel's box through
+ * `panelStart`. Below 980px it is a sheet instead, and `back` is the way out it shares a phone with the
+ * roster.
  *
  * The activity feed is throttled to one swap a second and is never announced: it is a log, and its
  * churn is not news (RD §8). The head badge's words are, which is why they are the roster's.
  */
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { Circle, CircleCheck, CircleDot, CircleX, Maximize2, MessageCircle, X } from "lucide-react";
 
 import "./AgentPanel.css";
@@ -55,6 +57,10 @@ interface Props {
   onClose: () => void;
   /** the expand glyph is drawn only when the owner can take the panel wider than it is */
   onExpand?: () => void;
+  /** the seam the owner drags (FilePanelResizer): first in the box, as in the docked viewer */
+  panelStart?: ReactNode;
+  /** the sheet's way back to the list it came from; drawn leading, before the name */
+  back?: { label: string; run: () => void };
 }
 
 /** A work row as the extension sent it: the leading verb, then the mono object. */
@@ -63,7 +69,7 @@ function splitLine(line: string): [string, string] {
   return at < 0 ? [line, ""] : [line.slice(0, at), line.slice(at + 1)];
 }
 
-export function AgentPanel({ agent, capabilities, onCommand, onClose, onExpand }: Props) {
+export function AgentPanel({ agent, capabilities, onCommand, onClose, onExpand, panelStart, back }: Props) {
   const t = useT();
   const caps = capabilities.join(" ");
   const modes = MODES.filter((mode) => capabilities.includes(mode));
@@ -174,7 +180,9 @@ export function AgentPanel({ agent, capabilities, onCommand, onClose, onExpand }
 
   return (
     <aside className="agent-panel" aria-labelledby={titleId}>
+      {panelStart}
       <header className="agent-panel-header">
+        {back !== undefined && <button type="button" className="btn btn-ghost agent-panel-back" onClick={() => back.run()}>{back.label}</button>}
         <h2 className="agent-panel-title" id={titleId}>
           <span className="agent-panel-name">{agent.label}</span> · <span className="pill">{agent.definition}</span>
         </h2>

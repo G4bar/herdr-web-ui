@@ -1,17 +1,28 @@
 /* The Herdsman agent panel (design/pi-native-chat/DESIGN.md §4.8, §5.4): the file panel's shell —
    the workspace's own background behind one hairline, no card — with a header, the task and owner
    line, the activity feed that takes the room left, and the message box under it. Colors, type and
-   spacing are tokens only. The caller docks it and keeps the grip seam; below 980px it is a sheet. */
+   spacing are tokens only. It takes the docked file panel's width (FileViewer.css), so one seam and
+   one remembered drag serve both columns; below 980px it fills a sheet instead (`.agent-sheet`). */
 .agent-panel {
   position: relative;
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
+  width: var(--file-panel-shown-w, min(42vw, 560px));
+  flex: 0 0 var(--file-panel-shown-w, min(42vw, 560px));
   min-width: 0;
   min-height: 0;
   background: var(--bg);
   border-left: var(--hairline) solid var(--border);
   container: agent-panel / inline-size;
+}
+
+/* the sheet's way back, before the name; the dock has none (its × closes it) */
+.agent-panel-back {
+  flex: none;
+  height: var(--chip-h);
+  padding: 0 var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
 }
 
 /* one row a little over the control height, like the docked viewer's header */
@@ -291,8 +302,24 @@
   font-size: var(--fs-xs);
 }
 
+/* the sheet form (below 980px, or a docked panel the expand glyph took over): the dialog's own edge
+   is the only hairline, and its height is what gives the activity feed its room */
+.agent-sheet {
+  height: min(100%, 720px);
+}
+
+.agent-sheet .agent-panel {
+  width: 100%;
+  flex: 1 1 auto;
+  border-left: 0;
+}
+
 /* a touch screen needs the header's glyphs and the modes at the touch target */
 @media (pointer: coarse) {
+  .agent-panel-back {
+    height: var(--touch-target);
+  }
+
   .agent-panel-header .icon-button {
     width: var(--touch-target);
     height: var(--touch-target);

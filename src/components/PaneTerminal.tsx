@@ -154,6 +154,8 @@ export interface PaneTerminalProps {
   onOpenNewSession?: () => void;
   /** opens Settings (App's dialog): the composer's `/hotkeys` */
   onOpenSettings?: () => void;
+  /** opens one of the pane's Herdsman agents beside it (App's AgentPanel): the composer's roster */
+  onOpenAgent?: (label: string) => void;
   findRequest?: number;
   controls?: { current: PaneControls | null };
   /** Only the selected tile may take keyboard focus after async work or a lens change. */
@@ -224,6 +226,7 @@ export function PaneTerminal({
   onOpenHistory,
   onOpenNewSession,
   onOpenSettings,
+  onOpenAgent,
   onRoleAck,
   onConnectionChange,
   onServerMessage,
@@ -3747,6 +3750,7 @@ export function PaneTerminal({
           onOpenHistory={historyOffered ? onOpenHistory : undefined}
           onOpenNewSession={onOpenNewSession}
           onOpenSettings={onOpenSettings}
+          onOpenAgent={onOpenAgent}
           onOpenTerminal={onOpenTerminal === undefined ? undefined : piCommandInTerminal}
           greeting={greetingDue ? (
             <div className={`composer-greeting${greeted ? "" : " is-out"}`} ref={greetingRef} aria-hidden={greeted ? undefined : true}>

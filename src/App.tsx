@@ -1,4 +1,5 @@
 import { lazy, Suspense, type CSSProperties, type DragEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { createPortal } from "react-dom";
 import { Bell, Brain, ChevronDown, Ellipsis, FolderOpen, GitFork, Link, Menu, MessageSquare, Package, PanelLeft, RefreshCw, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane, SessionHistoryAgent } from "../shared/protocol.ts";
@@ -83,12 +84,14 @@ import { TelemetryNotice } from "./components/TelemetryControls.tsx";
 import { FilesDialog } from "./components/FilesDialog.tsx";
 import { folderQueryFor } from "./lib/paletteFolders.ts";
 import { FileViewer } from "./components/FileViewer.tsx";
+import { AgentPanel } from "./components/AgentPanel.tsx";
+import { SHEET_QUERY } from "./lib/sheets.ts";
 import { WebPanel } from "./components/WebPanel.tsx";
 import { panelFrameUrl, panelUrl, pushTarget, WebPanelContext, wantsPanel } from "./lib/webPanel.ts";
 import { RepoDiffViewer } from "./components/RepoDiffViewer.tsx";
 import { OpenFileContext } from "./lib/filePaths.ts";
 import { useFileViewer } from "./lib/useFileViewer.ts";
-import { useFocusReturn } from "./lib/useFocusTrap.ts";
+import { useFocusReturn, useFocusTrap } from "./lib/useFocusTrap.ts";
 import { useRepoDiffViewer } from "./lib/useRepoDiffViewer.ts";
 import { useT } from "./lib/i18n.ts";
 import { markSelection, selectionStill, type SelectionMark } from "./lib/selectionMark.ts";
@@ -505,6 +508,25 @@ export function App() {
   // the panel is no dialog, so no trap gives the focus back when it closes: what opened the file
   // (a link in the chat, a row of Files) gets it, as it does from the popup
   useFocusReturn(viewing !== null && fileDocked);
+  // the Herdsman agent panel beside the pane (DS §4.8), in the file panel's slot: one docked panel at a
+  // time, so opening an agent closes a docked file and the effect below closes the agent for one
+  const [agentPanel, setAgentPanel] = useState<{ machineId: string; paneId: string; label: string } | null>(null);
+  // the sheet the panel takes below 980px, or when the docked one's expand glyph asks for it
+  const [agentSheet, setAgentSheet] = useState(false);
+  const openAgentPanel = useCallback((machineId: string, paneId: string, label: string) => {
+    if (viewing !== null && fileDocked) closeFile();
+    setAgentPanel({ machineId, paneId, label });
+    setAgentSheet(!filePanelAvailable);
+  }, [viewing, fileDocked, closeFile, filePanelAvailable]);
+  // the roster's chip opened it, so the focus goes back there once the panel is gone (DS §6.2)
+  const closeAgentPanel = useCallback(() => {
+    setAgentPanel(null);
+    setAgentSheet(false);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>(".hm-chip")?.focus());
+  }, []);
+  useEffect(() => {
+    if (viewing !== null && fileDocked) setAgentPanel(null);
+  }, [viewing, fileDocked]);
   // a collapse (below) whose two steps back have not landed: a second click on Show beside the
   // pane, or the kind correction in the same moment, must not queue two steps more and the file twice
   const collapsing = useRef(false);
@@ -1641,6 +1663,35 @@ export function App() {
   // a Pi pane's mode is the chat's to change (lib/piNative.ts): the pane's own view seeds and follows the
   // lane, the menu only asks for a mode and switches the lens; a Terminal-mode pane keeps today's menu
   const piLane = usePiNativeLane(selectedMachineId, selectedPaneId);
+  // the panel's agent, from the same lane the composer's roster reads: the pane the panel was opened on,
+  // never the selected one, so a panel outlives a pane switch and follows its own agent
+  const panelLane = usePiNativeLane(agentPanel?.machineId ?? selectedMachineId, agentPanel?.paneId ?? null);
+  const panelHerdsman = panelLane.state?.herdsman ?? null;
+  const panelAgent = panelHerdsman?.agents.find((agent) => agent.label === agentPanel?.label) ?? null;
+  // below 980px the sheet is the only form the panel takes; from there it docks, or takes the sheet the
+  // expand glyph asked for
+  const agentSheetShown = agentPanel !== null && panelAgent !== null && (!filePanelAvailable || agentSheet);
+  const agentSheetSurface = useFocusTrap<HTMLDivElement>(agentSheetShown);
+  const agentNarrow = useMediaQuery(SHEET_QUERY);
+  // the roster is the truth: an agent closed elsewhere (its own Close, the bridge restarting) takes the
+  // panel with it rather than leaving a column about nothing
+  useEffect(() => {
+    if (agentPanel !== null && panelLane.state !== null && panelAgent === null) setAgentPanel(null);
+  }, [agentPanel, panelLane.state, panelAgent]);
+  // once the window is too narrow for a column the sheet is the only form; the next open asks again
+  useEffect(() => { if (!filePanelAvailable && agentSheet) setAgentSheet(false); }, [filePanelAvailable, agentSheet]);
+  useEffect(() => {
+    if (!agentSheetShown) return;
+    const onKey = (event: KeyboardEvent): void => {
+      // the Close agent confirmation over it answers its own Escape
+      if (event.key !== "Escape" || document.querySelector('[role="alertdialog"]')) return;
+      event.preventDefault();
+      event.stopPropagation();
+      closeAgentPanel();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [agentSheetShown, closeAgentPanel]);
   const piPane = selectedPane?.agent === "pi" ? selectedPane : null;
   const piMode = piLane.state?.mode ?? null;
   const piItems: RowMenuItem[] = piPane === null ? [] : piMode === null
@@ -1979,6 +2030,8 @@ export function App() {
                         onOpenNewSession={item ? () => actions.openNewTab({ machineId, workspaceId: item.workspace_id }) : undefined}
                         // the composer's `/hotkeys`: Settings on its Shortcuts page (DS §4.12)
                         onOpenSettings={actions.openSettings}
+                        // the roster's rows and its Open panel: the agent's own column beside this pane
+                        onOpenAgent={item ? (label: string) => openAgentPanel(machineId, item.pane_id, label) : undefined}
                         // the other half never takes the keyboard: a press in it makes it active first
                         active={active && itemActive}
                         // the paging shortcuts reach the selected pane of the active half only
@@ -2007,12 +2060,29 @@ export function App() {
         </div>
         </WebPanelContext.Provider>
         </OpenFileContext.Provider>
+        {/* the agent's own column, in the file panel's slot (DS §4.8), before the file so the two never
+            stand together: a docked file closes it above, and opening it closes a docked file */}
+        {filePanelAvailable && !agentSheet && !(viewing !== null && fileDocked) && agentPanel !== null && panelAgent !== null &&
+          <AgentPanel key={`${agentPanel.paneId}:${agentPanel.label}`} agent={panelAgent} capabilities={panelHerdsman?.capabilities ?? []}
+            panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />}
+            onCommand={(command) => sendPiRpc(agentPanel.paneId, { type: "prompt", message: command }, agentPanel.machineId)}
+            onExpand={() => setAgentSheet(true)} onClose={closeAgentPanel} />}
         {/* last in the row: the file beside the pane (from 980px), the pane column shrinks and its terminal refits */}
         {viewing !== null && fileDocked && <MachineContext.Provider value={viewing.machineId}>
           <FileViewer key={viewing.path} docked panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} path={viewing.path} paneId={viewing.paneId} onClose={closeFile} onOpen={(path) => openFile({ ...viewing, path, presentation })} onKind={reportFileKind} onTogglePresentation={toggleFilePresentation} keyboardActive={!settingsOpen} />
         </MachineContext.Provider>}
         {webPage !== null && filePanelAvailable && !(viewing !== null && fileDocked) &&
           <WebPanel key={webPage.url} url={webPage.url} refresh={webPage.serial} onClose={() => setWebPage(null)} panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />} />}
+        {/* below 980px, or from the dock's expand glyph: the same panel as a sheet, with the trap and the
+            Escape every aria-modal surface owes its keyboard; a phone's Back returns to the roster */}
+        {agentSheetShown && agentPanel !== null && panelAgent !== null && createPortal(
+          <div className="modal-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) closeAgentPanel(); }}>
+            <div ref={agentSheetSurface} className="modal agent-sheet" role="dialog" aria-modal="true" aria-label={panelAgent.label} tabIndex={-1}>
+              <AgentPanel key={`${agentPanel.paneId}:${agentPanel.label}`} agent={panelAgent} capabilities={panelHerdsman?.capabilities ?? []}
+                onCommand={(command) => sendPiRpc(agentPanel.paneId, { type: "prompt", message: command }, agentPanel.machineId)}
+                back={agentNarrow ? { label: t("Back"), run: closeAgentPanel } : undefined} onClose={closeAgentPanel} />
+            </div>
+          </div>, document.body)}
       </div>
 
       <MachineContext.Provider value={newSessionMachineId}><NewSessionDialog
