@@ -1,6 +1,6 @@
 import { MachineContext, useMachineApi, useMachineId } from "../lib/machineContext.tsx";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ComponentType, type FocusEvent as ReactFocusEvent, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
-import { Bell, Columns2, CornerLeftUp, Folder, FolderOpen, FolderSearch, History, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, PanelLeft, Pin, Plus, Puzzle, RefreshCw, Rows2, Settings, SunMoon, SwitchCamera, X } from "lucide-react";
+import { Bell, Columns2, CornerLeftUp, Folder, FolderOpen, FolderSearch, History, LoaderCircle, Maximize2, MessageSquarePlus, Minimize2, Monitor, Package, PanelLeft, Pin, Plus, Puzzle, RefreshCw, Rows2, Settings, SunMoon, SwitchCamera, X } from "lucide-react";
 
 import "./CommandPalette.css";
 
@@ -31,6 +31,7 @@ import { worktreeLabel } from "../lib/worktreeName.ts";
 import { browseEntries, folderQuery, folderQueryFor, homeRelative, matchFolders, pinnedFolders, requestFilesFolder } from "../lib/paletteFolders.ts";
 import { currentSidebarPins, subscribeSidebarPins } from "../lib/sidebarPins.ts";
 import { recentDirectories } from "../lib/recent-directories.ts";
+import { openSessionContext } from "../lib/sessionContext.ts";
 
 import { availableTarget, groupMachinePanes, loadRecentTargets, rankMachinePanes, recentTargets, rememberTarget, targetKey, RECENT_KEY, type MachineBranches, type MachinePane, type RecentPane } from "../lib/machinePalette.ts";
 import { worktreeWorkspaceSignature, type WorkspaceBranch } from "../lib/worktreeBranches.ts";
@@ -312,12 +313,14 @@ export function CommandPalette({ open, initialQuery = "", onClose, machines, onS
     { id: "sidebar", label: t("Toggle sidebar"), icon: PanelLeft, shortcut: "toggle-sidebar", run: actions.toggleSidebar },
     { id: "theme", label: t("Toggle theme"), icon: SunMoon, run: actions.toggleTheme },
     { id: "settings", label: t("Settings"), icon: Settings, shortcut: "settings", run: actions.openSettings },
+    // what Pi loaded for the selected Pi pane (DS §4.10): the dialog is App's, asked for here
+    ...(selectedPane?.agent === "pi" ? [{ id: "session-context", label: t("Session context"), icon: Package, run: openSessionContext }] : []),
     { id: "add-pc", label: t("Add PC"), icon: Monitor, run: actions.openAddPc },
     ...(actions.enableNotifications ? [{ id: "notifications", label: t("Enable notifications"), icon: Bell, run: actions.enableNotifications }] : []),
     ...(actions.openFiles ? [{ id: "files", label: t("Browse files"), icon: FolderOpen, run: actions.openFiles }] : []),
     ...(online ? [{ id: "browse-folders", label: t("Browse folders"), icon: FolderSearch, keepOpen: true, run: () => browseTo(browseStart ?? home ?? "~") }] : []),
     { id: "refresh", label: t("Refresh"), icon: RefreshCw, run: actions.refresh },
-  ], [actions, splitPane, zoomPane, tabPanes, zoom, view, t, selectedPaneId, online, browseTo, browseStart, home]);
+  ], [actions, splitPane, zoomPane, tabPanes, zoom, view, t, selectedPaneId, selectedPane, online, browseTo, browseStart, home]);
 
   // Settings pages are found by a query only, and open on the page itself: the dialog reads the request as it mounts
   const settingsActions = useMemo(() => {

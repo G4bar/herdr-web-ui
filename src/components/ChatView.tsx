@@ -58,6 +58,8 @@ import { machinePath, paneStorageId } from "../../shared/machines.ts";
 import { chatRestoreIndex, chatTurnAnchor, readChatPosition, rememberChatPosition, type ChatPosition } from "../lib/chatScrollMemory.ts";
 import { fileUrl } from "../lib/api.ts";
 import { useMachineId } from "../lib/machineContext.tsx";
+import { piResources, usePiResources } from "../lib/piResources.ts";
+import { openSessionContext } from "../lib/sessionContext.ts";
 import { useSkillMatcher } from "../lib/useSkillMatcher.ts";
 import type { SkillMatcher } from "../lib/skillMentions.ts";
 import { lineDiff } from "../lib/diff.ts";
@@ -557,6 +559,23 @@ function ThinkingRow({ text, stateKey, streaming, expandRows }: { text: string; 
  * between them — under one header ("Worked for 7s · 1 edit"). Rows stay one line
  * each until opened; the narration between them is answer prose while the turn runs, dim after.
  */
+/**
+ * The one quiet line an empty native Pi chat shows under its greeting (DS §4.10): what Pi loaded
+ * for the session, and the way into the Session context dialog. It reads its own counts, so the
+ * chat asks for them only while it has nothing else to show.
+ */
+function PiContextLine({ paneId }: { paneId: string }) {
+  const t = useT();
+  const machineId = useMachineId();
+  const read = usePiResources(paneId, true, machineId);
+  if (read.files === null || read.commands === null) return null;
+  const { skills, extensions } = piResources(read.commands);
+  return <p className="chat-context-line">
+    {t("Pi loaded {files} context files · {skills} skills · {extensions} extensions", { files: read.files.length, skills: skills.length, extensions: extensions.length })}{" "}
+    <button type="button" className="btn btn-ghost chat-context-view" onClick={openSessionContext}>{t("View")}</button>
+  </p>;
+}
+
 /**
  * A live work block's head with no rows yet, where the block will be: a turn that has written
  * nothing the block draws (Claude Code's spinner, hidden thinking, or only words so far). The block
@@ -1875,6 +1894,7 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           // before the turn has a row at all, where its work block will be drawn
           : <PendingWorkHead className="chat-activity" title={activity === "thinking" ? t("Thinking…") : t("Working…")} />)}
       {loaded && empty && error === null && prompt === null && activity === "idle" && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
+      {active && loaded && empty && error === null && prompt === null && activity === "idle" && !(greeted && blank) && agent === "pi" && piNative?.mode === "native" && <PiContextLine paneId={paneId} />}
       {ended && <p className="chat-endcap">{t("terminal ended")}</p>}
   </>;
   const jump = newMessages ? <button type="button" className="btn chat-new-messages chat-virtual-jump" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>

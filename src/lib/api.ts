@@ -898,6 +898,19 @@ export async function fetchPiNativeState(paneId: string, machineId = "local"): P
   }
 }
 
+/** One file Pi adds to every request (server/pi-context.ts): where it is, and how big. */
+export interface PiContextFile {
+  path: string;
+  /** `global` is the agent directory's file, `project` the pane folder's, `parent` any above it */
+  scope: "global" | "project" | "parent";
+  size: number;
+}
+
+/** GET /api/pi/context: the context files Pi loads for the pane's folder, in Pi's own order. */
+export async function fetchPiContext(paneId: string, machineId = "local"): Promise<PiContextFile[]> {
+  return (await getJson<{ files: PiContextFile[] }>(`${machinePath(machineId, "pi/context")}?pane_id=${encodeURIComponent(paneId)}`, { cache: "no-store" })).files;
+}
+
 /** POST /api/pi/rpc: one allowlisted command, answered with what Pi answered; a refusal throws ApiError. */
 export async function sendPiRpc(paneId: string, command: PiRpcCommand, machineId = "local"): Promise<unknown> {
   const response = await sendJson(machinePath(machineId, "pi/rpc"), "POST", { pane_id: paneId, command });

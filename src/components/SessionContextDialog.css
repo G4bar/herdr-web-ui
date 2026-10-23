@@ -1,0 +1,286 @@
+/* Session context (DS §4.10): the Settings dialog's two columns — the list of tabs, the tab it
+   opened — and on a phone the list, then the tab, as Settings shows them. The rows are the
+   session list's: the text leads, the scope and the way on trail. */
+
+.ctx-dialog {
+  display: grid;
+  grid-template-columns: 13rem minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(100%, var(--content-w));
+  height: min(100%, 40rem);
+}
+
+.ctx-dialog .icon-button svg {
+  width: var(--icon-size);
+  height: var(--icon-size);
+}
+
+.ctx-header {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.ctx-reload {
+  flex: none;
+}
+
+/* the busy arc of a Reload in flight: it turns, it never announces (the button is disabled) */
+.ctx-busy {
+  width: 14px;
+  height: 14px;
+  color: var(--text-dim);
+  animation: ctx-busy-turn var(--dur-spin) steps(8) infinite;
+}
+
+@keyframes ctx-busy-turn {
+  to { transform: rotate(360deg); }
+}
+
+.ctx-nav {
+  grid-column: 1;
+  grid-row: 1 / 3;
+  min-height: 0;
+  padding: var(--space-4) var(--space-3);
+  overflow-y: auto;
+  background: var(--bg);
+  border-right: var(--hairline) solid var(--border);
+}
+
+.ctx-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ctx-tab {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--control-h);
+  padding: 0 var(--space-3);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+
+.ctx-tab > span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* only a list that leads to a page of its own points there: a phone's */
+.ctx-tab-chevron {
+  display: none;
+  width: 16px;
+  height: 16px;
+  color: var(--text-dim);
+}
+
+@media (hover: hover) {
+  .ctx-tab:hover {
+    background: var(--bg-elevated);
+  }
+}
+
+.ctx-tab[aria-selected="true"] {
+  background: var(--bg-hover);
+  color: var(--text-strong);
+}
+
+.ctx-body {
+  grid-column: 2;
+  grid-row: 2;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ctx-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ctx-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: var(--row-h);
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--text);
+}
+
+/* the row's words give way before its pill and its action do */
+.ctx-copy {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.ctx-name {
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  font-weight: var(--fw-medium);
+  overflow-wrap: anywhere;
+}
+
+/* a description holds two lines, as the design draws it */
+.ctx-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+/* a context file's path is a path: mono, and it may break anywhere */
+.ctx-path {
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.ctx-size {
+  flex: none;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.ctx-commands {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.ctx-action {
+  flex: none;
+}
+
+.ctx-note,
+.ctx-hint {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+}
+
+.ctx-hint code {
+  font-family: var(--font-mono);
+}
+
+.ctx-empty {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.ctx-empty p {
+  margin: 0;
+  font-size: var(--fs-sm);
+}
+
+.ctx-empty p + p {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.ctx-error {
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--fs-sm);
+}
+
+.ctx-search {
+  flex: none;
+  width: 100%;
+}
+
+@media (max-width: 640px) {
+  .ctx-dialog {
+    grid-template-columns: minmax(0, 1fr);
+    height: 92%;
+  }
+
+  .ctx-header,
+  .ctx-body {
+    grid-column: 1;
+  }
+
+  /* the list is the sheet's whole body here, drawn as one card of rows */
+  .ctx-nav {
+    grid-column: 1;
+    grid-row: 2;
+    padding: var(--space-4);
+    background: transparent;
+    border-right: 0;
+  }
+
+  .ctx-tabs {
+    gap: 0;
+    background: var(--bg-elevated);
+    border: var(--hairline) solid var(--border);
+    border-radius: var(--radius-lg);
+  }
+
+  .ctx-tab {
+    min-height: var(--keybar-h);
+    padding: 0 var(--space-3) 0 var(--space-4);
+    border-radius: 0;
+    font-size: var(--fs-md);
+  }
+
+  .ctx-tab + .ctx-tab {
+    border-top: var(--hairline) solid var(--border);
+  }
+
+  .ctx-tab-chevron {
+    display: block;
+    width: var(--icon-size);
+    height: var(--icon-size);
+  }
+}
+
+/* a finger presses a row as an iPhone list row is pressed: it fills, it does not dim (styles.css) */
+@media (hover: none) and (pointer: coarse) {
+  .ctx-tab:active {
+    opacity: 1;
+    background: var(--bg-elevated);
+  }
+}
+
+@media (pointer: coarse) {
+  .ctx-row {
+    min-height: var(--touch-target);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ctx-tab {
+    transition: none;
+  }
+}

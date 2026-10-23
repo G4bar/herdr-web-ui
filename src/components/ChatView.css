@@ -1213,6 +1213,21 @@
 
 .chat-empty p { margin: 0; font-size: var(--fs-sm); }
 
+/* what Pi loaded for an empty native session, under its greeting: one quiet line and the way in */
+.chat-context-line {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  text-align: center;
+}
+
+.chat-context-view {
+  min-height: 0;
+  height: auto;
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+}
+
 .chat-new-messages {
   position: sticky;
   z-index: var(--z-popover);

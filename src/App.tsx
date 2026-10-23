@@ -1,5 +1,5 @@
-import { type CSSProperties, type DragEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { Bell, Brain, ChevronDown, Ellipsis, FolderOpen, Link, Menu, MessageSquare, PanelLeft, RefreshCw, Search, SquareTerminal, X } from "lucide-react";
+import { lazy, Suspense, type CSSProperties, type DragEvent, type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { Bell, Brain, ChevronDown, Ellipsis, FolderOpen, Link, Menu, MessageSquare, Package, PanelLeft, RefreshCw, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane, SessionHistoryAgent } from "../shared/protocol.ts";
 import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, routeMissing, sendTestPush, shareSeen, signOut, splitPane, verifySourceBoot, zoomPane, type HealthInfo } from "./lib/api.ts";
@@ -16,6 +16,8 @@ import { AccessGate } from "./components/AccessGate.tsx";
 import { AgentMark } from "./components/AgentMark.tsx";
 import { NewSessionDialog, type NewTabTarget } from "./components/NewSessionDialog.tsx";
 import { SessionHistory } from "./components/SessionHistory.tsx";
+import { closeSessionContext, openSessionContext, sessionContextOpen, subscribeSessionContext } from "./lib/sessionContext.ts";
+import { composerDrafts } from "./lib/composerDraft.ts";
 import { sessionHistoryAgent, sessionHistoryListAgent } from "./lib/sessionHistory.ts";
 import { useRecentResumes } from "./lib/useRecentResumes.ts";
 import { forgetSessionHistoryProbesOfPcsAway } from "./lib/useSessionHistoryOffered.ts";
@@ -218,6 +220,9 @@ function Brand() {
     </h1>
   );
 }
+
+/** Session context is read only when it is opened (DS §10: the dialog loads lazily). */
+const SessionContextDialog = lazy(() => import("./components/SessionContextDialog.tsx").then((module) => ({ default: module.SessionContextDialog })));
 
 export function App() {
   const t = useT();
@@ -563,6 +568,8 @@ export function App() {
   const [newTab, setNewTab] = useState<NewTabTarget | null>(null);
   // the earlier sessions of a workspace's folder (components/SessionHistory.tsx), while open
   const [sessionHistory, setSessionHistory] = useState<{ machineId: string; workspaceId: string; agent: SessionHistoryAgent } | null>(null);
+  // the Session context dialog (lib/sessionContext.ts): App holds it for the selected pane
+  const contextOpen = useSyncExternalStore(subscribeSessionContext, sessionContextOpen);
   const [connected, setConnected] = useState(false);
   /** the active terminal's socket has been connected on this page before (PaneTerminal reports it): not
    *  connected, the chip says reconnecting; before this page's first connection to the PC, connecting */
@@ -1650,6 +1657,8 @@ export function App() {
     // the chat's folded reading, the same two switches as Settings → Chat (DS §3.1)
     { id: "show-thinking", label: t("Show thinking"), icon: Brain, divider: true, checked: settings.showThinking, run: chatView.thinking },
     { id: "expand-tool-output", label: t("Expand tool output"), icon: ChevronDown, checked: settings.expandToolOutput, run: chatView.toolOutput },
+    // what Pi loaded for this session (DS §4.10): a Pi pane's alone, in either mode
+    ...(piPane ? [{ id: "session-context", label: t("Session context"), icon: Package, run: openSessionContext }] : []),
     ...(bellVisible ? [{ id: "alerts", label: t("Alerts"), hint: bell.state, checked: bell.on, title: bell.title, icon: Bell, run: () => void bell.run() }] : []),
   ];
 
@@ -2034,6 +2043,15 @@ export function App() {
         setFilesOpen(false);
         selectTargetRef.current(machineId, paneId);
       }} />
+      {contextOpen && selectedPane && (
+        <MachineContext.Provider value={selectedMachineId}>
+          <Suspense fallback={null}>
+            <SessionContextDialog key={`${selectedMachineId}:${selectedPane.pane_id}`} paneId={selectedPane.pane_id} machineId={selectedMachineId}
+              native={piLane.state?.mode === "native"} onClose={closeSessionContext} onViewFile={viewFile}
+              onUse={(text) => { composerDrafts.set(`ovis:composer-draft:${paneStorageId(selectedMachineId, selectedPane.pane_id)}`, (previous) => previous + text); closeSessionContext(); }} />
+          </Suspense>
+        </MachineContext.Provider>
+      )}
       <SettingsDialog auth={auth} herdrVersion={shownHealth?.herdr?.version ?? null} open={settingsOpen} section={settingsSection} linkPage={settingsLinkPage} linkSection={settingsLinkSection} onPage={onSettingsPage} onClose={closeSettings} onUsageLogin={(paneId) => { closeSettings(); selectTarget("local", paneId, "terminal"); void load(); }} actions={actions} updates={updates} onEnableNotifications={enableNotifications} saveError={settingsSaveError} savePaused={settingsSavePaused} saveRetrying={settingsSaveRetrying} onRetrySave={retrySettingsSave} overPreview={(viewing !== null && !fileDocked) || diffViewing !== null} />
       {filesOpen && selectedPane && (
         <FilesDialog start={selectedPane.foreground_cwd ?? selectedPane.cwd ?? ""} paneId={selectedPane.pane_id} viewing={(viewing !== null && !fileDocked) || diffViewing !== null} onOpenFile={viewFile}
