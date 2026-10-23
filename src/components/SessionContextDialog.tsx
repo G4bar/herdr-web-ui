@@ -8,11 +8,10 @@
  */
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
-import { ArrowLeft, ChevronRight, LoaderCircle, X } from "lucide-react";
+import { ArrowLeft, ChevronRight, X } from "lucide-react";
 
 import "./SessionContextDialog.css";
 
-import { sendPiRpc } from "../lib/api.ts";
 import { formatBytes } from "../lib/bridgeProgress.ts";
 import { useT } from "../lib/i18n.ts";
 import { piCommandText, piResources, usePiResources, type PiCommand, type PiExtension } from "../lib/piResources.ts";
@@ -55,11 +54,10 @@ export function SessionContextDialog({ paneId, machineId, native, onClose, onVie
   // a Terminal-mode pane has no RPC: its context files are all the dialog can show
   const tabs = useMemo(() => native ? TABS : TABS.slice(0, 1), [native]);
   const page = chosen ?? (narrow ? null : tabs[0]!);
-  const [reloading, setReloading] = useState(false);
   const [query, setQuery] = useState("");
   const surface = useFocusTrap<HTMLElement>(true);
-  useSheetSwipe(surface, reloading ? null : onClose);
-  usePhoneSheetBack(() => { if (reloading) return false; onClose(); });
+  useSheetSwipe(surface, onClose);
+  usePhoneSheetBack(onClose);
   const tabsRef = useRef<HTMLDivElement>(null);
   const backRef = useRef<HTMLButtonElement>(null);
   const shown = useRef<TabId | null>(null);
@@ -92,28 +90,21 @@ export function SessionContextDialog({ paneId, machineId, native, onClose, onVie
     if (!narrow) open(next);
   };
 
-  // Reload asks Pi to reload its resources, then reads both sources again; a refusal still
-  // re-reads, so the lists say what Pi holds now
-  const reload = async (): Promise<void> => {
-    if (reloading) return;
-    setReloading(true);
-    try {
-      await sendPiRpc(paneId, { type: "prompt", message: "/reload" }, machineId);
-    } catch { /* Pi refused: the lists are read again below, and say so if that fails too */ }
-    setReloading(false);
-    read.read();
-  };
+  // Reload reads both sources again. `/reload` is one of Pi's built-in TUI commands, which never
+  // run through `prompt` (it would only reach the model as a message), so the dialog shows what Pi
+  // holds now instead of asking it to load its resources again
+  const reload = (): void => { read.read(); };
 
   // Escape is the dialog's while it is up, as every dialog's is
   useEffect(() => {
     const closeOnEscape = (event: KeyboardEvent): void => {
       if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return;
       event.preventDefault();
-      if (!reloading) onClose();
+      onClose();
     };
     window.addEventListener("keydown", closeOnEscape);
     return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [onClose, reloading]);
+  }, [onClose]);
 
   const use = (command: PiCommand): void => { onUse(piCommandText(command)); onClose(); };
   // View closes first: the file viewer would sit under the dialog, or behind its scrim
@@ -205,7 +196,7 @@ export function SessionContextDialog({ paneId, machineId, native, onClose, onVie
   };
 
   const titleId = `${id}-title`;
-  const onScrim = (event: MouseEvent<HTMLDivElement>): void => { if (event.target === event.currentTarget && !reloading) onClose(); };
+  const onScrim = (event: MouseEvent<HTMLDivElement>): void => { if (event.target === event.currentTarget) onClose(); };
   const listShown = !narrow || page === null;
 
   return createPortal(
@@ -215,8 +206,7 @@ export function SessionContextDialog({ paneId, machineId, native, onClose, onVie
           {(narrow && page !== null) && <button type="button" ref={backRef} className="icon-button" aria-label={t("Back to session context")} onClick={goBack}><ArrowLeft aria-hidden="true" /></button>}
           <h2 className="modal-title" id={titleId}>{narrow && page !== null ? label(page) : t("Session context")}</h2>
           {native && (
-            <button type="button" className="btn ctx-reload" disabled={reloading} onClick={() => void reload()}>
-              {reloading && <LoaderCircle className="ctx-busy" aria-hidden="true" />}
+            <button type="button" className="btn ctx-reload" onClick={reload}>
               {t("Reload")}
             </button>
           )}

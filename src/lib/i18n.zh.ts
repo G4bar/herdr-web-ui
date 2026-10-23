@@ -1594,4 +1594,6 @@ export const ZH: Record<string, string> = {
   "Start a new session?": "开始新会话？",
   "Pi is still working. Starting a new session stops this run.": "Pi 仍在工作。开始新会话会停止这次运行。",
   "Start new session": "开始新会话",
+  "Run {command} in the Terminal": "在终端中运行 {command}",
+  "Type {command} in the Terminal": "在终端中输入 {command}",
 };

@@ -203,17 +203,17 @@ describe("Session context", () => {
     expect(text(renderer)).toContain("No extensions.");
   });
 
-  it("reloads Pi's resources and reads both sources again", async () => {
+  it("reads both sources again on Reload, without asking Pi to reload", async () => {
     const { renderer } = await mount();
     await until(() => text(renderer).includes("Context files (3)"), "the reads never answered");
+    sent.length = 0;
 
-    await click(button(renderer, "Reload"));
-    await until(() => sent.some((command) => (command as { type?: string }).type === "prompt"), "no reload was sent to Pi");
-    expect(sent).toContainEqual({ type: "prompt", message: "/reload" });
-    // the second read answers what Pi holds now
+    // the second read answers what Pi holds now; `/reload` is one of Pi's built-in TUI commands,
+    // which `prompt` would only hand to the model as a message
     contextFiles = [CONTEXT[0]!];
     await click(button(renderer, "Reload"));
     await until(() => text(renderer).includes("Context files (1)"), "the lists were not read again");
+    expect(sent).not.toContainEqual({ type: "prompt", message: "/reload" });
   });
 
   it("closes before the file viewer opens a context file", async () => {

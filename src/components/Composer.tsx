@@ -127,8 +127,8 @@ export interface ComposerProps {
   onOpenHistory?: () => void;
   /** opens Settings, which `/hotkeys` needs (DS §4.12): none: the command leaves the box as typed */
   onOpenSettings?: () => void;
-  /** opens the Terminal lens, where `/login` and `/logout` run Pi's own OAuth dance (DS §4.12): none: Pi answers the prompt itself */
-  onOpenTerminal?: () => void;
+  /** opens the Terminal lens, where `/login` and `/logout` run Pi's own OAuth dance (DS §4.12): none: the note says to run it there */
+  onOpenTerminal?: (command: string) => void;
   /** opens the New tab dialog on this pane's workspace, to start another agent with its model, effort, skills
    * and first message (NewSessionDialog); none: the pane has no workspace to add a tab to */
   onOpenNewSession?: () => void;
@@ -439,12 +439,12 @@ export function Composer({
         }, refused).catch(refused);
         return;
       case "hotkeys": requestSettingsPage("shortcuts"); onOpenSettings?.(); return;
-      case "reload": void piRpc({ type: "prompt", message: "/reload" }).catch(refused); return;
       case "context": openSessionContext(); return;
       case "terminal":
-        if (onOpenTerminal !== undefined) { onOpenTerminal(); return; }
-        // no terminal to hand it to: Pi hears its own command, and says what it made of it
-        void piRpc({ type: "prompt", message: surface.command }).catch(refused);
+        // DS §4.12: `/login` and `/logout` are Pi's own TUI, and their text left the box: the note
+        // says what to type once the Terminal is the lens in front of the user
+        if (onOpenTerminal !== undefined) { onOpenTerminal(surface.command); return; }
+        setNote(t("Run {command} in the Terminal", { command: surface.command }));
         return;
     }
   }, [announce, machineId, onOpenSettings, onOpenTerminal, paneId, piRpc, streaming, t]);
@@ -855,8 +855,10 @@ export function Composer({
 
   const selectCompletion = useCallback(
     (choice: SlashCommand | string, currentTrigger: ActiveTrigger) => {
-      // DS §4.12: a picked command the chat has a surface for runs it here, never typed into the box
-      const surface = typeof choice === "string" || currentTrigger.kind !== "slash" || !piSurfaces ? null : piSlashSurface(`/${choice.name}`);
+      // DS §4.12: a picked command the chat has a surface for runs it here, never typed into the box,
+      // and only where it is the whole message: `/new` after a word is a completion like any other
+      const lone = currentTrigger.kind === "slash" && text.slice(0, currentTrigger.start).trim() === "";
+      const surface = typeof choice === "string" || !lone || !piSurfaces ? null : piSlashSurface(`/${choice.name}`);
       if (surface !== null) {
         // the partial `/mod` that opened the menu is not a message either: the surface replaces it
         const cleared = applyCompletion(text, currentTrigger, "");

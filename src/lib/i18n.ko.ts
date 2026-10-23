@@ -1590,4 +1590,6 @@ export const KO: Record<string, string> = {
   "Start a new session?": "새 세션을 시작할까요?",
   "Pi is still working. Starting a new session stops this run.": "Pi가 아직 작업 중입니다. 새 세션을 시작하면 이 실행이 중지됩니다.",
   "Start new session": "새 세션 시작",
+  "Run {command} in the Terminal": "터미널에서 {command}을(를) 실행하세요",
+  "Type {command} in the Terminal": "터미널에서 {command}을(를) 입력하세요",
 };

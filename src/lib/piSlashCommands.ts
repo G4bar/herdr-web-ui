@@ -5,8 +5,10 @@
  * `/settings`, `/scoped-models`). `/resume` keeps the composer's own path, which predates the table.
  *
  * A command taking an argument the chat cannot honour (`/model sonnet`, `/export /tmp/x.html`) is
- * not the chat's either: Pi's built-in TUI commands do not run through `prompt`, but a message
- * that looks like one is still the user's to send, never silently dropped.
+ * not the chat's either: Pi's built-in TUI commands do not run through `prompt` — one sent there
+ * reaches the model as a message and starts a paid run — but a message that looks like one is
+ * still the user's to send, never silently dropped. `/reload` is one of those built-ins
+ * (docs/rpc-commands.md), so it is not a surface here.
  */
 export type PiSlashSurface =
   | { kind: "model" }
@@ -17,7 +19,6 @@ export type PiSlashSurface =
   | { kind: "export" }
   | { kind: "copy" }
   | { kind: "hotkeys" }
-  | { kind: "reload" }
   | { kind: "context" }
   // an OAuth dance needs Pi's own TUI, so these open the terminal (DS §4.12)
   | { kind: "terminal"; command: string };
@@ -38,7 +39,6 @@ const SURFACES: Readonly<Record<string, SurfaceFor>> = {
   export: bare({ kind: "export" }),
   copy: bare({ kind: "copy" }),
   hotkeys: bare({ kind: "hotkeys" }),
-  reload: bare({ kind: "reload" }),
   context: bare({ kind: "context" }),
   login: bare({ kind: "terminal", command: "/login" }),
   logout: bare({ kind: "terminal", command: "/logout" }),

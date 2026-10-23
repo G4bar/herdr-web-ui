@@ -460,6 +460,11 @@ export function PaneTerminal({
   const [rewindHint, setRewindHint] = useState<string | null>(null);
   const rewindInTerminal = useCallback(() => { setRewindHint(paneId); onOpenTerminal?.(); }, [paneId, onOpenTerminal]);
   useEffect(() => { if (chatView) setRewindHint(null); }, [chatView]);
+  // a `/login` or `/logout` the composer hands to the Terminal (DS §4.12): no text is typed for it,
+  // so the banner says which command to run there, until dismissed or the chat is back
+  const [commandHint, setCommandHint] = useState<{ pane: string | null; command: string } | null>(null);
+  const piCommandInTerminal = useCallback((command: string) => { setCommandHint({ pane: paneId, command }); onOpenTerminal?.(); }, [paneId, onOpenTerminal]);
+  useEffect(() => { if (chatView) setCommandHint(null); }, [chatView]);
   const onPeekRef = useRef(onPeek); onPeekRef.current = onPeek;
   const onEndPeekRef = useRef(onEndPeek); onEndPeekRef.current = onEndPeek;
   // The outcome ids this pane's chat last read (its prompt poll). A send notes them as it leaves, so
@@ -3424,6 +3429,12 @@ export function PaneTerminal({
             <button type="button" className="icon-button" aria-label={t("Dismiss")} title={t("Dismiss")} onClick={() => setRewindHint(null)}><X aria-hidden="true" /></button>
           </div>
         )}
+        {paneId !== null && !chatView && commandHint !== null && commandHint.pane === paneId && (
+          <div className="terminal-banner terminal-banner-rewind" role="status">
+            <span>{t("Type {command} in the Terminal", { command: commandHint.command })}</span>
+            <button type="button" className="icon-button" aria-label={t("Dismiss")} title={t("Dismiss")} onClick={() => setCommandHint(null)}><X aria-hidden="true" /></button>
+          </div>
+        )}
         {/* the peek's head: no grid row of its own, no focus trap and no Escape of its own (Escape is the
             agent's). Keep Terminal saves the terminal lens, which ends the peek */}
         {paneId !== null && peek !== null && (
@@ -3697,7 +3708,7 @@ export function PaneTerminal({
           onOpenHistory={historyOffered ? onOpenHistory : undefined}
           onOpenNewSession={onOpenNewSession}
           onOpenSettings={onOpenSettings}
-          onOpenTerminal={onOpenTerminal}
+          onOpenTerminal={onOpenTerminal === undefined ? undefined : piCommandInTerminal}
           greeting={greetingDue ? (
             <div className={`composer-greeting${greeted ? "" : " is-out"}`} ref={greetingRef} aria-hidden={greeted ? undefined : true}>
               <p className="composer-greeting-title">{t("What should {agent} do in {folder}?", { agent: agentDisplayLabel(agent), folder })}</p>

@@ -10,6 +10,9 @@ import { SettingsProvider } from "../lib/settings.ts";
 import type { PiRpcCommand } from "../lib/api.ts";
 
 mock.module("react-dom", () => ({ ...reactDom, createPortal: (node: unknown) => node }));
+// the pane's catalog: a skill named like one of Pi's own commands, so the menu has a row to pick
+const CATALOG = [{ name: "new", description: "", source: "skill" }];
+mock.module("../lib/paneCommandCache.ts", () => ({ cachedPaneCommands: async () => CATALOG, onPaneCommandsInvalidated: () => () => {}, invalidatePaneCommands: () => {} }));
 const { Composer } = await import("./Composer.tsx");
 
 const browserGlobals = ["window", "document", "HTMLElement", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "requestAnimationFrame", "cancelAnimationFrame"] as const;
@@ -58,25 +61,25 @@ afterAll(() => {
 const native = (extra: Partial<PiNativeState> = {}): PiNativeState => ({ ...initialPiNativeState(), mode: "native", ...extra });
 
 /** A native Pi's composer over a draft, with every RPC command, prompt and Settings opening recorded. */
-async function mount(options: { draft: string; piNative?: PiNativeState; answer?: unknown; terminal?: boolean }) {
+async function mount(options: { draft: string; piNative?: PiNativeState; answer?: unknown; terminal?: boolean; agent?: string }) {
   const id = `slash${++drafts}`;
   composerDrafts.set(`ovis:composer-draft:${id}`, options.draft);
   window.localStorage.setItem("ovis:settings", JSON.stringify({ enterSends: true }));
   const commands: PiRpcCommand[] = [];
   const sent: string[] = [];
   let settingsOpened = 0;
-  let terminalOpened = 0;
+  const terminalOpened: string[] = [];
   let renderer: TestRenderer.ReactTestRenderer | null = null;
   await act(async () => {
     renderer = TestRenderer.create(createElement(SettingsProvider, {
       children: createElement(Composer, {
-        connected: true, paneId: id, agent: "pi", agentStatus: "idle",
+        connected: true, paneId: id, agent: options.agent ?? "pi", agentStatus: "idle",
         piNative: options.piNative ?? native(),
         piRpc: (command: PiRpcCommand) => { commands.push(command); return Promise.resolve(options.answer ?? null); },
         onSend: (text: string) => { sent.push(text); return true; },
         onAbort: () => {},
         onOpenSettings: () => { settingsOpened += 1; },
-        onOpenTerminal: options.terminal === false ? undefined : () => { terminalOpened += 1; },
+        onOpenTerminal: options.terminal === false ? undefined : (command: string) => { terminalOpened.push(command); },
         onUploadImage: async () => "",
       }),
     }));
@@ -85,26 +88,29 @@ async function mount(options: { draft: string; piNative?: PiNativeState; answer?
   const root = renderer!.root;
   return {
     draft: () => root.findByProps({ className: "composer-text" }).props.value as string,
+    type: async (value: string) => {
+      await act(async () => { root.findByProps({ className: "composer-text" }).props.onChange({ target: { value, selectionStart: value.length } }); });
+    },
     press: async (key: string) => {
       const event = { key, altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {}, nativeEvent: { isComposing: false, keyCode: 13, key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false } };
       await act(async () => { root.findByProps({ className: "composer-text" }).props.onKeyDown(event); });
     },
+    notes: () => root.findAllByProps({ className: "composer-note-text" }).map((node) => node.props.children).flat().filter((child): child is string => typeof child === "string").join(" "),
     commands,
     sent,
     settingsOpened: () => settingsOpened,
-    terminalOpened: () => terminalOpened,
+    terminalOpened,
     unmount: async () => { await act(async () => { renderer!.unmount(); }); },
   };
 }
 
 describe("Pi's slash commands in the message box", () => {
-  it("sends `/reload` as Pi's own prompt instead of the typed text", async () => {
+  it("leaves `/reload` to Pi's own message: a built-in TUI command never runs through `prompt`", async () => {
     const composer = await mount({ draft: "/reload" });
 
     await composer.press("Enter");
-    expect(composer.sent).toEqual([]);
-    expect(composer.commands).toEqual([{ type: "prompt", message: "/reload" }]);
-    expect(composer.draft()).toBe("");
+    expect(composer.sent).toEqual(["/reload"]);
+    expect(composer.commands).toEqual([]);
     await composer.unmount();
   });
 
@@ -145,19 +151,36 @@ describe("Pi's slash commands in the message box", () => {
     await composer.unmount();
   });
 
-  it("hands `/login` to the terminal, and Pi's own prompt where the pane has none", async () => {
+  it("hands `/login` to the terminal, and says where to run it where the pane has none", async () => {
     const login = await mount({ draft: "/login" });
     await login.press("Enter");
-    expect(login.terminalOpened()).toBe(1);
+    expect(login.terminalOpened).toEqual(["/login"]);
     expect(login.sent).toEqual([]);
     expect(login.commands).toEqual([]);
+    expect(login.draft()).toBe("");
     await login.unmount();
 
+    // no Terminal lens to hand it to: Pi's own TUI is the only place the command runs, and a
+    // prompt would make it a message to the model instead
     const noTerminal = await mount({ draft: "/logout", terminal: false });
     await noTerminal.press("Enter");
-    expect(noTerminal.commands).toEqual([{ type: "prompt", message: "/logout" }]);
+    expect(noTerminal.notes()).toContain("Run /logout in the Terminal");
+    expect(noTerminal.commands).toEqual([]);
     expect(noTerminal.sent).toEqual([]);
     await noTerminal.unmount();
+  });
+
+  it("completes a command named mid-sentence instead of running its surface", async () => {
+    // Pi lists no command past a word, so the row comes from a pane whose catalog does (a skill
+    // that happens to share a Pi command's name)
+    const composer = await mount({ draft: "see ", agent: "claude" });
+    await composer.type("see /new");
+    await composer.press("Enter");
+
+    expect(composer.draft()).toBe("see /new ");
+    expect(composer.commands).toEqual([]);
+    expect(composer.sent).toEqual([]);
+    await composer.unmount();
   });
 
   it("leaves prose that merely names a command, and a command a later phase owns, to the message", async () => {

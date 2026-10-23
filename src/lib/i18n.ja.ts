@@ -1592,4 +1592,6 @@ export const JA: Record<string, string> = {
   "Start a new session?": "新しいセッションを開始しますか？",
   "Pi is still working. Starting a new session stops this run.": "Pi はまだ作業中です。新しいセッションを開始すると、この実行は停止します。",
   "Start new session": "新しいセッションを開始",
+  "Run {command} in the Terminal": "ターミナルで {command} を実行してください",
+  "Type {command} in the Terminal": "ターミナルで {command} を入力してください",
 };

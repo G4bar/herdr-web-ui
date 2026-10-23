@@ -24,18 +24,6 @@
   flex: none;
 }
 
-/* the busy arc of a Reload in flight: it turns, it never announces (the button is disabled) */
-.ctx-busy {
-  width: 14px;
-  height: 14px;
-  color: var(--text-dim);
-  animation: ctx-busy-turn var(--dur-spin) steps(8) infinite;
-}
-
-@keyframes ctx-busy-turn {
-  to { transform: rotate(360deg); }
-}
-
 .ctx-nav {
   grid-column: 1;
   grid-row: 1 / 3;

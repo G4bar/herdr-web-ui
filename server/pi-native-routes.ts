@@ -239,16 +239,17 @@ export async function handlePiNativeRequest(
         return badRequest("invalid_session_path", "sessionPath must be a Pi session file in Pi's session store");
       }
     }
-    // export_html writes where this server says, not where a client asks: its file leaves as a download
+    // export_html writes where this server says, not where a client asks: its file leaves as a download,
+    // and leaves the temp folder on every path, a refused command included
     const exportPath = command.type === "export_html" ? join(tmpdir(), `pi-session-${randomUUID()}.html`) : null;
     if (exportPath !== null) command = { type: "export_html", outputPath: exportPath };
-    const answer = await options.registry.call(paneId, command).catch((error: unknown) => {
-      // a child that refused the command, exited under it or could not write the export: Pi's own words
-      if (error instanceof PiNativeError) throw error;
-      throw new PiNativeError("command_failed", error instanceof Error ? error.message : String(error), 502);
-    });
-    if (exportPath === null) return jsonResponse(answer ?? {});
     try {
+      const answer = await options.registry.call(paneId, command).catch((error: unknown) => {
+        // a child that refused the command, exited under it or could not write the export: Pi's own words
+        if (error instanceof PiNativeError) throw error;
+        throw new PiNativeError("command_failed", error instanceof Error ? error.message : String(error), 502);
+      });
+      if (exportPath === null) return jsonResponse(answer ?? {});
       return new Response(await readFile(exportPath), {
         headers: {
           "content-type": "text/html; charset=utf-8",
@@ -256,7 +257,7 @@ export async function handlePiNativeRequest(
         },
       });
     } finally {
-      await unlink(exportPath).catch(() => undefined);
+      if (exportPath !== null) await unlink(exportPath).catch(() => undefined);
     }
   } catch (error) {
     if (error instanceof PiNeedsTrustError) {
