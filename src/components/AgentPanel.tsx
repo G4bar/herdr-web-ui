@@ -17,15 +17,15 @@ import { Circle, CircleCheck, CircleDot, CircleX, Maximize2, MessageCircle, X } 
 import "./AgentPanel.css";
 
 import type { HerdsmanAgent, HerdsmanAgentState } from "../../shared/protocol.ts";
-import { herdsmanElapsedMs } from "../lib/herdsman.ts";
+import { herdsmanElapsedMs, readAgentDraft, writeAgentDraft, type AgentDraftMode } from "../lib/herdsman.ts";
 import { useT } from "../lib/i18n.ts";
 import { formatElapsed } from "../lib/omoTasks.ts";
 import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { Markdown } from "./Markdown.tsx";
 
 /** The ways to message an agent, in the order the segmented control draws them. */
-const MODES = ["steer", "interrupt", "reply"] as const;
-type Mode = (typeof MODES)[number];
+const MODES: readonly AgentDraftMode[] = ["steer", "interrupt", "reply"];
+type Mode = AgentDraftMode;
 
 /** The roster's glyphs, so an agent reads the same in the panel as in the tree. */
 const STATE_ICON: Record<HerdsmanAgentState, typeof Circle> = {
@@ -50,8 +50,12 @@ const FEED_MS = 1000;
 
 interface Props {
   agent: HerdsmanAgent;
+  /** where the unsent draft is kept (`paneId:label`): the panel remounts when it is moved to another parent */
+  draftKey: string;
   /** the extension's commands, from `PiNativeHerdsman.capabilities`: steer, interrupt, reply, close, continue */
   capabilities: readonly string[];
+  /** the transcript's Reply opened the panel: it starts at the reply field (DS §4.8) */
+  focusField?: boolean;
   /** one `/hm …` extension command, sent to Pi as a prompt; a failure leaves the draft alone */
   onCommand: (command: string) => Promise<unknown> | void;
   onClose: () => void;
@@ -63,13 +67,19 @@ interface Props {
   back?: { label: string; run: () => void };
 }
 
+/** The mode the panel opens in: the reader's own from an unsent draft, else Reply when the agent asks. */
+function startMode(draft: AgentDraftMode | undefined, modes: readonly Mode[], canReply: boolean): Mode {
+  if (draft !== undefined && modes.includes(draft) && (draft !== "reply" || canReply)) return draft;
+  return canReply ? "reply" : modes[0] ?? "steer";
+}
+
 /** A work row as the extension sent it: the leading verb, then the mono object. */
 function splitLine(line: string): [string, string] {
   const at = line.indexOf(" ");
   return at < 0 ? [line, ""] : [line.slice(0, at), line.slice(at + 1)];
 }
 
-export function AgentPanel({ agent, capabilities, onCommand, onClose, onExpand, panelStart, back }: Props) {
+export function AgentPanel({ agent, draftKey, capabilities, focusField, onCommand, onClose, onExpand, panelStart, back }: Props) {
   const t = useT();
   const caps = capabilities.join(" ");
   const modes = MODES.filter((mode) => capabilities.includes(mode));
@@ -77,8 +87,9 @@ export function AgentPanel({ agent, capabilities, onCommand, onClose, onExpand, 
   const ended = ENDED.includes(agent.state);
   const canReply = question !== undefined && modes.includes("reply");
 
-  const [mode, setMode] = useState<Mode>(() => (canReply ? "reply" : modes[0] ?? "steer"));
-  const [text, setText] = useState("");
+  const [draft] = useState(() => readAgentDraft(draftKey));
+  const [mode, setMode] = useState<Mode>(() => startMode(draft?.mode, modes, canReply));
+  const [text, setText] = useState(draft?.text ?? "");
   /** Interrupt's first press only arms the button: the run ends on the second */
   const [armed, setArmed] = useState(false);
   const [sending, setSending] = useState(false);
@@ -94,9 +105,16 @@ export function AgentPanel({ agent, capabilities, onCommand, onClose, onExpand, 
   newest.current = live;
   const swap = useRef<ReturnType<typeof setTimeout> | null>(null);
   const box = useRef<HTMLDivElement>(null);
+  const field = useRef<HTMLTextAreaElement>(null);
   /** the reader scrolled up: new lines no longer move the box */
   const following = useRef(true);
 
+  // nothing typed is lost when the panel is moved to another parent (the expand glyph, a window
+  // crossing 980px): the draft and the mode it was for wait in the store for the next mount
+  useEffect(() => { writeAgentDraft(draftKey, { mode, text }); }, [draftKey, mode, text]);
+  useEffect(() => {
+    if (focusField === true || question !== undefined) field.current?.focus();
+  }, []);
   useEffect(() => {
     if (swap.current !== null) return;
     swap.current = setTimeout(() => {
@@ -106,16 +124,17 @@ export function AgentPanel({ agent, capabilities, onCommand, onClose, onExpand, 
   }, [live]);
   useEffect(() => () => { if (swap.current !== null) clearTimeout(swap.current); }, []);
 
-  // a question that arrives while the panel is open takes the mode, as opening it fresh would; a
-  // different agent starts from its own feed rather than showing the last one's lines for a second
-  const startedWith = useRef(agent.label);
+  // a question that arrives while the panel is open takes the mode, as opening it fresh would, and a
+  // different agent starts from its own feed; a restored draft keeps its mode, so mounting alone
+  // changes nothing (StrictMode runs this twice, and the second run must find the same values)
+  const seen = useRef({ label: agent.label, canReply, caps });
   useEffect(() => {
+    const before = seen.current;
+    seen.current = { label: agent.label, canReply, caps };
+    if (before.label === agent.label && before.canReply === canReply && before.caps === caps) return;
+    if (before.label !== agent.label) setFeed(newest.current);
     setMode(canReply ? "reply" : modes[0] ?? "steer");
     setArmed(false);
-    if (startedWith.current !== agent.label) {
-      startedWith.current = agent.label;
-      setFeed(newest.current);
-    }
   }, [agent.label, canReply, caps]);
 
   // the box follows new lines until the reader scrolls up
@@ -154,8 +173,19 @@ export function AgentPanel({ agent, capabilities, onCommand, onClose, onExpand, 
     onClose();
   };
 
-  /** a command the owner reports the failure of (DS §3.3): the panel itself has nothing to add */
-  const run = (command: string): void => { void Promise.resolve(onCommand(command)).catch(() => {}); };
+  // the extension takes text with every action but close: Continue sends the follow-up with it
+  const resume = async (): Promise<void> => {
+    if (sending || text.trim() === "") return;
+    setSending(true);
+    try {
+      await onCommand(`/hm continue ${agent.label} ${text}`);
+      setText("");
+    } catch {
+      // the owner's status line says why (DS §3.3); the draft stays, so nothing typed is lost
+    } finally {
+      setSending(false);
+    }
+  };
 
   const elapsed = herdsmanElapsedMs(agent, Date.now());
   const owner = [
@@ -223,7 +253,14 @@ export function AgentPanel({ agent, capabilities, onCommand, onClose, onExpand, 
         ? <div className="agent-panel-message agent-panel-ended">
           <p className="agent-panel-ended-note">{t("This agent has finished.")}</p>
           {agent.answer !== undefined && agent.answer.length > 0 && <div className="agent-panel-answer"><Markdown>{agent.answer}</Markdown></div>}
-          {agent.resumable === true && capabilities.includes("continue") && <button type="button" className="btn agent-panel-continue" onClick={() => run(`/hm continue ${agent.label}`)}>{t("Continue")}</button>}
+          {agent.resumable === true && capabilities.includes("continue") && <>
+            <textarea ref={field} className="input agent-panel-field" rows={2} aria-label={t("Continue with")} value={text}
+              onChange={(event) => setText(event.target.value)} />
+            <div className="agent-panel-send">
+              <span className="agent-panel-hint" />
+              <button type="button" className="btn btn-primary" disabled={text.trim() === "" || sending} onClick={() => void resume()}>{t("Continue")}</button>
+            </div>
+          </>}
         </div>
         : modes.length > 0 && <div className="agent-panel-message">
           <div className="agent-panel-message-head">
@@ -242,7 +279,7 @@ export function AgentPanel({ agent, capabilities, onCommand, onClose, onExpand, 
             {question.files.length > 0 && <p className="agent-panel-files">{question.files.map((file) => <code key={file} className="agent-panel-file">{file}</code>)}</p>}
           </div>}
 
-          <textarea className="input agent-panel-field" rows={2} aria-label={t("Message agent")} value={text}
+          <textarea ref={field} className="input agent-panel-field" rows={2} aria-label={t("Message agent")} value={text}
             onChange={(event) => { setText(event.target.value); setArmed(false); }} />
 
           <div className="agent-panel-send">

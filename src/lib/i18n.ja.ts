@@ -601,6 +601,7 @@ export const JA: Record<string, string> = {
   "Cancel install": "インストールをキャンセル",
   "Cancel connection": "接続をキャンセル",
   "Continue in background": "バックグラウンドで続行",
+  "Continue with": "続ける内容",
   "Reject": "拒否",
   "Trust fingerprint": "フィンガープリントを信頼",
   "Install and connect": "インストールして接続",

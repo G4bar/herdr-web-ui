@@ -282,10 +282,6 @@
   font-size: var(--fs-xs);
 }
 
-.agent-panel-continue {
-  align-self: flex-start;
-}
-
 /* Close agent is a text button at the foot, never the strongest control on the panel */
 .agent-panel-foot {
   flex: none;

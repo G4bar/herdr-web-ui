@@ -2,7 +2,8 @@
  * The Herdsman roster's pure part: what the composer chip counts, which rows the popover draws
  * (sections, tree depth, folds) and which state changes are worth announcing
  * (design/pi-native-chat/DESIGN.md §4.8). It reads only the snapshot the server parsed, so the
- * client never sees the raw status string.
+ * client never sees the raw status string. The agent panel's draft lives here too, out of the
+ * component: the panel remounts whenever it moves to another parent.
  */
 import type { ConversationPart, ConversationTurn, HerdsmanAgent, HerdsmanAgentState, PiNativeHerdsman } from "../../shared/protocol.ts";
 
@@ -181,6 +182,23 @@ export interface HerdsmanTurnAgents {
   finished: HerdsmanAgent[];
   asking: HerdsmanAgent[];
 }
+
+/** The ways the agent panel messages an agent. */
+export type AgentDraftMode = "steer" | "interrupt" | "reply";
+
+/** A message being typed in the panel, and the mode it is meant for. */
+export interface AgentDraft {
+  mode: AgentDraftMode;
+  text: string;
+}
+
+/** Unsent panel messages, by `paneId:label`: the expand glyph and a window crossing 980px move the
+ *  panel to another parent, and what was typed there must not go with the old one. */
+const AGENT_DRAFTS = new Map<string, AgentDraft>();
+
+export const readAgentDraft = (key: string): AgentDraft | undefined => AGENT_DRAFTS.get(key);
+export const writeAgentDraft = (key: string, draft: AgentDraft): void => { AGENT_DRAFTS.set(key, draft); };
+export const clearAgentDraft = (key: string): void => { AGENT_DRAFTS.delete(key); };
 
 /** The calls that start an agent, and so the turn an agent reads back in. */
 const DELEGATING_CALLS: readonly string[] = ["delegate_agent", "continue_agent"];

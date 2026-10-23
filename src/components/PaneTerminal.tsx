@@ -154,8 +154,8 @@ export interface PaneTerminalProps {
   onOpenNewSession?: () => void;
   /** opens Settings (App's dialog): the composer's `/hotkeys` */
   onOpenSettings?: () => void;
-  /** opens one of the pane's Herdsman agents beside it (App's AgentPanel): the composer's roster */
-  onOpenAgent?: (label: string) => void;
+  /** opens one of the pane's Herdsman agents beside it (App's AgentPanel): the composer's roster and the transcript's Reply, which asks for the reply field */
+  onOpenAgent?: (label: string, replyField?: boolean) => void;
   findRequest?: number;
   controls?: { current: PaneControls | null };
   /** Only the selected tile may take keyboard focus after async work or a lens change. */

@@ -217,8 +217,8 @@ export interface ChatViewProps {
   onForkBack?: () => void;
   /** the queued messages a native Stop just took back into the message box: its quiet line ends the transcript (DS §4.4) */
   stoppedQueue?: number | null;
-  /** opens one of the pane's Herdsman agents beside it (App's AgentPanel): a finished agent's row and a child's question lead there */
-  onOpenAgent?: (label: string) => void;
+  /** opens one of the pane's Herdsman agents beside it (App's AgentPanel): a child's question leads to its reply field, so it asks for it */
+  onOpenAgent?: (label: string, replyField?: boolean) => void;
 }
 
 
@@ -939,7 +939,7 @@ function AgentResultRow({ agent }: { agent: HerdsmanAgent }) {
  * A child agent waiting on an answer: its question as the transcript's own row, and the way into the
  * panel's reply field (DS §4.8). It never folds, so the question reads without a press.
  */
-function AgentQuestionRow({ agent, onOpenAgent }: { agent: HerdsmanAgent; onOpenAgent?: ((label: string) => void) | undefined }) {
+function AgentQuestionRow({ agent, onOpenAgent }: { agent: HerdsmanAgent; onOpenAgent?: ((label: string, replyField?: boolean) => void) | undefined }) {
   const t = useT();
   const question = agent.question;
   if (question === undefined) return null;
@@ -952,7 +952,7 @@ function AgentQuestionRow({ agent, onOpenAgent }: { agent: HerdsmanAgent; onOpen
           <span className="chat-task-result-title chat-agent-question-text">{asks}</span>
           {question.files.length > 0 && <span className="chat-task-result-meta">{question.files.map((file) => <code key={file} className="chat-agent-question-file">{file}</code>)}</span>}
         </span>
-        {onOpenAgent !== undefined && <button type="button" className="btn btn-ghost chat-agent-reply" onClick={() => onOpenAgent(agent.label)}>{t("Reply")}</button>}
+        {onOpenAgent !== undefined && <button type="button" className="btn btn-ghost chat-agent-reply" onClick={() => onOpenAgent(agent.label, true)}>{t("Reply")}</button>}
       </div>
     </div>
   </div>;
@@ -962,7 +962,7 @@ function AgentQuestionRow({ agent, onOpenAgent }: { agent: HerdsmanAgent; onOpen
  * What the Herdsman agents a turn started read back as at its end (DS §4.8 "In the transcript"): one
  * card of the ones that finished, and a row for each one waiting on an answer.
  */
-export function HerdsmanTurnCards({ entry, onOpenAgent }: { entry: HerdsmanTurnAgents; onOpenAgent?: (label: string) => void }) {
+export function HerdsmanTurnCards({ entry, onOpenAgent }: { entry: HerdsmanTurnAgents; onOpenAgent?: (label: string, replyField?: boolean) => void }) {
   const t = useT();
   if (entry.finished.length === 0 && entry.asking.length === 0) return null;
   const heading = entry.finished.length === 1 ? t("1 agent finished") : t("{n} agents finished", { n: entry.finished.length });

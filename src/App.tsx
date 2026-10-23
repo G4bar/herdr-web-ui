@@ -64,6 +64,7 @@ import { PaneLenses } from "./lib/paneLens.ts";
 import { handBackPi, piNativeLanes, reconnectPi, refusal, takeOverPi, usePiNativeLane } from "./lib/piNative.ts";
 import { draftAfterFork, piMoveCancelled } from "./lib/piFork.ts";
 import { paneContextPress } from "./lib/paneCanvas.ts";
+import { clearAgentDraft } from "./lib/herdsman.ts";
 import type { AppActions, PaneView, PaneControls } from "./lib/actions.ts";
 import {
   notificationState,
@@ -510,20 +511,23 @@ export function App() {
   useFocusReturn(viewing !== null && fileDocked);
   // the Herdsman agent panel beside the pane (DS §4.8), in the file panel's slot: one docked panel at a
   // time, so opening an agent closes a docked file and the effect below closes the agent for one
-  const [agentPanel, setAgentPanel] = useState<{ machineId: string; paneId: string; label: string } | null>(null);
+  const [agentPanel, setAgentPanel] = useState<{ machineId: string; paneId: string; label: string; replyField: boolean } | null>(null);
   // the sheet the panel takes below 980px, or when the docked one's expand glyph asks for it
   const [agentSheet, setAgentSheet] = useState(false);
-  const openAgentPanel = useCallback((machineId: string, paneId: string, label: string) => {
+  // `replyField` is the transcript's Reply: the panel opens at the field it leads to (DS §4.8)
+  const openAgentPanel = useCallback((machineId: string, paneId: string, label: string, replyField = false) => {
     if (viewing !== null && fileDocked) closeFile();
-    setAgentPanel({ machineId, paneId, label });
+    setAgentPanel({ machineId, paneId, label, replyField });
     setAgentSheet(!filePanelAvailable);
   }, [viewing, fileDocked, closeFile, filePanelAvailable]);
   // the roster's chip opened it, so the focus goes back there once the panel is gone (DS §6.2)
   const closeAgentPanel = useCallback(() => {
+    // what was typed and never sent is done with: the next open starts clean
+    if (agentPanel !== null) clearAgentDraft(`${agentPanel.paneId}:${agentPanel.label}`);
     setAgentPanel(null);
     setAgentSheet(false);
     requestAnimationFrame(() => document.querySelector<HTMLElement>(".hm-chip")?.focus());
-  }, []);
+  }, [agentPanel]);
   useEffect(() => {
     if (viewing !== null && fileDocked) setAgentPanel(null);
   }, [viewing, fileDocked]);
@@ -2031,7 +2035,7 @@ export function App() {
                         // the composer's `/hotkeys`: Settings on its Shortcuts page (DS §4.12)
                         onOpenSettings={actions.openSettings}
                         // the roster's rows and its Open panel: the agent's own column beside this pane
-                        onOpenAgent={item ? (label: string) => openAgentPanel(machineId, item.pane_id, label) : undefined}
+                        onOpenAgent={item ? (label: string, replyField?: boolean) => openAgentPanel(machineId, item.pane_id, label, replyField) : undefined}
                         // the other half never takes the keyboard: a press in it makes it active first
                         active={active && itemActive}
                         // the paging shortcuts reach the selected pane of the active half only
@@ -2064,6 +2068,7 @@ export function App() {
             stand together: a docked file closes it above, and opening it closes a docked file */}
         {filePanelAvailable && !agentSheet && !(viewing !== null && fileDocked) && agentPanel !== null && panelAgent !== null &&
           <AgentPanel key={`${agentPanel.paneId}:${agentPanel.label}`} agent={panelAgent} capabilities={panelHerdsman?.capabilities ?? []}
+            draftKey={`${agentPanel.paneId}:${agentPanel.label}`} focusField={agentPanel.replyField}
             panelStart={<FilePanelResizer width={filePanelWidth} onResize={setFilePanelWidth} />}
             onCommand={(command) => sendPiRpc(agentPanel.paneId, { type: "prompt", message: command }, agentPanel.machineId)}
             onExpand={() => setAgentSheet(true)} onClose={closeAgentPanel} />}
@@ -2079,6 +2084,7 @@ export function App() {
           <div className="modal-scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) closeAgentPanel(); }}>
             <div ref={agentSheetSurface} className="modal agent-sheet" role="dialog" aria-modal="true" aria-label={panelAgent.label} tabIndex={-1}>
               <AgentPanel key={`${agentPanel.paneId}:${agentPanel.label}`} agent={panelAgent} capabilities={panelHerdsman?.capabilities ?? []}
+                draftKey={`${agentPanel.paneId}:${agentPanel.label}`} focusField={agentPanel.replyField}
                 onCommand={(command) => sendPiRpc(agentPanel.paneId, { type: "prompt", message: command }, agentPanel.machineId)}
                 back={agentNarrow ? { label: t("Back"), run: closeAgentPanel } : undefined} onClose={closeAgentPanel} />
             </div>

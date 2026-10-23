@@ -599,6 +599,7 @@ export const KO: Record<string, string> = {
   "Cancel install": "설치 취소",
   "Cancel connection": "연결 취소",
   "Continue in background": "뒤에서 계속",
+  "Continue with": "이어갈 내용",
   "Reject": "거부",
   "Trust fingerprint": "지문 신뢰",
   "Install and connect": "설치하고 연결",
