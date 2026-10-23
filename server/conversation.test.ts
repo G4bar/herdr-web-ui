@@ -1118,10 +1118,10 @@ describe("parseOmpTranscript", () => {
       ] } }),
       JSON.stringify({ type: "message", message: { role: "toolResult", toolCallId: "code", toolName: "codemode", content: [
         { type: "text", text: "Script completed\nWall time 0.4 seconds\nOutput:\nsrc/a.ts" },
-      ], nestedCalls: [
-        { id: "code/0", name: "read", status: "ok", arguments: { path: "src/a.ts" }, durationMs: 12 },
-        { id: "code/1", name: "bash", status: "error", arguments: { command: "bun test" }, error: "1 fail" },
-      ] } }),
+      ], nestedCalls: { calls: [
+        { id: "code/1", name: "read", status: "ok", arguments: { path: "src/a.ts" }, durationMs: 12 },
+        { id: "code/2", name: "bash", status: "error", arguments: { command: "bun test" }, durationMs: 900, error: "1 fail" },
+      ], complete: true } } }),
     ].join("\n");
     expect(parseOmpTranscript(script)[0]?.parts[0]).toMatchObject({ kind: "tool", name: "codemode", nested_calls: [
       { name: "read", summary: "src/a.ts" },

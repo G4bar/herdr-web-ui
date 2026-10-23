@@ -25,6 +25,16 @@ test("reports true stored output size when a tool result was cut before reaching
   expect(tool.output_size).toBe(50_000);
 });
 
+test("finds pi's whole-output line without stalling on a long output", () => {
+  // the tail alone is searched: an unterminated `[` used to backtrack over the whole text
+  for (const body of ["\n".repeat(1_000_000), "[Showing lines ".repeat(100_000)]) {
+    const tool: Extract<ConversationPart, { kind: "tool" }> = { kind: "tool", name: "bash", summary: "", input: "{}", output: "" };
+    const started = performance.now();
+    trimOutput(tool, body, "ref");
+    expect(performance.now() - started).toBeLessThan(50);
+  }
+});
+
 test("keeps the line naming pi's whole-output file past the page's own cut", () => {
   const tool: Extract<ConversationPart, { kind: "tool" }> = { kind: "tool", name: "bash", summary: "", input: "{}", output: "" };
   const body = `${"x".repeat(TOOL_OUTPUT_CHARS)}\n\n[Showing lines 450-715 of 715 (50.0KB limit). Full output: /tmp/pi-bash-2a93cf9321281ff6.log]\n\nCommand exited with code 1`;

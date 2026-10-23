@@ -95,13 +95,15 @@ export const NESTED_CALLS_MAX = 20;
 type NestedCall = NonNullable<Extract<ConversationPart, { kind: "tool" }>["nested_calls"]>[number];
 
 /**
- * The calls a tool made while it ran, as pi records them: `nestedCalls` is one record per call
- * with its arguments, its status and, when it failed, the error it raised.
+ * The calls a tool made while it ran, as pi records them: `nestedCalls` is `{ calls, complete }`,
+ * one record per call with its arguments, its status and, when it failed, the error it raised.
  */
 export function piNestedCalls(block: Row): NestedCall[] {
-  if (!Array.isArray(block.nestedCalls)) return [];
+  const recorded = block.nestedCalls;
+  const all = Array.isArray(recorded) ? recorded : record(recorded).calls;
+  if (!Array.isArray(all)) return [];
   const calls: NestedCall[] = [];
-  for (const value of block.nestedCalls.slice(0, NESTED_CALLS_MAX)) {
+  for (const value of all.slice(0, NESTED_CALLS_MAX)) {
     const call = record(value);
     if (typeof call.name !== "string") continue;
     const args = record(call.arguments);
