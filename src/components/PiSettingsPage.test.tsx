@@ -12,6 +12,9 @@ const writes: Record<string, unknown>[] = [];
 let file = { path: "/home/dev/.pi/agent/settings.json", settings: {} as Record<string, string | readonly string[]> };
 let nativeState: PiNativeState | null = null;
 let sessionValues: Record<string, unknown> = { steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", autoCompactionEnabled: true };
+let available: Record<string, unknown>[] = [];
+/** the command whose answer a test holds back, so two writes can be in flight at once */
+let held: { type: string; release: () => void } | null = null;
 let refuse: string | null = null;
 let saved = mock((changes: Record<string, string | readonly string[]>) => Promise.resolve({ path: file.path, settings: { ...file.settings, ...changes } }));
 
@@ -26,9 +29,11 @@ mock.module("../lib/api.ts", () => ({
   fetchPiNativeState: async () => nativeState,
   sendPiRpc: async (_paneId: string, command: { type: string }) => {
     rpc.push(command);
+    const hold = held;
+    if (hold !== null && hold.type === command.type) await new Promise<void>((resolve) => { hold.release = resolve; });
     if (refuse !== null && refuse === command.type) throw new ApiError("/api/pi/rpc", 502, "Pi refused it", "command_failed");
     if (command["type"] === "get_state") return sessionValues;
-    if (command["type"] === "get_available_models") return { models: [{ provider: "anthropic", id: "claude-x", name: "Claude X", reasoning: true, input: ["image"] }] };
+    if (command["type"] === "get_available_models") return { models: available };
     return {};
   },
 }));
@@ -78,6 +83,8 @@ beforeEach(() => {
   refuse = null;
   file = { path: "/home/dev/.pi/agent/settings.json", settings: { defaultProvider: "anthropic", defaultModel: "claude-x", defaultThinkingLevel: "high", enabledModels: ["claude-x"], steerOnSubmit: "queue" } };
   sessionValues = { steeringMode: "one-at-a-time", followUpMode: "one-at-a-time", autoCompactionEnabled: true };
+  available = [{ provider: "anthropic", id: "claude-x", name: "Claude X", reasoning: true, input: ["image"] }];
+  held = null;
   nativeState = { mode: "native" } as PiNativeState;
   saved = mock((changes: Record<string, string | readonly string[]>) => Promise.resolve({ path: file.path, settings: { ...file.settings, ...changes } }));
 });
@@ -126,6 +133,16 @@ describe("PiSettingsPage", () => {
     expect(writes).toEqual([{ defaultProvider: "openai", defaultModel: "gpt-5" }]);
   });
 
+  it("keeps an id's own colon when it writes the default model", async () => {
+    available = [{ provider: "bedrock", id: "us.anthropic.claude-v1:0", name: "Claude v1", reasoning: false, input: [] }];
+    const renderer = await mount();
+    const option = renderer.root.findAllByType("option").find((node) => node.props.value === "bedrock:us.anthropic.claude-v1:0")!;
+    await act(async () => {
+      renderer.root.findByProps({ id: "pi-default-model" }).props.onChange({ target: { value: option.props.value } });
+    });
+    expect(writes).toEqual([{ defaultProvider: "bedrock", defaultModel: "us.anthropic.claude-v1:0" }]);
+  });
+
   it("sends the session rows as Pi's own commands", async () => {
     const renderer = await mount();
     await act(async () => {
@@ -151,6 +168,22 @@ describe("PiSettingsPage", () => {
     expect(group(renderer, "Follow-up delivery").findAllByType("button").some((node) => node.props["aria-pressed"] === true && (node.children as unknown[]).includes("One at a time"))).toBe(true);
   });
 
+  it("keeps both rows when a slower earlier answer lands last", async () => {
+    held = { type: "set_auto_compaction", release: () => {} };
+    const renderer = await mount();
+    await act(async () => {
+      toggle(renderer, "Compact automatically").props.onClick();
+    });
+    await act(async () => {
+      toggle(renderer, "Retry on provider errors").props.onClick();
+    });
+    await act(async () => {
+      held!.release();
+    });
+    expect(toggle(renderer, "Compact automatically").props["aria-checked"]).toBe(false);
+    expect(toggle(renderer, "Retry on provider errors").props["aria-checked"]).toBe(false);
+  });
+
   it("leaves a refused file write where it was and says why", async () => {
     saved = mock(() => Promise.reject(new ApiError("/api/pi/settings", 400, "defaultThinkingLevel's value is not one pi accepts", "invalid_setting")));
     const renderer = await mount();
@@ -169,6 +202,23 @@ describe("PiSettingsPage", () => {
     expect(toggle(renderer, "Compact automatically").props.disabled).toBe(true);
     expect(group(renderer, "Steering delivery").findAllByType("button").every((node) => node.props.disabled === true)).toBe(true);
     expect(words(renderer)).toContain("Change it in the terminal");
+  });
+
+  it("waits for a Pi that is gone instead of calling the pane a terminal", async () => {
+    nativeState = { mode: "lost" } as PiNativeState;
+    const renderer = await mount();
+    expect(rpc).toEqual([]);
+    expect(toggle(renderer, "Compact automatically").props.disabled).toBe(true);
+    expect(words(renderer)).not.toContain("Change it in the terminal");
+    expect(words(renderer)).toContain("Lost the connection to Pi.");
+  });
+
+  it("says why the session rows wait when get_state fails", async () => {
+    refuse = "get_state";
+    const renderer = await mount();
+    expect(toggle(renderer, "Compact automatically").props.disabled).toBe(true);
+    expect(words(renderer)).not.toContain("Change it in the terminal");
+    expect(renderer.root.findAllByProps({ role: "alert" }).map((node) => node.children.filter((child): child is string => typeof child === "string").join(""))).toEqual(["Pi refused it"]);
   });
 
   it("opens the shortcut list and the scoped models dialog from their rows", async () => {

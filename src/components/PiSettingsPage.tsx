@@ -51,7 +51,12 @@ function sessionSettings(state: unknown): PiSessionSettings | null {
 /** The server's or Pi's own sentence for a refused write, without the URL and status around it. */
 const reason = (error: unknown): string => error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error);
 
+/** An option's key, and back: an id keeps its own colons (`…-v1:0`, `…:free`), so split at the first one. */
 const modelKey = (provider: string, id: string): string => `${provider}:${id}`;
+const modelParts = (key: string): { provider: string; id: string } => {
+  const at = key.indexOf(":");
+  return at === -1 ? { provider: key, id: "" } : { provider: key.slice(0, at), id: key.slice(at + 1) };
+};
 
 export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = null }: PiSettingsPageProps) {
   const t = useT();
@@ -63,6 +68,9 @@ export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = nul
   /** the terminal owns the pane's Pi: no RPC, so its rows only say where they are changed */
   const [terminal, setTerminal] = useState(false);
   const [failure, setFailure] = useState<{ row: string; message: string } | null>(null);
+  /** why the session rows are disabled while the terminal does not own the pane: Pi is still connecting,
+   * it has gone, or it answered with an error */
+  const [sessionNotice, setSessionNotice] = useState<{ mode: "connecting" | "lost" } | { error: string } | null>(null);
   // a select is the DOM's once opened: a write that changed nothing re-mounts it on the value that stands
   const [attempt, setAttempt] = useState(0);
   const machineId = pane?.machineId ?? "local";
@@ -76,21 +84,25 @@ export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = nul
     setReadFailure(null);
     setFailure(null);
     setTerminal(false);
+    setSessionNotice(null);
     void fetchPiSettings(machineId).then(
       (next) => { if (live) setFile(next); },
       (error: unknown) => { if (live) setReadFailure(reason(error)); },
     );
     void fetchPiNativeState(pane.paneId, machineId).then(async (state) => {
       if (!live) return;
-      if (state === null || state.mode !== "native") { setTerminal(true); return; }
+      // only a pane whose Pi the terminal owns has no RPC; a pane still connecting or gone is waited for
+      if (state === null) { setTerminal(true); return; }
+      if (state.mode !== "native") { setSessionNotice({ mode: state.mode === "lost" ? "lost" : "connecting" }); return; }
       const [values, listed] = await Promise.allSettled([
         sendPiRpc(pane.paneId, { type: "get_state" }, machineId),
         sendPiRpc(pane.paneId, { type: "get_available_models" }, machineId),
       ]);
       if (!live) return;
       if (values.status === "fulfilled") setSession(sessionSettings(values.value));
+      else setSessionNotice({ error: reason(values.reason) });
       if (listed.status === "fulfilled") setModels(piModels(listed.value));
-    }, () => { if (live) setTerminal(true); });
+    }, (error: unknown) => { if (live) setSessionNotice({ error: reason(error) }); });
     return () => { live = false; };
   }, [machineId, pane]);
 
@@ -109,12 +121,14 @@ export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = nul
     }
   };
 
-  /** One session command: the page takes the values only once Pi answered, so a refusal changes nothing. */
-  const writeSession = async (row: string, next: PiSessionSettings, command: { type: string } & Record<string, unknown>): Promise<void> => {
+  /** One session command: the page takes the values only once Pi answered, so a refusal changes nothing.
+   * The row it changes is merged into whatever the page holds by then: a slower earlier answer must not
+   * put back the row a later one already moved. */
+  const writeSession = async (row: string, change: (current: PiSessionSettings) => PiSessionSettings, command: { type: string } & Record<string, unknown>): Promise<void> => {
     if (pane === null) return;
     try {
       await sendPiRpc(pane.paneId, command, machineId);
-      setSession(next);
+      setSession((current) => current && change(current));
       setFailure(null);
     } catch (error) {
       refused(row, error);
@@ -149,12 +163,15 @@ export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = nul
   return <>
     <p className="settings-hint">{t("Applies to: {pane}", { pane: pane.name })}</p>
     {readFailure !== null && <p className="settings-hint settings-error" role="alert">{readFailure}</p>}
+    {sessionNotice !== null && ("mode" in sessionNotice
+      ? <p className="settings-hint" role="status">{sessionNotice.mode === "lost" ? t("Lost the connection to Pi.") : t("Connecting to Pi…")}</p>
+      : <p className="settings-hint settings-error" role="alert">{sessionNotice.error}</p>)}
 
     <SettingsGroup title={t("Model")} note={t("A new Pi session starts with these. A running Pi reads them again with /reload.")}>
       <SettingsRow label={t("Default model")} htmlFor="pi-default-model" description={described(t("Default model"), selectedModelText(modelOptions, savedProvider, savedModel))}>
         <select key={`model-${attempt}`} id="pi-default-model" className="select settings-select" value={modelKey(savedProvider, savedModel)} onChange={(event) => {
-          const [provider = "", id = ""] = event.target.value.split(":");
-          void writeFile(t("Default model"), { defaultProvider: provider, defaultModel: id });
+          const picked = modelParts(event.target.value);
+          void writeFile(t("Default model"), { defaultProvider: picked.provider, defaultModel: picked.id });
         }}>
           {savedModel === "" && <option value=":" disabled>{t("Automatic")}</option>}
           {providers.map((provider) => <optgroup key={provider} label={provider === "" ? t("Other") : provider}>
@@ -175,12 +192,12 @@ export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = nul
     <SettingsGroup title={t("Messages")} note={terminal ? readOnlyHint : undefined}>
       <SettingsRow label={t("Steering delivery")} wide description={described(t("Steering delivery"), t("A message sent while Pi works."))}>
         {hinted(<Segmented label={t("Steering delivery")} value={session?.steeringMode ?? "one-at-a-time"} disabled={terminal || session === null} options={deliveryOptions} onChange={(mode) => {
-          if (session !== null) void writeSession(t("Steering delivery"), { ...session, steeringMode: mode }, { type: "set_steering_mode", mode });
+          void writeSession(t("Steering delivery"), (current) => ({ ...current, steeringMode: mode }), { type: "set_steering_mode", mode });
         }} />)}
       </SettingsRow>
       <SettingsRow label={t("Follow-up delivery")} wide description={described(t("Follow-up delivery"), t("A message sent to run after the turn."))}>
         {hinted(<Segmented label={t("Follow-up delivery")} value={session?.followUpMode ?? "one-at-a-time"} disabled={terminal || session === null} options={deliveryOptions} onChange={(mode) => {
-          if (session !== null) void writeSession(t("Follow-up delivery"), { ...session, followUpMode: mode }, { type: "set_follow_up_mode", mode });
+          void writeSession(t("Follow-up delivery"), (current) => ({ ...current, followUpMode: mode }), { type: "set_follow_up_mode", mode });
         }} />)}
       </SettingsRow>
     </SettingsGroup>
@@ -188,12 +205,12 @@ export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = nul
     <SettingsGroup title={t("Context")} note={terminal ? readOnlyHint : undefined}>
       <SettingsRow label={t("Compact automatically")} description={described(t("Compact automatically"), t("Compacts when the window is nearly full."))}>
         {hinted(<Toggle label={t("Compact automatically")} checked={session?.autoCompaction === true} disabled={terminal || session === null} onChange={(enabled) => {
-          if (session !== null) void writeSession(t("Compact automatically"), { ...session, autoCompaction: enabled }, { type: "set_auto_compaction", enabled });
+          void writeSession(t("Compact automatically"), (current) => ({ ...current, autoCompaction: enabled }), { type: "set_auto_compaction", enabled });
         }} />)}
       </SettingsRow>
       <SettingsRow label={t("Retry on provider errors")} description={described(t("Retry on provider errors"), t("Waits and tries the turn again when a provider fails."))}>
         {hinted(<Toggle label={t("Retry on provider errors")} checked={session?.autoRetry === true} disabled={terminal || session === null} onChange={(enabled) => {
-          if (session !== null) void writeSession(t("Retry on provider errors"), { ...session, autoRetry: enabled }, { type: "set_auto_retry", enabled });
+          void writeSession(t("Retry on provider errors"), (current) => ({ ...current, autoRetry: enabled }), { type: "set_auto_retry", enabled });
         }} />)}
       </SettingsRow>
     </SettingsGroup>
