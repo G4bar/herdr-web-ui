@@ -1522,4 +1522,23 @@ export const KO: Record<string, string> = {
   "Restore to message box": "입력란으로 복원",
   "Couldn't take Pi's queue. Try again.": "Pi의 대기열을 가져오지 못했습니다. 다시 시도하세요.",
   "That row already left Pi's queue. The rest went back.": "그 행은 이미 Pi 대기열에서 빠졌습니다. 나머지는 다시 넣었습니다.",
+  // a native Pi pane's stats popover (DS §4.5)
+  "Context": "컨텍스트",
+  "Context: {percent}% used": "컨텍스트: {percent}% 사용",
+  "Tokens": "토큰",
+  "Cache": "캐시",
+  "Cost": "비용",
+  "↑ {input} in · ↓ {output} out": "↑ {input} 입력 · ↓ {output} 출력",
+  "{read} read · {written} written": "{read} 읽기 · {written} 쓰기",
+  "Context is nearly full": "컨텍스트가 거의 가득 찼습니다",
+  "Couldn't read usage": "사용량을 읽지 못했습니다",
+  "Compact now": "지금 압축",
+  "Add instructions": "지시 추가",
+  "Couldn't compact: {reason}": "압축하지 못했습니다: {reason}",
+
+  // a script's calls, and an MCP call's own body (DS §4.6)
+  "Input": "입력",
+  "Calls ({n})": "호출 ({n})",
+  "+{n} more": "{n}개 더",
+
 };

@@ -1524,4 +1524,23 @@ export const JA: Record<string, string> = {
   "Restore to message box": "入力欄に戻す",
   "Couldn't take Pi's queue. Try again.": "Pi のキューを取得できませんでした。再試行してください。",
   "That row already left Pi's queue. The rest went back.": "その行はすでに Pi のキューから外れています。残りは戻しました。",
+  // a native Pi pane's stats popover (DS §4.5)
+  "Context": "コンテキスト",
+  "Context: {percent}% used": "コンテキスト: {percent}% 使用中",
+  "Tokens": "トークン",
+  "Cache": "キャッシュ",
+  "Cost": "コスト",
+  "↑ {input} in · ↓ {output} out": "↑ {input} 入力 · ↓ {output} 出力",
+  "{read} read · {written} written": "{read} 読み取り · {written} 書き込み",
+  "Context is nearly full": "コンテキストがほぼ満杯です",
+  "Couldn't read usage": "使用状況を読み取れませんでした",
+  "Compact now": "今すぐ圧縮",
+  "Add instructions": "指示を追加",
+  "Couldn't compact: {reason}": "圧縮できませんでした: {reason}",
+
+  // a script's calls, and an MCP call's own body (DS §4.6)
+  "Input": "入力",
+  "Calls ({n})": "呼び出し ({n})",
+  "+{n} more": "他 {n} 件",
+
 };

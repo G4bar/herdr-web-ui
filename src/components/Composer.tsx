@@ -66,6 +66,7 @@ import { PI_ANNOUNCE_MS, piChipChange, piComposerMode } from "../lib/piComposer.
 import { clearPiQueue, queuedTexts } from "../lib/piNative.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
+import { ContextPopover } from "./ContextPopover.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { usePaneCommands } from "../lib/usePaneCommands.ts";
 import { useT } from "../lib/i18n.ts";
@@ -1131,7 +1132,7 @@ export function Composer({
   // Fit only changes to drawn content. Streaming context usage is a fixed-size ring unless
   // its number is open on desktop; transcript/status refreshes need no measurement layout.
   useLayoutEffect(fitStatus, [fitStatus, agent, metadata?.model, metadata?.reasoning_effort,
-    metadata?.context?.window, contextShown && !mobile && metadata?.context ? contextLeftPercent(metadata.context) : null,
+    metadata?.context?.window, piNative, contextShown && !mobile && metadata?.context ? contextLeftPercent(metadata.context) : null,
     contextShown, mobile, usageCaption, usage?.problem, hintText, dictation.shown, backgroundTasks,
     plan?.done, plan?.total, statusCompact, compactNow !== undefined, facesLoaded, t]);
   const menuId = `composer-menu-${paneId}`;
@@ -1541,7 +1542,7 @@ export function Composer({
                   </>}
                 </span>
               </span>}
-              {metadata?.context && <ContextRing context={metadata.context} shown={contextShown} readOnly={mobile} onToggle={() => setContextShown((open) => !open)} onCompact={compactNow} />}
+              {metadata?.context && !piLive && <ContextRing context={metadata.context} shown={contextShown} readOnly={mobile} onToggle={() => setContextShown((open) => !open)} onCompact={compactNow} />}
               {usage !== undefined && usage.problem === null && usageLimit !== undefined && <span
                 className={`composer-usage${usageLimit.used_percent >= HIGH_PERCENT ? " is-high" : ""}${usage.problem ? " has-problem" : ""}`}
                 title={`${usageName(usage)}\n${usageDetail}`}
@@ -1561,6 +1562,9 @@ export function Composer({
         </div>
         <div className="composer-controls composer-controls-right">
           {!piChipsRow && piChips}
+          {/* DS §4.1, §4.5: a native pane's ring, its cost and the stats popover they open, at the end of
+              the right group; the pill beside the state draws no second one for it */}
+          {piLive && piRpc !== undefined && <ContextPopover stats={piNative.stats} statuses={piNative.statuses} piRpc={piRpc} />}
           {!sendShown ? (
             <button
               type="button"

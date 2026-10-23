@@ -1526,4 +1526,23 @@ export const ZH: Record<string, string> = {
   "Restore to message box": "恢复到输入框",
   "Couldn't take Pi's queue. Try again.": "无法读取 Pi 的队列。请重试。",
   "That row already left Pi's queue. The rest went back.": "该行已离开 Pi 的队列。其余行已放回。",
+  // a native Pi pane's stats popover (DS §4.5)
+  "Context": "上下文",
+  "Context: {percent}% used": "上下文：已使用 {percent}%",
+  "Tokens": "令牌",
+  "Cache": "缓存",
+  "Cost": "费用",
+  "↑ {input} in · ↓ {output} out": "↑ 输入 {input} · ↓ 输出 {output}",
+  "{read} read · {written} written": "读取 {read} · 写入 {written}",
+  "Context is nearly full": "上下文即将填满",
+  "Couldn't read usage": "无法读取用量",
+  "Compact now": "立即压缩",
+  "Add instructions": "添加指示",
+  "Couldn't compact: {reason}": "无法压缩：{reason}",
+
+  // a script's calls, and an MCP call's own body (DS §4.6)
+  "Input": "输入",
+  "Calls ({n})": "调用 ({n})",
+  "+{n} more": "还有 {n} 个",
+
 };
