@@ -787,6 +787,13 @@ export interface PiNativeNotice {
   message: string;
 }
 
+/** One extension widget from `setWidget`: its lines, and where over the composer they stand. */
+export interface PiNativeWidget {
+  lines: string[];
+  /** pi's `aboveEditor` unless the extension asks otherwise */
+  placement: "aboveEditor" | "belowEditor";
+}
+
 /** The assistant-turn retry pi is in, from `auto_retry_start` until its `auto_retry_end`. */
 export interface PiNativeRetry {
   attempt: number;
@@ -819,8 +826,8 @@ export interface PiNativeState {
   uiRequest: PiNativeUiRequest | null;
   /** extension status lines by key. `herdsman` is the roster's own and is never drawn as one */
   statuses: Record<string, string>;
-  /** extension widgets by key, each its own lines */
-  widgets: Record<string, string[]>;
+  /** extension widgets by key, each its own lines and its placement over the composer */
+  widgets: Record<string, PiNativeWidget>;
   /** newest last, capped */
   notices: PiNativeNotice[];
   /** `set_editor_text`'s prefill, taken once and then cleared (`consumeEditorText`) */

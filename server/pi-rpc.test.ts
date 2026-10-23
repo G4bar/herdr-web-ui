@@ -281,6 +281,16 @@ describe("reducePiEvent", () => {
     expect(consumeEditorText(fireAndForget).editorText).toBeNull();
   });
 
+  it("keeps a widget's lines where the extension put them", () => {
+    const state = reduced(initialPiNativeState(), [
+      { type: "extension_ui_request", id: "w1", method: "setWidget", widgetKey: "above", widgetLines: ["a", "b"] },
+      { type: "extension_ui_request", id: "w2", method: "setWidget", widgetKey: "below", widgetLines: ["c"], widgetPlacement: "belowEditor" },
+    ]);
+    // pi's own default is over the editor, and a later write of one key leaves the other standing
+    expect(state.widgets).toEqual({ above: { lines: ["a", "b"], placement: "aboveEditor" }, below: { lines: ["c"], placement: "belowEditor" } });
+    expect(reducePiEvent(state, { type: "extension_ui_request", id: "w3", method: "setWidget", widgetKey: "above" }).widgets).toEqual({ below: { lines: ["c"], placement: "belowEditor" } });
+  });
+
   it("caps the notices", () => {
     const state = reduced(initialPiNativeState(), Array.from({ length: NOTICE_LIMIT + 5 }, (_, index) => ({ type: "extension_ui_request", id: `n${index}`, method: "notify", message: `notice ${index}` })));
     expect(state.notices).toHaveLength(NOTICE_LIMIT);

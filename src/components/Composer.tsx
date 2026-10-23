@@ -336,6 +336,8 @@ export function Composer({
   const caretRef = useRef(caret);
   /** the restored text the box was filled with: only that fill is ever cleared, never the user's own typing */
   const filledFrom = useRef<string | null>(null);
+  /** the `set_editor_text` already in the box: the same one pushed again fills nothing (DS §4.7) */
+  const editorTextDrawn = useRef<string | null>(null);
   const commands = usePaneCommands(paneId, agent);
   const [files, setFiles] = useState<string[]>([]);
   /** the file list could not be read: said in the menu, never drawn as "no matches" */
@@ -400,6 +402,10 @@ export function Composer({
   const streaming = piNative?.mode === "native" && piNative.isStreaming;
   // DS §4.12: the chat runs Pi's own commands itself; a Pi the terminal owns has none of those surfaces
   const piSurfaces = piNative?.mode === "native" && piRpc !== undefined;
+  // DS §4.7: the lines an extension set over the card, or under it where it asked for that. The card
+  // gives each widget six of them, so a script that writes more cannot push the input off screen. A lost
+  // Pi's widgets stay behind with nothing left to keep them true, so they are not drawn.
+  const piWidgets = (piNative?.mode === "native" ? Object.entries(piNative.widgets) : []).map(([key, widget]) => ({ key, placement: widget.placement, text: widget.lines.slice(0, 6).join("\n") }));
   // `/session` asks the stats popover to open, as the model picker's own request does (DS §4.12)
   const [statsRequest, setStatsRequest] = useState(0);
   // `/new` while Pi works is the one command that stops something: it asks first (DS §4.12)
@@ -787,6 +793,18 @@ export function Composer({
     queuedDrawn.current = queuedBack.id;
     putBack(queuedBack.texts);
   }, [queuedBack, putBack]);
+
+  // DS §4.7 set_editor_text: an extension fills the box and it takes the keyboard. The value applied is
+  // remembered, so a pushed state that still carries it never fills it a second time; a draft the user
+  // holds is never replaced, the extension's text goes on a line under it.
+  useEffect(() => {
+    const prefill = piNative?.editorText ?? null;
+    if (prefill === null || prefill === "" || prefill === editorTextDrawn.current) return;
+    editorTextDrawn.current = prefill;
+    const current = textRef.current.replace(/\s+$/u, "");
+    const next = current === "" ? prefill : `${current}\n${prefill}`;
+    setTextAndCaret(next, next.length);
+  }, [piNative, setTextAndCaret]);
 
   // an upload finishes while the user may be typing: its mention goes to the start (insertLeadingMention),
   // and the caret and selection only move along with the text they sit in, without taking focus
@@ -1479,6 +1497,11 @@ export function Composer({
         </div>
       )}
 
+      {/* DS §4.7: what an extension set over the input, its own words and no box of its own */}
+      {piWidgets.filter((widget) => widget.placement === "aboveEditor").map((widget) => (
+        <div key={widget.key} className="composer-widget">{widget.text}</div>
+      ))}
+
       <div
         ref={surfaceRef}
         className={`composer-surface${dragging ? " is-dragging" : ""}`}
@@ -1833,6 +1856,10 @@ export function Composer({
           )}
         </div>
       </div>
+      {/* DS §4.7: the widgets an extension put under the editor stand under the card, the same way */}
+      {piWidgets.filter((widget) => widget.placement === "belowEditor").map((widget) => (
+        <div key={widget.key} className="composer-widget is-below">{widget.text}</div>
+      ))}
       {/* the strip tucked under the card (t3code's composer context strip): the pane's working folder and its
           branch, each drawn only when the caller passes it. It only names them; nothing in it is pressed */}
       {strip !== null && (

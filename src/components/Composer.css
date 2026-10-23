@@ -1140,6 +1140,22 @@
   line-height: var(--lh-base);
 }
 
+/* DS §4.7: what an extension set as a widget over the card (or under it): its own plain lines, dim
+   and quiet, the same inset as a notice and no box to press. The renderer gives each six lines */
+.composer-widget {
+  margin-bottom: var(--space-2);
+  padding-left: var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.composer-widget.is-below {
+  margin: var(--space-2) 0 0;
+}
+
 .composer-note-icon {
   flex: none;
   width: 16px;

@@ -56,6 +56,8 @@ const oneOf = <T extends string>(value: unknown, allowed: readonly T[]): T | nul
 const STEERING_MODES = ["all", "one-at-a-time"] as const;
 const DIALOG_METHODS = ["select", "confirm", "input", "editor"] as const;
 const NOTICE_TYPES = ["info", "warning", "error"] as const;
+/** pi puts a widget over the editor unless the extension asks for below it. */
+const WIDGET_PLACEMENTS = ["aboveEditor", "belowEditor"] as const;
 
 /** The model cut to what the chat shows: pi's registry states the rest. */
 function modelOf(value: unknown): PiNativeModel | null {
@@ -288,7 +290,7 @@ function reduceUiRequest(state: PiNativeState, event: PiRpcRecord): PiNativeStat
       if (key === null) return state;
       const widgets = { ...state.widgets };
       if (lines.length === 0) delete widgets[key];
-      else widgets[key] = lines;
+      else widgets[key] = { lines, placement: oneOf(event["widgetPlacement"], WIDGET_PLACEMENTS) ?? "aboveEditor" };
       return { ...state, widgets };
     }
     case "set_editor_text": return { ...state, editorText: text(event["text"]) };
