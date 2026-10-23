@@ -48,6 +48,7 @@ import { RenderBoundary } from "./RenderBoundary.tsx";
 import { Composer } from "./Composer.tsx";
 import { ComposerNotices, type ComposerNoticeRow } from "./ComposerNotices.tsx";
 import { PendingMessages } from "./PendingMessages.tsx";
+import { TrustCard } from "./PromptCard.tsx";
 import type { AgentStatus, ClientRole, ConversationMetadata, InteractivePrompt, PlanSummary, ServerMessage } from "../../shared/protocol.ts";
 import type { PaneControls, PaneView } from "../lib/actions.ts";
 import { usePaneLane } from "../lib/chatLane.ts";
@@ -3081,13 +3082,8 @@ export function PaneTerminal({
       </>,
     });
     if (clipboardNote) noticeItems.push({ id: `${owner}:clipboard`, priority: "notice", revision: clipboardNote, warning: false, mark: <ClipboardCheck />, text: clipboardNote });
-    // Pi's folder is not trusted yet: the take-over stopped there, and its own sentence and folder say
-    // what the choice is (Phase 13 draws the card; a row here until then)
-    const trust = piNative.trustRequest;
-    if (trust !== null) noticeItems.push({
-      id: `${owner}:pi-trust`, priority: "urgent", revision: trust.folder, warning: true, mark: <TriangleAlert />,
-      text: <>{trust.message} <code title={trust.folder}>{trust.folder}</code></>,
-    });
+    // Pi's folder is not trusted yet: the take-over stopped there, and the trust card in the prompt
+    // dock above the box asks it in its own words (DS 4.7); nothing else is said here
     // a take-over, hand-back or reconnect the pane refused: the server's sentence, and the pane as it was
     if (piNative.failure !== null) noticeItems.push({
       id: `${owner}:pi-refusal`, priority: "urgent", revision: piNative.failure, warning: true, mark: <TriangleAlert />, text: piNative.failure,
@@ -3634,7 +3630,10 @@ export function PaneTerminal({
           open), directly over the input card, on the same column. ChatView renders the card into
           it. It is a live region of its own, since the card is no longer inside the transcript's
           log: a prompt that arrives is announced, as it was there. */}
-      {presented && paneId !== null && chatMounted && <div className="prompt-dock" ref={setPromptDock} aria-live="polite" inert={peek !== null || undefined} />}
+      {presented && paneId !== null && chatMounted && <div className="prompt-dock" ref={setPromptDock} aria-live="polite" inert={peek !== null || undefined}>
+        {/* pi stopped on its folder's settings: it cannot ask by itself, and waits on this answer */}
+        {piNative.trustRequest !== null && <TrustCard key={piNative.trustRequest.folder} trust={piNative.trustRequest} onTrust={piNative.takeOver} />}
+      </div>}
       {/* the composer belongs to the chat lens: in terminal mode the grid itself is
           the input surface (key bar included), so a second box would only duplicate it */}
       {presented && paneId !== null && chatMounted && !secretActive && !observing && !ended && (

@@ -709,6 +709,13 @@ export const JA: Record<string, string> = {
   "Send {answer}?": "{answer} を送信しますか?",
   "Confirm": "確認",
   "Sending your answer…": "回答を送信中…",
+  "Denies itself in {s} s": "{s} 秒後に自動的に拒否します",
+  "Trust this project?": "このプロジェクトを信頼しますか?",
+  "Pi found settings in this folder that can run code.": "Pi がこのフォルダーでコードを実行できる設定を見つけました。",
+  "Trust it only if you know where this folder came from.": "このフォルダーの出所がわかる場合だけ信頼してください。",
+  "Don't trust": "信頼しない",
+  "Trust folder": "フォルダーを信頼",
+  "View": "表示",
 
   // ---- markdown ----
   "Code copied": "コードをコピーしました",

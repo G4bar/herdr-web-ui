@@ -134,7 +134,7 @@ export function clearedQueue(cleared: unknown): string[] {
 export interface PiNativeHandle {
   /** null: this pane is not driven over RPC (Terminal mode): the chat behaves as it always did */
   state: PiNativeState | null;
-  /** the folder Pi waits on, until Phase 13 draws its card: a notice over the message box holds it */
+  /** the folder Pi waits on, until its card's trust question is answered: `TrustCard` asks it in the prompt dock */
   trustRequest: PiTrustRequest | null;
   /** an action the pane refused, in the server's own words; nothing in the pane changed */
   failure: string | null;

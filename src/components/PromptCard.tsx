@@ -1,12 +1,13 @@
-import { useContext, useEffect, useId, useRef, useState } from "react";
+import { Fragment, useContext, useEffect, useId, useRef, useState } from "react";
 import { ArrowLeft, Check, ChevronDown, ChevronUp, FileText, Send } from "lucide-react";
 
 import "./PromptCard.css";
 
-import { ApiError } from "../lib/api.ts";
+import { ApiError, type PiTrustRequest } from "../lib/api.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
 import type { InteractivePrompt, PromptAnswer } from "../../shared/protocol.ts";
 import { focusFollowsAnswer, hasPreviews, pressOrigin, type TypedAnswer } from "../lib/promptAnswer.ts";
+import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { dismissKeyboardOn } from "../lib/keyboard.ts";
 import { useT } from "../lib/i18n.ts";
 import { userErrorMessage, type UserError } from "../lib/userError.ts";
@@ -31,6 +32,9 @@ export interface PromptCardProps {
   stale?: boolean;
 }
 
+/** The whole seconds left to `deadline` (epoch ms), never below zero. */
+const secondsLeft = (deadline: number): number => Math.max(0, Math.ceil((deadline - Date.now()) / 1000));
+
 export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedAnswer = null, onTypedAnswerDone, stale = false }: PromptCardProps) {
   const t = useT();
   const { answerPanePrompt } = useMachineApi();
@@ -43,7 +47,12 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
     }
     return new Set();
   });
-  const [custom, setCustom] = useState(() => prompt.default_custom_text ?? "");
+  // pi's own dialog shapes the card: `confirm` is two buttons, `input`/`editor` answer in the field
+  const variant = prompt.variant ?? null;
+  const confirmation = variant === "confirm";
+  const typedField = variant === "input" || variant === "editor";
+  const editor = variant === "editor";
+  const [custom, setCustom] = useState(() => prompt.prefill ?? prompt.default_custom_text ?? "");
   // the one option a preview card waits on: the radio's pick, else the number typed in the composer
   const [picked, setPicked] = useState<number | null>(null);
   // a multiple choice's preview follows the last row toggled on, not the first one checked
@@ -58,7 +67,37 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
   const previews = hasPreviews(prompt);
   // the typed pick leads: a later click clears it (onTypedAnswerDone), so the card follows either
   const chosen = typedAnswer?.option_index ?? picked ?? null;
-  const previewIndex = prompt.multi_select ? toggled : chosen;
+  // the preview follows the row in focus or under the pointer; a pick leads while neither is
+  const [hovered, setHovered] = useState<number | null>(null);
+  const previewIndex = previews ? hovered ?? (prompt.multi_select ? toggled : chosen) : null;
+  const previewId = useId();
+  // a confirmation pi gives up on by itself (its `timeout`): the card counts to it, and says so only
+  // when it starts and at 10 s; at zero the card leaves the denial to pi, it never answers one
+  const deadline = confirmation ? prompt.deadline ?? null : null;
+  const [left, setLeft] = useState<number | null>(() => (deadline === null ? null : secondsLeft(deadline)));
+  useEffect(() => {
+    if (deadline === null) return;
+    let timer = 0;
+    const tick = (): void => {
+      const seconds = secondsLeft(deadline);
+      setLeft(seconds);
+      if (seconds === 0) window.clearInterval(timer);
+    };
+    tick();
+    timer = window.setInterval(tick, 1000);
+    return () => window.clearInterval(timer);
+  }, [deadline]);
+  const [deniesAt, setDeniesAt] = useState<string | null>(null);
+  useEffect(() => {
+    if (deadline === null) return;
+    setDeniesAt(t("Denies itself in {s} s", { s: secondsLeft(deadline) }));
+    // already under 10 s: the start's own line was the only announcement it gets
+    const untilTen = deadline - 10_000 - Date.now();
+    if (untilTen <= 0) return;
+    const timer = window.setTimeout(() => setDeniesAt(t("Denies itself in {s} s", { s: 10 })), untilTen);
+    return () => window.clearTimeout(timer);
+  }, [deadline, t]);
+  const denialAnnouncement = useAnnouncedText(deadline === null ? null : deniesAt);
   const cardRef = useRef<HTMLElement | null>(null);
   const confirmRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<HTMLPreElement | null>(null);
@@ -159,10 +198,27 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
   const hasChoices = prompt.options.some((_, index) => index !== prompt.custom_option_index);
   const openFile = useContext(OpenFileContext);
   const planFile = prompt.plan_file;
+  const previewOption = previewIndex === null ? null : prompt.options[previewIndex] ?? null;
+  // one box, drawn beside the rows from 640px and under the row it belongs to below that
+  const previewBox = previewOption === null ? null : (
+    <pre id={previewId} className="prompt-card-preview" ref={previewRef} tabIndex={0} role="region" aria-label={t("Preview: {label}", { label: labelOf(previewOption.label).text })}>
+      {previewOption.preview || <span className="prompt-card-preview-note">{t("No preview for this option.")}</span>}
+    </pre>
+  );
 
   return (
     <section className={`prompt-card${folded ? " is-folded" : ""}`} ref={cardRef} role="region" aria-label={t("Agent is asking")}
-      onKeyDown={(event) => { down.current = null; keyed.current = event.key === "Enter" || event.key === " " ? event.target : null; }}
+      onKeyDown={(event) => {
+        // pi's confirmation takes Esc as Deny, and the run's own Esc never reaches pi from the card
+        if (confirmation && event.key === "Escape" && !pending) {
+          event.preventDefault();
+          event.stopPropagation();
+          void answer({ option_index: 0 });
+          return;
+        }
+        down.current = null;
+        keyed.current = event.key === "Enter" || event.key === " " ? event.target : null;
+      }}
       onPointerDown={(event) => {
         keyed.current = null;
         const button = (event.target as Element).closest("button");
@@ -260,10 +316,22 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         </dl>
       )}
       {prompt.body !== null && prompt.body.length > 0 && <pre className={`prompt-card-body${prompt.body.includes("\n") ? "" : " is-line"}`}>{prompt.body}</pre>}
-      {hasChoices && (
+      {confirmation && (
+        <>
+          {/* neither filled: pi's own dialog offers no ground to recommend one */}
+          <div className="prompt-card-buttons">
+            <button type="button" className="btn" disabled={pending} onClick={(event) => void answer({ option_index: 0 }, event)}>{prompt.options[0]?.label}</button>
+            <button type="button" className="btn" disabled={pending} onClick={(event) => void answer({ option_index: 1 }, event)}>{prompt.options[1]?.label}</button>
+          </div>
+          {left !== null && left > 0 && <p className="prompt-card-timer">{t("Denies itself in {s} s", { s: left })}</p>}
+          {/* one announcement as the timer starts and one at 10 s, never one per second */}
+          <p className="visually-hidden" role="status">{denialAnnouncement}</p>
+        </>
+      )}
+      {!confirmation && hasChoices && (
         /* busy on the options alone, never on the card: a live region inside an aria-busy subtree is not
            read (Chromium), and the status line below has to be */
-        <div className="prompt-card-options" role={prompt.multi_select ? "group" : previews ? "radiogroup" : undefined} aria-label={prompt.multi_select || previews ? prompt.question : undefined} aria-busy={pending}>
+        <div className={`prompt-card-options${previews ? " is-previewed" : ""}`} role={prompt.multi_select ? "group" : previews ? "radiogroup" : undefined} aria-label={prompt.multi_select || previews ? prompt.question : undefined} aria-describedby={previewBox === null ? undefined : previewId} aria-busy={pending}>
           {prompt.options.map((option, index) => {
             if (index === prompt.custom_option_index) return null;
             const { text, recommended } = labelOf(option.label);
@@ -280,7 +348,8 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
             if (prompt.multi_select || previews) {
               const checked = prompt.multi_select ? selected.has(index) : chosen === index;
               return (
-                <label className={`prompt-card-option${described}${checked ? " is-checked" : ""}`} key={index}>
+                <Fragment key={index}>
+                  <label className={`prompt-card-option${described}${checked ? " is-checked" : ""}`} onFocus={previews ? () => setHovered(index) : undefined} onPointerEnter={previews ? () => setHovered(index) : undefined}>
                   <input type={prompt.multi_select ? "checkbox" : "radio"} name={prompt.multi_select ? undefined : radioName} checked={checked} disabled={pending} onChange={() => {
                     if (prompt.multi_select) {
                       toggle(index);
@@ -292,7 +361,10 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
                     onTypedAnswerDone?.();
                   }} />
                   {number} {content}
-                </label>
+                  </label>
+                  {/* the one preview box: in the row's own place, so a narrow card puts it under it */}
+                  {previewIndex === index && previewBox}
+                </Fragment>
               );
             }
             const isSelected = prompt.default_option_index === index;
@@ -304,11 +376,8 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
           })}
         </div>
       )}
-      {previews && (previewIndex === null
-        ? <p className="prompt-card-hint">{t("Pick an option to see its preview.")}</p>
-        : <pre className="prompt-card-preview" ref={previewRef} tabIndex={0} role="region" aria-label={t("Preview: {label}", { label: labelOf(prompt.options[previewIndex]!.label).text })}>
-            {prompt.options[previewIndex]!.preview || <span className="prompt-card-preview-note">{t("No preview for this option.")}</span>}
-          </pre>)}
+      {previews && previewIndex !== null && previewIndex === prompt.custom_option_index && previewBox}
+      {previews && previewIndex === null && <p className="prompt-card-hint">{t("Pick an option to see its preview.")}</p>}
       {(prompt.multi_select || previews) && (
         /* Submit stays on the card's fold when the options are many (PromptCard.css) */
         <div className="prompt-card-actions">
@@ -322,10 +391,21 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
         <div className="prompt-card-custom">
           {hasChoices && <span className="prompt-card-custom-label" id={customLabelId}>{prompt.agent === "opencode" && prompt.multi_select ? t("Custom answer") : t("Or type your own answer")}</span>}
           <div className="prompt-card-custom-row">
-            <input className="input" value={custom} disabled={pending} placeholder={prompt.options[prompt.custom_option_index]?.label ?? t("Type an answer")} aria-label={hasChoices ? undefined : t("Custom answer")} aria-labelledby={hasChoices ? customLabelId : undefined} onChange={(event) => setCustom(event.currentTarget.value)} onKeyDown={(event) => {
-              // an IME's Enter commits the candidate; WebKit can send it after compositionend, as key code 229
-              if (event.key === "Enter" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && custom.trim().length > 0) void answer({ custom_text: custom.trim() });
-            }} />
+            {editor ? (
+              /* an editor's answer keeps its line breaks: Enter is one, Mod+Enter sends it */
+              <textarea className="input prompt-card-editor" rows={6} value={custom} disabled={pending} placeholder={prompt.options[prompt.custom_option_index]?.label ?? t("Type an answer")} aria-label={hasChoices ? undefined : t("Custom answer")} aria-labelledby={hasChoices ? customLabelId : undefined} onChange={(event) => setCustom(event.currentTarget.value)} onKeyDown={(event) => {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing && custom.trim().length > 0) void answer({ custom_text: custom.trim() });
+              }} />
+            ) : (
+              <input className="input" value={custom} disabled={pending} placeholder={prompt.options[prompt.custom_option_index]?.label ?? t("Type an answer")} aria-label={hasChoices ? undefined : t("Custom answer")} aria-labelledby={hasChoices ? customLabelId : undefined} onChange={(event) => setCustom(event.currentTarget.value)} onKeyDown={(event) => {
+                // an IME's Enter commits the candidate; WebKit can send it after compositionend, as key code 229
+                if (event.key === "Enter" && !event.nativeEvent.isComposing && event.nativeEvent.keyCode !== 229 && custom.trim().length > 0) void answer({ custom_text: custom.trim() });
+              }} />
+            )}
+            {typedField && (
+              /* Cancel is pi's cancel, as its own dialog's Esc is: nothing typed is sent */
+              <button type="button" className="btn" disabled={pending} onClick={(event) => void answer({ custom_text: "" }, event)}>{t("Cancel")}</button>
+            )}
             <button type="button" className={`btn${custom.trim().length > 0 ? " btn-primary" : ""}`} disabled={pending || custom.trim().length === 0} onClick={(event) => void answer({ custom_text: custom.trim() }, event)}>
               <Send aria-hidden="true" /> {t("Send")}
             </button>
@@ -353,6 +433,56 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
           appears together with its words is not read; one that is there and gets them is */}
       <p className={pending || stale ? "prompt-card-status" : "visually-hidden"} role="status">{pending ? t("Sending your answer…") : stale ? t("Not updated: the question on screen may have changed.") : null}</p>
       {error !== null && <p className="prompt-card-error" role="alert">{error.message}{error.detail !== null && <><br /><code>{error.detail}</code></>}</p>}
+    </section>
+  );
+}
+
+/**
+ * The folder pi stopped on before it would load what can run code in it (`needs_trust`): pi's RPC
+ * mode cannot ask this itself, so the take-over asks here and goes again with the answer. It never
+ * folds — pi waits until the card is answered — and Esc is Don't trust, as a refused host key is.
+ */
+export interface TrustCardProps {
+  trust: PiTrustRequest;
+  /** `"approve"` starts pi with the folder's settings, `"deny"` without them; the answer is this run's */
+  onTrust(choice: "approve" | "deny"): Promise<unknown>;
+}
+
+export function TrustCard({ trust, onTrust }: TrustCardProps) {
+  const t = useT();
+  const openFile = useContext(OpenFileContext);
+  const [pending, setPending] = useState(false);
+  const choose = async (choice: "approve" | "deny"): Promise<void> => {
+    setPending(true);
+    try { await onTrust(choice); } catch { /* the pane's own notice says why nothing changed */ } finally { setPending(false); }
+  };
+  return (
+    <section className="prompt-card prompt-card-trust" role="region" aria-label={t("Trust this project?")}
+      onKeyDown={(event) => {
+        if (event.key !== "Escape" || pending) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void choose("deny");
+      }}>
+      <header className="prompt-card-header">
+        <span className="visually-hidden">{t("input needed")}</span>
+        <h2>{t("Trust this project?")}</h2>
+      </header>
+      <p className="prompt-card-question">{t("Pi found settings in this folder that can run code.")}</p>
+      <ul className="prompt-card-trust-found">
+        {trust.found.map((item) => (
+          <li key={item}>
+            <code>{item}</code>
+            {openFile !== null && <button type="button" className="btn btn-ghost prompt-card-trust-view" disabled={pending} title={t("View")} onClick={() => openFile(item)}><FileText aria-hidden="true" />{t("View")}</button>}
+          </li>
+        ))}
+      </ul>
+      <code className="machine-fingerprint prompt-card-trust-folder" title={trust.folder}>{trust.folder}</code>
+      <p className="prompt-card-hint">{t("Trust it only if you know where this folder came from.")}</p>
+      <div className="prompt-card-buttons">
+        <button type="button" className="btn" disabled={pending} onClick={() => void choose("deny")}>{t("Don't trust")}</button>
+        <button type="button" className="btn" disabled={pending} onClick={() => void choose("approve")}>{t("Trust folder")}</button>
+      </div>
     </section>
   );
 }

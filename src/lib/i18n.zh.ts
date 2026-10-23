@@ -711,6 +711,13 @@ export const ZH: Record<string, string> = {
   "Send {answer}?": "发送 {answer}？",
   "Confirm": "确认",
   "Sending your answer…": "正在发送你的回答…",
+  "Denies itself in {s} s": "{s} 秒后自动拒绝",
+  "Trust this project?": "信任这个项目吗？",
+  "Pi found settings in this folder that can run code.": "Pi 在这个文件夹里发现了可以运行代码的设置。",
+  "Trust it only if you know where this folder came from.": "只有知道这个文件夹来自哪里时才信任它。",
+  "Don't trust": "不信任",
+  "Trust folder": "信任文件夹",
+  "View": "查看",
 
   // ---- markdown ----
   "Code copied": "已复制代码",

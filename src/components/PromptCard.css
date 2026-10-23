@@ -655,3 +655,96 @@
     min-height: var(--touch-target);
   }
 }
+
+/* pi's own dialogs: its confirmation's two answers (of equal weight, Deny first) and the trust
+   card's two, right-aligned as the card's other actions are */
+.prompt-card-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+}
+
+/* pi denies the confirmation by itself at its deadline: counted, and announced twice only */
+.prompt-card-timer {
+  margin: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+/* an editor's answer: six lines of mono at rest, dragged taller by the reader */
+.prompt-card-editor {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: calc(6lh + 2 * var(--space-2));
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: var(--lh-base);
+  resize: vertical;
+}
+
+/* a question with previews: from 640px the box sits beside the rows, in the second column; below
+   that it takes the place under the row it belongs to, one row's at a time */
+.prompt-card-options.is-previewed {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+}
+
+.prompt-card-options.is-previewed > .prompt-card-option {
+  grid-column: 1;
+}
+
+.prompt-card-options.is-previewed > .prompt-card-preview {
+  grid-column: 1;
+  margin-block: var(--space-1);
+}
+
+@media (min-width: 640px) {
+  .prompt-card-options.is-previewed {
+    grid-template-columns: min(44%, 20rem) minmax(0, 1fr);
+    column-gap: var(--space-3);
+  }
+
+  .prompt-card-options.is-previewed > .prompt-card-preview {
+    grid-column: 2;
+    grid-row: 1;
+    margin-block: 0;
+  }
+}
+
+/* the project-trust card: what pi found in the folder, one mono row each with its way into the viewer */
+.prompt-card-trust-found {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--fs-xs);
+}
+
+.prompt-card-trust-found li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.prompt-card-trust-found code {
+  min-width: 0;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.prompt-card-trust-view {
+  flex: none;
+  height: var(--space-6);
+  margin-inline-start: auto;
+  padding: 0 var(--space-2);
+  gap: var(--space-1);
+  font-size: var(--fs-xs);
+}
+
+.prompt-card-trust-folder {
+  margin: 0;
+  font-size: var(--fs-sm);
+}

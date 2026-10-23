@@ -707,6 +707,13 @@ export const KO: Record<string, string> = {
   "Send {answer}?": "{answer} 보낼까요?",
   "Confirm": "확인",
   "Sending your answer…": "답을 보내는 중…",
+  "Denies itself in {s} s": "{s}초 뒤 스스로 거부합니다",
+  "Trust this project?": "이 프로젝트를 신뢰할까요?",
+  "Pi found settings in this folder that can run code.": "Pi가 이 폴더에서 코드를 실행할 수 있는 설정을 찾았습니다.",
+  "Trust it only if you know where this folder came from.": "이 폴더가 어디서 왔는지 알 때만 신뢰하세요.",
+  "Don't trust": "신뢰 안 함",
+  "Trust folder": "폴더 신뢰",
+  "View": "보기",
 
   // ---- markdown ----
   "Code copied": "코드 복사됨",
