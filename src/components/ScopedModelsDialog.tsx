@@ -5,13 +5,15 @@
  * settings file, whose entries are `provider/id`, the format Pi's own `--models` takes.
  *
  * A pattern the file holds that no row names (`claude*`) is written back as it was: the dialog only
- * rewrites the rows it shows, so a hand-written scope is never lost. Pi reads that file at startup,
- * so the note above the list says where a change is taken up.
+ * rewrites the rows it shows, so a hand-written scope is never lost. It is not part of the cycle the
+ * arrows move either: each checked row shows its place, and a move trades places with the next model,
+ * never with a pattern standing between the two. Pi reads that file at startup, so the note above the
+ * list says where a change is taken up; an empty list is no scope at all, so the note says that too.
  *
  * Pi's own keys live here (DS §6.1): Ctrl+A, Ctrl+X, Ctrl+P and Ctrl+S are handled inside this
  * dialog alone, so the browser never selects the page, prints it or saves it.
  */
-import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { ArrowDown, ArrowUp, Check, X } from "lucide-react";
 
@@ -53,7 +55,21 @@ export function ScopedModelsDialog({ models, scoped, machineId, onSaved, onClose
   const provider = useRef(models[0]?.provider ?? "");
   const groups = groupModels(models, "");
   const known = new Set(models.map(entryOf));
-  const kept = order.filter((model) => !known.has(model));
+  /** the cycle itself, in Pi's order: what the rows number, and what the arrows move */
+  const cycle = order.filter((entry) => known.has(entry));
+  /** the entries the rows do not name, kept in the place the file gave them */
+  const kept = order.filter((entry) => !known.has(entry));
+  /** the row arrow a move leaves the focus on, and every arrow by `${entry}:${step}` */
+  const refocus = useRef<string | null>(null);
+  const arrows = useRef(new Map<string, HTMLButtonElement>());
+  // a move can disable the arrow it was made with (the model now stands first or last), and a disabled
+  // button drops the focus: the moved row's other arrow takes it
+  useLayoutEffect(() => {
+    const target = refocus.current;
+    if (target === null) return;
+    refocus.current = null;
+    arrows.current.get(target)?.focus({ preventScroll: true });
+  }, [order]);
 
   const open = saving ? null : onClose;
   useSheetSwipe(surface, open);
@@ -79,16 +95,23 @@ export function ScopedModelsDialog({ models, scoped, machineId, onSaved, onClose
       : [...current, ...keys.filter((key) => !current.includes(key))]);
   };
 
-  /** one model up or down the cycle: the neighbour it trades places with is the next checked one */
+  /** one model up or down the cycle: it trades places with the model next to it in the cycle, and the
+   * patterns keep the places the file gave them */
   const move = (key: string, step: number): void => {
-    setOrder((current) => {
-      const at = current.indexOf(key);
-      const to = at + step;
-      if (at === -1 || to < 0 || to >= current.length) return current;
-      const next = [...current];
-      [next[at], next[to]] = [next[to]!, next[at]!];
-      return next;
-    });
+    const at = cycle.indexOf(key);
+    const to = at + step;
+    if (at === -1 || to < 0 || to >= cycle.length) return;
+    const swapped = [...cycle];
+    [swapped[at], swapped[to]] = [swapped[to]!, swapped[at]!];
+    let next = 0;
+    setOrder(order.map((entry) => known.has(entry) ? swapped[next++]! : entry));
+    const settles = step < 0 ? to > 0 : to < cycle.length - 1;
+    refocus.current = `${key}:${settles ? step : -step}`;
+  };
+
+  /** a row's arrow, kept so a move can hand the focus to the one that is still enabled */
+  const arrow = (key: string, step: number) => (node: HTMLButtonElement | null): void => {
+    if (node !== null) arrows.current.set(`${key}:${step}`, node);
   };
 
   /** every model in, and every row out: Ctrl+A and Ctrl+X, and the two buttons beside the footer */
@@ -133,7 +156,9 @@ export function ScopedModelsDialog({ models, scoped, machineId, onSaved, onClose
           {models.length === 0
             ? <p className="scoped-note">{t("No models available. Sign in to a provider in Pi with /login.")}</p>
             : <>
-              <p className="scoped-note">{t("{scoped} of {total} in the cycle", { scoped: order.length - kept.length, total: models.length })}</p>
+              <p className="scoped-note">{order.length === 0
+                ? t("Every model is in the cycle")
+                : t("{scoped} of {total} in the cycle", { scoped: cycle.length, total: models.length })}</p>
               <ul className="scoped-list">
                 {groups.map((group) => {
                   const keys = group.models.map(entryOf);
@@ -148,8 +173,8 @@ export function ScopedModelsDialog({ models, scoped, machineId, onSaved, onClose
                       <ul className="scoped-rows">
                         {group.models.map((model) => {
                           const key = entryOf(model);
-                          const checked = order.includes(key);
-                          const at = order.indexOf(key);
+                          const place = cycle.indexOf(key);
+                          const checked = place !== -1;
                           return (
                             <li key={key} className="scoped-row" onFocus={() => { provider.current = model.provider; }}
                               onKeyDown={(event) => {
@@ -160,9 +185,10 @@ export function ScopedModelsDialog({ models, scoped, machineId, onSaved, onClose
                               <input type="checkbox" checked={checked} aria-label={model.name} onChange={() => {
                                 setOrder((current) => checked ? current.filter((entry) => entry !== key) : [...current, key]);
                               }} />
+                              {checked && <span className="scoped-place" aria-hidden="true">{place + 1}</span>}
                               <span className="scoped-name">{model.name}</span>
-                              <button type="button" className="icon-button scoped-move" aria-label={t("Move up")} disabled={!checked || at <= 0} onClick={() => move(key, -1)}><ArrowUp aria-hidden="true" /></button>
-                              <button type="button" className="icon-button scoped-move" aria-label={t("Move down")} disabled={!checked || at === order.length - 1} onClick={() => move(key, 1)}><ArrowDown aria-hidden="true" /></button>
+                              <button type="button" ref={arrow(key, -1)} className="icon-button scoped-move" aria-label={t("Move up")} disabled={place <= 0} onClick={() => move(key, -1)}><ArrowUp aria-hidden="true" /></button>
+                              <button type="button" ref={arrow(key, 1)} className="icon-button scoped-move" aria-label={t("Move down")} disabled={place === -1 || place === cycle.length - 1} onClick={() => move(key, 1)}><ArrowDown aria-hidden="true" /></button>
                             </li>
                           );
                         })}

@@ -112,6 +112,10 @@ const mount = async (props: Record<string, unknown> = {}): Promise<TestRenderer.
 const words = (renderer: TestRenderer.ReactTestRenderer): string[] =>
   renderer.root.findAll((node) => typeof node.type === "string").flatMap((node) => (node.children ?? []).filter((child): child is string => typeof child === "string"));
 
+/** A turn of the page's clock: the animation frame a live region takes its words on (window's rAF is
+ * a 0 ms timer here, so this yields rather than waits) */
+const frame = async () => { await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); }); };
+
 const group = (renderer: TestRenderer.ReactTestRenderer, label: string) => renderer.root.findByProps({ role: "group", "aria-label": label });
 const toggle = (renderer: TestRenderer.ReactTestRenderer, label: string) => renderer.root.findAllByProps({ role: "switch" }).find((node) => node.props["aria-label"] === label)!;
 
@@ -237,6 +241,25 @@ describe("PiSettingsPage", () => {
     expect(renderer.root.findAllByProps({ role: "dialog" })).toHaveLength(1);
     await act(async () => { button("Cancel").props.onClick(); });
     expect(renderer.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
+  });
+
+  it("reads an empty scoped list as every model in the cycle, the way Pi and the picker do", async () => {
+    file = { path: file.path, settings: { ...file.settings, enabledModels: [] as string[] } };
+    const renderer = await mount();
+    expect(words(renderer)).toContain("Every model is in the cycle");
+  });
+
+  it("announces the scoped list as saved from a live region that is already in the page", async () => {
+    const renderer = await mount();
+    await frame();
+    const status = () => renderer.root
+      .findAll((node) => node.props.role === "status" && String(node.props.className ?? "").includes("visually-hidden"))
+      .map((node) => node.children.filter((child): child is string => typeof child === "string").join(""));
+    const button = (label: string) => renderer.root.findAllByType("button").find((node) => (node.children as unknown[]).includes(label))!;
+    expect(status()).toEqual([""]);
+    await act(async () => { button("Edit…").props.onClick(); });
+    await act(async () => { button("Save").props.onClick(); });
+    expect(status()).toEqual(["Saved as default"]);
   });
 
   it("opens the scoped models dialog when `/scoped-models` asked for it", async () => {

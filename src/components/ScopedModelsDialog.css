@@ -88,6 +88,16 @@
   accent-color: var(--accent);
 }
 
+/* a checked model's place in Pi's cycle: the number the arrows change, one column wide */
+.scoped-place {
+  flex: none;
+  min-width: 1.25em;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
 .scoped-name {
   flex: 1 1 auto;
   min-width: 0;

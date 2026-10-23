@@ -15,6 +15,7 @@ import { ApiError, fetchPiNativeState, fetchPiSettings, savePiSettings, sendPiRp
 import { useT } from "../lib/i18n.ts";
 import { takeScopedModelsRequest } from "../lib/piScopedModels.ts";
 import { useSettings } from "../lib/settings.ts";
+import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { piModels, type PickerModel } from "./PiModelPicker.tsx";
 import { ScopedModelsDialog } from "./ScopedModelsDialog.tsx";
 import { THINKING_LEVELS, thinkingLevelLabel } from "./PiThinkingMenu.tsx";
@@ -69,7 +70,7 @@ export function PiSettingsPage({ pane, onOpenShortcuts }: PiSettingsPageProps) {
   const [session, setSession] = useState<PiSessionSettings | null>(null);
   /** the Scoped models dialog; `/scoped-models` asked for it, and the row's Edit… opens it the same way */
   const [editing, setEditing] = useState(() => takeScopedModelsRequest());
-  /** the scoped list was just written: the row says so until the dialog is opened again */
+  /** the scoped list was just written: the row's live region says so until the dialog is opened again */
   const [scopedSaved, setScopedSaved] = useState(false);
   const [readFailure, setReadFailure] = useState<string | null>(null);
   /** the terminal owns the pane's Pi: no RPC, so its rows only say where they are changed */
@@ -157,9 +158,13 @@ export function PiSettingsPage({ pane, onOpenShortcuts }: PiSettingsPageProps) {
   const savedProvider = typeof saved["defaultProvider"] === "string" ? saved["defaultProvider"] : "";
   const savedModel = typeof saved["defaultModel"] === "string" ? saved["defaultModel"] : "";
   const savedThinking = typeof saved["defaultThinkingLevel"] === "string" ? saved["defaultThinkingLevel"] : "";
-  const scoped = Array.isArray(saved["enabledModels"]) ? saved["enabledModels"] : null;
+  const scopedList = saved["enabledModels"];
+  // an empty list is no scope at all, which is how Pi and the picker read it: every model cycles
+  const scoped = Array.isArray(scopedList) && scopedList.length > 0 ? scopedList : null;
   /** what the Scoped models row says under its label: how much of Pi's list is in the cycle */
   const scopedCount = models.length === 0 ? null : scoped === null ? t("Every model is in the cycle") : t("{scoped} of {total} in the cycle", { scoped: scoped.length, total: models.length });
+  // the row's sentence is announced from a box that is in the page before the words arrive
+  const scopedWords = useAnnouncedText(scopedSaved ? t("Saved as default") : null);
   // the saved model stays an option even while Pi's list is unknown (a Terminal-mode pane has no list)
   const modelOptions = savedModel === "" ? models : models.some((model) => model.id === savedModel && model.provider === savedProvider) ? models : [...models, { provider: savedProvider, id: savedModel, name: savedModel, reasoning: false, images: false, contextWindow: null }];
   const providers = [...new Set(modelOptions.map((model) => model.provider))];
@@ -175,6 +180,7 @@ export function PiSettingsPage({ pane, onOpenShortcuts }: PiSettingsPageProps) {
     {sessionNotice !== null && ("mode" in sessionNotice
       ? <p className="settings-hint" role="status">{sessionNotice.mode === "lost" ? t("Lost the connection to Pi.") : t("Connecting to Pi…")}</p>
       : <p className="settings-hint settings-error" role="alert">{sessionNotice.error}</p>)}
+    <p className="visually-hidden" role="status">{scopedWords}</p>
 
     <SettingsGroup title={t("Model")} note={t("A new Pi session starts with these. A running Pi reads them again with /reload.")}>
       <SettingsRow label={t("Default model")} htmlFor="pi-default-model" description={described(t("Default model"), selectedModelText(modelOptions, savedProvider, savedModel))}>
@@ -193,10 +199,7 @@ export function PiSettingsPage({ pane, onOpenShortcuts }: PiSettingsPageProps) {
           {THINKING_LEVELS.map((level) => <option key={level} value={level}>{t(thinkingLevelLabel(level))}</option>)}
         </select>
       </SettingsRow>
-      <SettingsRow label={t("Scoped models")} description={scopedCount === null && !scopedSaved ? undefined : described(t("Scoped models"), <>
-        {scopedSaved && <span role="status">{t("Saved as default")} </span>}
-        {scopedCount}
-      </>)}>
+      <SettingsRow label={t("Scoped models")} description={scopedCount === null ? undefined : described(t("Scoped models"), scopedCount)}>
         <button type="button" className="btn" disabled={models.length === 0} onClick={() => { setScopedSaved(false); setEditing(true); }}>{t("Edit…")}</button>
       </SettingsRow>
     </SettingsGroup>

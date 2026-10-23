@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
-import { createElement } from "react";
+import { createElement, type ReactElement } from "react";
 import * as reactDom from "react-dom";
 import TestRenderer, { act } from "react-test-renderer";
 
@@ -74,7 +74,7 @@ beforeEach(() => {
 let closed = 0;
 let saved = 0;
 
-const mount = async (scoped: readonly string[] | null) => {
+const mount = async (scoped: readonly string[] | null, createNodeMock?: (element: ReactElement) => unknown) => {
   closed = 0;
   saved = 0;
   let renderer: TestRenderer.ReactTestRenderer | null = null;
@@ -87,15 +87,26 @@ const mount = async (scoped: readonly string[] | null) => {
         onSaved: () => { saved += 1; },
         onClose: () => { closed += 1; },
       }),
-    }));
+    }), createNodeMock === undefined ? undefined : { createNodeMock });
   });
   return renderer!;
 };
+
+/** Stands in for the arrows' own nodes (react-test-renderer hands refs null), so a test sees the focus. */
+const focusOf = (focused: string[]) => (element: ReactElement): unknown =>
+  element.type === "button" ? { focus: () => { focused.push(String((element.props as { "aria-label"?: string })["aria-label"])); } } : null;
 
 const words = (renderer: TestRenderer.ReactTestRenderer): string[] =>
   renderer.root.findAll((node) => typeof node.type === "string").flatMap((node) => (node.children ?? []).filter((child): child is string => typeof child === "string"));
 const box = (renderer: TestRenderer.ReactTestRenderer, name: string) => renderer.root.findAllByProps({ type: "checkbox" }).find((node) => node.props["aria-label"] === name)!;
 const button = (renderer: TestRenderer.ReactTestRenderer, label: string) => renderer.root.findAll((node) => node.type === "button").find((node) => node.props["aria-label"] === label || (node.children as unknown[]).includes(label))!;
+const arrow = (renderer: TestRenderer.ReactTestRenderer, name: string, label: string) => renderer.root
+  .findAll((node) => node.type === "li" && node.props.className === "scoped-row" && node.findAllByProps({ "aria-label": name }).length > 0)
+  .flatMap((row) => row.findAll((node) => node.type === "button"))
+  .find((node) => node.props["aria-label"] === label)!;
+/** the place each checked row shows, in the order the rows are drawn */
+const places = (renderer: TestRenderer.ReactTestRenderer): string[] =>
+  renderer.root.findAll((node) => node.type === "span" && node.props.className === "scoped-place").map((node) => node.children.join(""));
 const press = async (node: { props: { onClick?: () => void } }) => { await act(async () => { node.props.onClick?.(); }); };
 const ctrl = async (renderer: TestRenderer.ReactTestRenderer, key: string) => {
   await act(async () => {
@@ -144,6 +155,29 @@ describe("the scoped models dialog", () => {
     });
     await press(button(renderer, "Save"));
     expect(writes).toEqual([{ changes: { enabledModels: ["anthropic/claude-opus-4-1", "openai/gpt-5", "anthropic/claude-sonnet-4-5"] }, machineId: "local" }]);
+  });
+
+  it("moves a model past the pattern between them, and hands the focus to an arrow that still works", async () => {
+    const focused: string[] = [];
+    const renderer = await mount(["anthropic/claude-sonnet-4-5", "openai/*", "openai/gpt-5"], focusOf(focused));
+    // the number is the place in the cycle the arrows change: the pattern between them takes none
+    expect(places(renderer)).toEqual(["1", "2"]);
+    // GPT-5 goes past Sonnet across the pattern, never trading places with the pattern itself
+    await press(arrow(renderer, "GPT-5", "Move up"));
+    expect(places(renderer)).toEqual(["2", "1"]);
+    // it is first now, so the arrow it was moved with is disabled: the row's other arrow takes the focus
+    expect(focused).toEqual(["Move down"]);
+    await press(button(renderer, "Save"));
+    expect(writes).toEqual([{ changes: { enabledModels: ["openai/gpt-5", "openai/*", "anthropic/claude-sonnet-4-5"] }, machineId: "local" }]);
+  });
+
+  it("says every model is in the cycle once Clear all leaves nothing scoped, which is what Pi reads", async () => {
+    const renderer = await mount(["anthropic/claude-sonnet-4-5"]);
+    await ctrl(renderer, "x");
+    expect(words(renderer)).toContain("Every model is in the cycle");
+    expect(words(renderer)).not.toContain("0 of 3 in the cycle");
+    await press(button(renderer, "Save"));
+    expect(writes[0]?.changes).toEqual({ enabledModels: [] });
   });
 
   it("keeps the dialog open with the server's sentence when the write is refused", async () => {
