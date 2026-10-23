@@ -64,6 +64,7 @@ function labelMapKeys(): string[] {
     ...grab("lib/status.ts", "STATUS_WORD", value),
     ...grab("components/MachineSidebar.tsx", "STATE_WORD", value),
     ...grab("components/Composer.tsx", "SOURCE_LABEL", value),
+    ...grab("components/PiThinkingMenu.tsx", "LEVEL_LABEL", value),
     ...grab("components/DevicesPanel.tsx", "VIA", value),
     ...grab("components/SettingsDialog.tsx", "THEME_NAMES", /^\s+"?[\w-]+"?: "([^"]*)",?$/gm),
     ...grab("components/KeyBar.tsx", "ARROWS", /label: "([^"]+)"/g),

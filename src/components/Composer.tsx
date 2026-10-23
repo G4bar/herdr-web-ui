@@ -60,6 +60,7 @@ import { quickReplyButtons, useSettings } from "../lib/settings.ts";
 import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, providerForAgent, statusWindows, usageName, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { PiModelPicker } from "./PiModelPicker.tsx";
+import { PiThinkingMenu } from "./PiThinkingMenu.tsx";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { usePaneCommands } from "../lib/usePaneCommands.ts";
@@ -1050,6 +1051,9 @@ export function Composer({
   // beside the state drops its own copy of them. A Pi the terminal still owns reads the model from the
   // session file, read-only (DS §3.0). Every other agent draws the pill exactly as it did
   const piChip = agent === "pi" && (piNative !== null || model !== null);
+  // a native pane's level is live; a Terminal-owned Pi's is what its session file last recorded, and
+  // one that recorded none names no level to draw (DS §3.0)
+  const piThinkingLevel = piNative !== null ? piNative.thinkingLevel || null : metadata?.reasoning_effort ?? null;
   const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort) && !piChip;
   const usageDetail = usageWindows.map((window) => {
     const reset = formatResetIn(window.resets_at, Date.now());
@@ -1440,6 +1444,14 @@ export function Composer({
             label={piNative?.model?.name ?? model?.text ?? t("Model —")}
             current={piNative?.model ? { provider: piNative.model.provider, id: piNative.model.id } : null}
             piRpc={piRpc}
+            disabled={piNative !== null && piNative.mode !== "native"}
+            readOnly={piNative === null}
+            onPicked={() => textareaRef.current?.focus({ preventScroll: true })}
+          />}
+          {piChip && piRpc && piThinkingLevel !== null && <PiThinkingMenu
+            level={piThinkingLevel}
+            piRpc={piRpc}
+            unsupported={piNative?.model?.reasoning === false}
             disabled={piNative !== null && piNative.mode !== "native"}
             readOnly={piNative === null}
             onPicked={() => textareaRef.current?.focus({ preventScroll: true })}

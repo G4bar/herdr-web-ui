@@ -1,0 +1,139 @@
+/* The thinking chip of a native Pi pane (DS §4.1, §4.3), the pips it and the transcript's thinking
+   row draw (DS §5.4), and the menu it opens. The chip's box is `.pi-chip`, drawn beside the model
+   chip in PiModelPicker.css: the two stand together in the composer's right group. */
+
+/* the level as five bars, bottom aligned. Level `off` lights none, and the top of the ramp lights
+   all five: colour and count both say how much thought, and the word beside them says it outright */
+.pi-pips {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 12px;
+}
+
+.pi-pips > span {
+  width: 3px;
+  border-radius: 1px;
+  background: var(--border-strong);
+}
+
+.pi-pips > span:nth-child(1) { height: 4px; }
+.pi-pips > span:nth-child(2) { height: 6px; }
+.pi-pips > span:nth-child(3) { height: 8px; }
+.pi-pips > span:nth-child(4) { height: 10px; }
+.pi-pips > span:nth-child(5) { height: 12px; }
+
+/* the ramp itself (src/styles.css): a quiet step from the dim text to the palette's meta hue */
+.pi-pips[data-level="off"] { --pip: var(--think-off); }
+.pi-pips[data-level="minimal"] { --pip: var(--think-minimal); }
+.pi-pips[data-level="low"] { --pip: var(--think-low); }
+.pi-pips[data-level="medium"] { --pip: var(--think-medium); }
+.pi-pips[data-level="high"] { --pip: var(--think-high); }
+.pi-pips[data-level="xhigh"] { --pip: var(--think-xhigh); }
+
+.pi-pips > span.is-lit {
+  background: var(--pip);
+}
+
+.pi-chip-level {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* the popover: `.menu` gives the skin, this places it over the chip at the width DS §4.3 draws */
+.pi-thinking {
+  position: fixed;
+  z-index: var(--z-popover);
+  width: 220px;
+  gap: var(--space-1);
+  white-space: normal;
+}
+
+.pi-thinking-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--control-h);
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  font-size: var(--fs-sm);
+  cursor: pointer;
+}
+
+.pi-thinking-row[data-active] {
+  background: var(--bg-hover);
+}
+
+@media (hover: hover) {
+  .pi-thinking-row:hover {
+    background: var(--bg-hover);
+  }
+}
+
+.pi-thinking-word {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pi-thinking-check {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--accent);
+}
+
+.pi-thinking-busy {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--text-dim);
+  animation: pi-thinking-spin var(--dur-spin) steps(8) infinite;
+}
+
+@keyframes pi-thinking-spin {
+  to { transform: rotate(360deg); }
+}
+
+.pi-thinking-note {
+  margin: 0;
+  padding: var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.pi-thinking-retry {
+  margin-left: var(--space-2);
+}
+
+/* a switch Pi refused: the chip still draws the level it kept, and this says why (DS §3.3) */
+.pi-thinking-error {
+  margin: 0;
+  padding: var(--space-1) var(--space-2) var(--space-2);
+  color: var(--danger-text);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+/* the phone's sheet: the rows scroll between the head and the screen's end, and a finger gets a
+   row's worth of --touch-target (DS §7) */
+.pi-thinking-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pi-thinking-sheet .modal-body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  .pi-thinking-row {
+    min-height: var(--touch-target);
+  }
+}
