@@ -570,6 +570,8 @@ export type ConversationPart =
     result_missing?: true;
     /** images the call returned (pi reads a picture into the result); same fetch as a user image */
     images?: { media_type: string; ref: string }[];
+    /** the call's own id as the agent recorded it (pi's `toolCallId`): a pane's live tool tail is keyed by it */
+    tool_call_id?: string;
   }
   /** A native Claude/Codex user image, addressed by an opaque ref and fetched on demand: GET /api/pane/conversation/image?pane_id=…&ref=… */
   | { kind: "image"; media_type: string; ref: string }

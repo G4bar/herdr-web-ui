@@ -58,7 +58,7 @@ test("delayed results update the right tool across turns without changing older 
   expect(tools(preview)[0]).toEqual({
     kind: "tool", name: "Read", summary: "Read the file", input: '{\n  "file_path": "/tmp/a"\n}',
     output: "x".repeat(4000) + "\n… trimmed", output_ref: "read", output_size: 7000, error: true,
-    images: [{ media_type: "image/png", ref: "pi:read:0" }],
+    images: [{ media_type: "image/png", ref: "pi:read:0" }], tool_call_id: "read",
   });
   expect(parser.snapshot()).toEqual(beforeResult);
   tools(preview)[0]!.output = "consumer edit";
@@ -90,8 +90,8 @@ test("embedded results and Pi aliases normalize once, including results placed b
   const turns = appendRecords(rows).snapshot();
   expect(turns).toHaveLength(1);
   expect(tools(turns)).toEqual([
-    { kind: "tool", name: "Bash", summary: "false", input: '{\n  "command": "false"\n}', output: "inline failure", error: true },
-    { kind: "tool", name: "Read", summary: "/tmp/later", input: '{\n  "path": "/tmp/later"\n}', output: "later output" },
+    { kind: "tool", name: "Bash", summary: "false", input: '{\n  "command": "false"\n}', output: "inline failure", error: true, tool_call_id: "inline" },
+    { kind: "tool", name: "Read", summary: "/tmp/later", input: '{\n  "path": "/tmp/later"\n}', output: "later output", tool_call_id: "later" },
   ]);
   expect(turns[0]?.parts.at(-1)).toEqual({ kind: "text", text: "Finished", phase: "final_answer" });
   expect(tools(appendRecords(rows, { toolImages: true }).snapshot())[0]?.images).toEqual([{ media_type: "image/jpeg", ref: "pi:inline:0" }]);

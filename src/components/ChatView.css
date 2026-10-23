@@ -984,6 +984,33 @@
   letter-spacing: var(--tracking-caps);
 }
 
+/* a running bash call: its heading and Stop share a line */
+.chat-tool-output-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.chat-tool-output-head h4 {
+  margin: 0;
+  flex: 1;
+}
+
+/* the command a bash call ran, behind the shell's own prompt */
+.chat-tool-cmd { display: block; }
+.chat-tool-cmd-mark { color: var(--status-done); }
+
+/* the live tail of a running call: the same box, a window it scrolls in itself */
+.chat-tool-tail { max-height: calc(var(--lh-base) * 12 + var(--space-4)); }
+
+/* pi's own exit line, drawn apart from the output it ends */
+.chat-tool-exit {
+  margin: var(--space-1) 0 0;
+  color: var(--status-blocked);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+
 .chat-checklist {
   margin: 0;
   padding: var(--space-2) var(--space-3);

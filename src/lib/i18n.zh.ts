@@ -1099,6 +1099,7 @@ export const ZH: Record<string, string> = {
   "failed": "失败",
   "stopped": "已停止",
   "Stopped": "已停止",
+  "exit {code}": "退出码 {code}",
   "Error": "错误",
   "{n} failed": "{n} 个失败",
   "Loading conversation…": "正在加载对话…",

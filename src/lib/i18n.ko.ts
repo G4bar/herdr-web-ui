@@ -1095,6 +1095,7 @@ export const KO: Record<string, string> = {
   "failed": "실패",
   "stopped": "중지됨",
   "Stopped": "중지됨",
+  "exit {code}": "종료 코드 {code}",
   "Error": "오류",
   "{n} failed": "실패 {n}개",
   "Loading conversation…": "대화를 불러오는 중…",

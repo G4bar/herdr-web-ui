@@ -34,6 +34,7 @@ import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
 import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, toolRowState, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { ToolCardHead } from "./ToolCardHead.tsx";
+import { bashCard, PiToolCardContext, ToolStop, ToolTail, usePiToolCard, type PiToolCard } from "./ToolBodies.tsx";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -198,6 +199,8 @@ export interface ChatViewProps {
   interactive?: boolean;
   /** a message's "Rewind in terminal" (Claude Code, grok, agy): the pane opens its terminal with a hint to run the agent's own rewind; nothing is sent */
   onRewindInTerminal?: () => void;
+  /** an opened bash card's Stop, while a native Pi still runs the call: the pane's `abort` (nothing without a native Pi) */
+  onPiAbort?: () => void;
 }
 
 
@@ -366,7 +369,11 @@ function ToolInputView({ part }: { part: ToolPartType }) {
   </li>)}</ol>;
   const str = (key: string): string | undefined => typeof parsed[key] === "string" ? parsed[key] : undefined;
   const command = str("command") ?? str("cmd");
-  if (command !== undefined) return <div className="chat-tool-io"><pre>{linkFilePaths(command, open)}</pre>{(str("cwd") ?? str("description")) !== undefined && <p className="chat-tool-io-meta">{str("cwd") ?? str("description")}</p>}</div>;
+  if (command !== undefined) return <div className="chat-tool-io">
+    {/* pi's bash call draws the shell's own prompt before its command, as the terminal shows it */}
+    <pre className={part.name === "bash" ? "chat-tool-cmd" : undefined}>{part.name === "bash" && <span className="chat-tool-cmd-mark" aria-hidden="true">$ </span>}{linkFilePaths(command, open)}</pre>
+    {(str("cwd") ?? str("description")) !== undefined && <p className="chat-tool-io-meta">{str("cwd") ?? str("description")}</p>}
+  </div>;
   const oldString = str("old_string");
   const newString = str("new_string");
   if (oldString !== undefined || newString !== undefined) return <div className="chat-tool-io">{str("file_path") !== undefined && <ToolFile path={str("file_path")!} />}<EditDiff before={oldString ?? ""} after={newString ?? ""} /></div>;
@@ -455,6 +462,7 @@ function ToolImages({ paneId, part }: { paneId: string; part: ToolPartType }) {
  */
 export function WorkRow({ paneId, part, stateKey, live, waiting, last, expandRows }: { paneId: string; part: ToolPartType; stateKey: string; live: boolean; waiting: boolean; last: boolean; expandRows: boolean }) {
   const t = useT();
+  const piCard = usePiToolCard();
   // the files an output names open from it ("saved /tmp/shot/t0.png")
   const openFile = useContext(OpenFileContext);
   const [chosen, setOpen] = useChatRowToggle(stateKey, null);
@@ -469,6 +477,13 @@ export function WorkRow({ paneId, part, stateKey, live, waiting, last, expandRow
   const stopped = cardState === "stopped";
   // the list is the answer of a todo call: its raw text would say it twice
   const output = isTodoTool(part.name) && parseTodoAnswer(part.output) !== null ? "" : whole.text ?? part.output;
+  // bash draws its command box and the exit code pi ends a failed one with; every other tool keeps the plain input view
+  const bash = part.name === "bash" ? bashCard(output) : null;
+  const body = bash === null ? output : bash.text;
+  // the live tail of a call running on a native pane: only the id pi named, and only while it runs
+  const tail = running ? piCard.tails?.[part.tool_call_id ?? ""] ?? null : null;
+  const heading = <h4>{t(part.error ? "Error" : "Output")}</h4>;
+  const stop = running && piCard.abort !== null ? <ToolStop onAbort={piCard.abort} /> : null;
   return <div className={`work-row${part.error ? " is-error" : ""}${stopped ? " is-stopped" : ""}`}>
     <button type="button" className="work-row-head" aria-expanded={open} title={narration || verb !== null ? `${part.name} · ${summary}` : undefined} onClick={() => setOpen(!open)}>
       <span className="work-row-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
@@ -481,7 +496,10 @@ export function WorkRow({ paneId, part, stateKey, live, waiting, last, expandRow
       {running && <>{" "}<span className="work-row-running">{t("Running…")}<span className="work-row-dot" aria-hidden="true" /></span></>}
       {stopped && <>{" "}<span className="work-row-stopped">{t("stopped")}</span></>}
     </button>
-    {open && <div className="work-row-detail"><ToolCardHead name={part.name} state={cardState} server={server} /><ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{output.length > 0 && <section className="chat-tool-output"><h4>{t(part.error ? "Error" : "Output")}</h4><pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}`}>{linkFilePaths(output, openFile)}</pre>
+    {open && <div className="work-row-detail"><ToolCardHead name={part.name} state={cardState} server={server} /><ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{(body.length > 0 || tail !== null || stop !== null || (bash !== null && bash.exit !== null)) && <section className="chat-tool-output">
+      {stop === null ? heading : <div className="chat-tool-output-head">{heading}{stop}</div>}
+      {tail !== null ? <ToolTail lines={tail} /> : body.length > 0 && <pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}`}>{linkFilePaths(body, openFile)}</pre>}
+      {bash !== null && bash.exit !== null && <p className="chat-tool-exit">{t("exit {code}", { code: bash.exit })}</p>}
       {part.output_ref !== undefined && whole.text === null && <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
         {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}
       </button>}</section>}</div>}
@@ -970,7 +988,7 @@ function TerminalFallback({ paneId, visible }: { paneId: string; visible: boolea
 }
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, onRewindInTerminal, piNative = null }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, onRewindInTerminal, piNative = null, onPiAbort }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -1826,7 +1844,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   </>;
   const jump = newMessages ? <button type="button" className="btn chat-new-messages chat-virtual-jump" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>
     : away && <button type="button" className="btn chat-new-messages chat-virtual-jump is-icon" aria-label={t("Jump to latest")} title={t("Jump to latest")} onClick={scrollToBottom}><ArrowDown aria-hidden="true" /></button>;
-  return <ChatPaneContext.Provider value={paneId}><ChatHistoryContext.Provider value={historyId ?? ""}><ImageViewerContext.Provider value={openViewer}>
+  // what an opened tool card reads of the pane's live Pi: the tails of its running calls, and the Stop
+  const piToolCard = useMemo<PiToolCard>(() => ({ tails: piNative?.toolTails ?? null, abort: onPiAbort ?? null }), [piNative?.toolTails, onPiAbort]);
+  return <ChatPaneContext.Provider value={paneId}><PiToolCardContext.Provider value={piToolCard}><ChatHistoryContext.Provider value={historyId ?? ""}><ImageViewerContext.Provider value={openViewer}>
     {/* a reader away from the end has not seen the answer a finish lands there: presented only at the end */}
     <div className="chat-frame" data-pane-content={active && visible && !covered && connected && !ended && loaded && error === null && !away && !newMessages
       && endPresentation?.state === state && endPresentation.key === presentationKey
@@ -1881,5 +1901,5 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       onPendingAnswerDone?.(paneId, prompt.id);
     }} />, promptDock)}
   {viewer !== null && <ImageLightbox images={viewer.images} index={viewer.index} onClose={closeViewer} />}
-  </ImageViewerContext.Provider></ChatHistoryContext.Provider></ChatPaneContext.Provider>;
+  </ImageViewerContext.Provider></ChatHistoryContext.Provider></PiToolCardContext.Provider></ChatPaneContext.Provider>;
 });

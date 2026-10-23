@@ -3538,6 +3538,8 @@ export function PaneTerminal({
             onOutcomes={onChatOutcomes}
             interactive={!observing && role === "interact"}
             onRewindInTerminal={onOpenTerminal ? rewindInTerminal : undefined}
+            // an opened bash card's Stop, while pi still runs that call
+            onPiAbort={nativePi ? () => { void piRpc({ type: "abort" }).catch(() => undefined); } : undefined}
           />
           </RenderBoundary>
         )}

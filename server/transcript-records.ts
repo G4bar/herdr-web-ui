@@ -373,7 +373,7 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
             };
             turn.parts.push(part);
             // the transcript holds no result for the call yet: only a result entry can clear this
-            if (typeof b.id === "string") { part.result_missing = true; pending.set(b.id, part); }
+            if (typeof b.id === "string") { part.result_missing = true; part.tool_call_id = b.id; pending.set(b.id, part); }
           }
           // unsupported transcript parts are intentionally ignored
         }

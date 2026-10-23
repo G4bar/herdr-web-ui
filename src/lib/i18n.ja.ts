@@ -1097,6 +1097,7 @@ export const JA: Record<string, string> = {
   "failed": "失敗",
   "stopped": "停止",
   "Stopped": "停止",
+  "exit {code}": "終了コード {code}",
   "Error": "エラー",
   "{n} failed": "失敗 {n} 件",
   "Loading conversation…": "会話を読み込んでいます…",

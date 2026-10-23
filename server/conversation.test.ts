@@ -1047,7 +1047,7 @@ describe("parseOmpTranscript", () => {
       { role: "assistant", ts: "2026-09-20T08:39:02.000Z", end_ts: "2026-09-20T08:39:05.000Z", parts: [
         { kind: "thinking", text: "internal reasoning stays private" },
         { kind: "thinking", text: "alternate thinking field" },
-        { kind: "tool", name: "bash", summary: "Checking ports", input: expect.stringContaining("ss -tlnp"), output: "LISTEN 0 512 100.123.228.51:7317" },
+        { kind: "tool", name: "bash", summary: "Checking ports", input: expect.stringContaining("ss -tlnp"), output: "LISTEN 0 512 100.123.228.51:7317", tool_call_id: "call_1" },
         { kind: "text", text: "http://100.123.228.51:7317" },
       ] },
     ]);
