@@ -10,7 +10,7 @@
  * only ever hides a side branch. The row the conversation is on carries "you are here" and the
  * accent rail (DS §5.4); a fork needs Pi idle, so the keys wait while a turn runs.
  */
-import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
 import { ChevronDown, ChevronRight, Tag, X } from "lucide-react";
 
@@ -44,8 +44,8 @@ const PLAIN_ID = /^[\w-]{1,80}$/u;
 
 /**
  * Rows drawn at once. The tree is walked whole — that is one pass over the file — but a session of
- * thousands of entries cannot be laid out in one paint, so the list is a window around the selected
- * row and `Show more` widens it (DS §4.9: virtualised when long).
+ * thousands of entries cannot be laid out in one paint, so the list is a window the selection walks
+ * and `Show more` widens either end (DS §4.9: virtualised when long).
  */
 const ROW_LIMIT = 200;
 
@@ -75,7 +75,9 @@ export function SessionTree({ paneId, machineId, streaming, onFork, onClose }: S
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const [times, setTimes] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
-  const [reach, setReach] = useState(ROW_LIMIT);
+  /** the first row drawn, and how many rows one window holds: the list only moves with the selection */
+  const [windowStart, setWindowStart] = useState(0);
+  const [windowSize, setWindowSize] = useState(ROW_LIMIT);
   const [forking, setForking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -95,16 +97,25 @@ export function SessionTree({ paneId, machineId, streaming, onFork, onClose }: S
 
   const rows = useMemo(() => piTreeRows(read.answer, { filter, query, folded }), [read.answer, filter, query, folded]);
   const selectedRow = rows.find((row) => row.id === selected) ?? null;
-  // the window of rows on the page: it holds the selection, so a key press never acts on a row that is not drawn
   const selectedAt = rows.findIndex((row) => row.id === selected);
-  const shownCount = Math.min(rows.length, reach);
-  const start = selectedAt < 0
-    ? Math.max(0, rows.length - shownCount)
-    : Math.min(Math.max(0, selectedAt - shownCount + 1), rows.length - shownCount);
-  const shown = rows.slice(start, start + shownCount);
+  // the window of rows on the page moves only when the selection walks out of it: a press on a row
+  // already drawn leaves the list still, so a double click cannot land on a row it did not start on
+  const maxStart = Math.max(0, rows.length - windowSize);
+  const follow = selectedAt < 0 ? Math.min(windowStart, maxStart)
+    : selectedAt < windowStart ? selectedAt
+    : selectedAt >= windowStart + windowSize ? selectedAt - windowSize + 1
+    : windowStart;
+  const start = Math.max(0, Math.min(follow, maxStart));
+  useLayoutEffect(() => { if (start !== windowStart) setWindowStart(start); }, [start, windowStart]);
+  const shown = rows.slice(start, start + windowSize);
   const hiddenAbove = start;
   const hiddenBelow = rows.length - start - shown.length;
-  const showMore = useCallback(() => setReach((value) => value + ROW_LIMIT), []);
+  /** Show more above keeps the rows drawn and adds the ones above them; below moves the window's end. */
+  const moreAbove = useCallback(() => {
+    setWindowStart((value) => Math.max(0, value - ROW_LIMIT));
+    setWindowSize((value) => value + ROW_LIMIT);
+  }, []);
+  const moreBelow = useCallback(() => setWindowSize((value) => value + ROW_LIMIT), []);
 
   // the newest message the user sent on the path the conversation is on: where `/fork` and a first
   // Enter land, and the only kind of row Pi forks from
@@ -180,18 +191,20 @@ export function SessionTree({ paneId, machineId, streaming, onFork, onClose }: S
     });
   };
 
-  /** Ctrl/Alt+←/→: fold the segment, else walk to its parent, or unfold and step into it. */
+  /** Ctrl/Alt+←/→: fold the segment, else walk to the row it hangs under, or unfold and step into it. */
   const step = (row: PiTreeRow, out: boolean): void => {
     const at = rows.findIndex((candidate) => candidate.id === row.id);
     if (out) {
       if (row.foldable && !row.folded) { turnFold(row); return; }
-      const parent = rows.slice(0, at).reverse().find((candidate) => candidate.depth < row.depth);
+      // the row it hangs under in this view, not the nearest row drawn one column out: a branch's
+      // continuation sits on its parent's column, so depth cannot name its parent
+      const parent = rows.find((candidate) => candidate.id === row.parentId);
       if (parent !== undefined) setSelected(parent.id);
       return;
     }
     if (row.foldable && row.folded) { turnFold(row); return; }
     const child = rows[at + 1];
-    if (child !== undefined && child.depth > row.depth) setSelected(child.id);
+    if (child !== undefined && child.parentId === row.id) setSelected(child.id);
   };
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
@@ -269,7 +282,7 @@ export function SessionTree({ paneId, machineId, streaming, onFork, onClose }: S
           </div>}
           {read.answer !== null && rows.length === 0 && <p className="pi-tree-empty">{query.trim() === "" ? t("Nothing to branch from yet.") : t("No entries match")}</p>}
           {rows.length > 0 && <>
-            {hiddenAbove > 0 && <button type="button" className="pi-tree-load" onClick={showMore}>{t("Show {count} more", { count: hiddenAbove })}</button>}
+            {hiddenAbove > 0 && <button type="button" className="pi-tree-load" onClick={moreAbove}>{t("Show {count} more", { count: hiddenAbove })}</button>}
             <div ref={listRef} className="pi-tree-list" role="tree" aria-label={t("Session tree")} tabIndex={0}
               aria-activedescendant={selected === null ? undefined : `${base}-row-${selected}`} aria-busy={forking}>
               {shown.map((row) => {
@@ -296,7 +309,7 @@ export function SessionTree({ paneId, machineId, streaming, onFork, onClose }: S
                 </div>;
               })}
             </div>
-            {hiddenBelow > 0 && <button type="button" className="pi-tree-load" onClick={showMore}>{t("Show {count} more", { count: hiddenBelow })}</button>}
+            {hiddenBelow > 0 && <button type="button" className="pi-tree-load" onClick={moreBelow}>{t("Show {count} more", { count: hiddenBelow })}</button>}
           </>}
         </div>
         <footer className="modal-footer pi-tree-footer">

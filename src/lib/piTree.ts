@@ -83,6 +83,8 @@ export type PiTreeRole = "user" | "assistant" | "tool" | "other";
 /** One line of the tree, already flat: the component draws it and nothing else. */
 export interface PiTreeRow {
   id: string;
+  /** the row it hangs under in this view (its nearest visible ancestor), for the tree's own keys */
+  parentId: string | null;
   /** the entry type pi recorded (`message`, `compaction`, `label`, …): a row's own words are the component's */
   kind: string;
   role: PiTreeRole;
@@ -267,6 +269,7 @@ export function piTreeRows(answer: PiTreeAnswer | null | undefined, options: PiT
     const hidden = isFolded ? descendantCount(children, visibleChildren) : 0;
     rows.push({
       id: entry.id,
+      parentId: parent,
       kind: entry.type ?? "message",
       role,
       text,

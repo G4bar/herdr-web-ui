@@ -51,9 +51,9 @@ describe("piTreeRows", () => {
 
   it("names each row's role, its own words and how deep it sits", () => {
     const rows = piTreeRows(answer());
-    expect(rows[0]).toMatchObject({ role: "user", text: "Add a retry to fetchData", depth: 0, forking: true, ts: "2026-10-01T10:02:00.000Z" });
+    expect(rows[0]).toMatchObject({ role: "user", text: "Add a retry to fetchData", depth: 0, forking: true, ts: "2026-10-01T10:02:00.000Z", parentId: null });
     // u1's answer is a plain continuation: pi indents where the row forks, not once per entry
-    expect(rows[1]).toMatchObject({ role: "assistant", depth: 0 });
+    expect(rows[1]).toMatchObject({ role: "assistant", depth: 0, parentId: "u1" });
     expect(rows[2]).toMatchObject({ id: "u2", label: "jitter", labelTimestamp: "2026-10-01T10:06:00.000Z", depth: 1 });
     // a message whose content is a plain string reads the same way
     expect(rows[4]).toMatchObject({ id: "u3", text: "make it configurable" });
@@ -107,8 +107,8 @@ describe("piTreeRows", () => {
     };
     expect(piTreeRows(withTool, { filter: "no-tools" }).map((row) => row.id)).toEqual(["u1", "a1"]);
     const toolRow = piTreeRows(withTool, { filter: "all" }).find((row) => row.id === "t1");
-    // no row forks here, so the whole exchange stays on one column
-    expect(toolRow).toMatchObject({ role: "tool", text: "bash", depth: 0 });
+    // no row forks here, so the whole exchange stays on one column: its parent is still the row above
+    expect(toolRow).toMatchObject({ role: "tool", text: "bash", depth: 0, parentId: "a1" });
   });
 
   it("keeps only the rows every word of the query appears in", () => {
@@ -156,6 +156,8 @@ describe("piTreeRows", () => {
     expect(rows.every((row) => row.guides.length === 0)).toBe(true);
     // the leaf is last, and only it is where the conversation is
     expect(rows.at(-1)).toMatchObject({ id: "e4999", current: true, active: true, depth: 0 });
+    // a continuation hangs under the row above it even where no column tells them apart
+    expect(rows[1]?.parentId).toBe("e0");
   });
 
   it("indents once where a long chain forks, and not again along either branch", () => {

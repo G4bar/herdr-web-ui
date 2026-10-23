@@ -136,7 +136,11 @@ const words = (renderer: TestRenderer.ReactTestRenderer): string[] =>
 const items = (renderer: TestRenderer.ReactTestRenderer) => renderer.root.findAllByProps({ role: "treeitem" });
 /** the visible rows as `id` = the tree's own order, read off the ids the tree gives them */
 const rowIds = (renderer: TestRenderer.ReactTestRenderer): string[] => items(renderer).map((node) => String(node.props.id).split("-row-")[1] ?? "");
+const selectedId = (renderer: TestRenderer.ReactTestRenderer): string | undefined =>
+  items(renderer).find((node) => node.props["aria-selected"] === true)?.props.id.split("-row-")[1];
 const press = async (node: { props: { onClick?: (event?: unknown) => void } }) => { await act(async () => { node.props.onClick?.({ stopPropagation() {} }); }); };
+/** a press on a row: the tree takes the pointer's focus away from the list, so it also prevents default */
+const pressRow = async (node: { props: { onClick?: (event?: unknown) => void } }) => { await act(async () => { node.props.onClick?.({ preventDefault() {}, stopPropagation() {} }); }); };
 const button = (renderer: TestRenderer.ReactTestRenderer, label: string) =>
   renderer.root.findAll((node) => node.type === "button" && (node.props["aria-label"] === label || (node.children as unknown[]).includes(label)))[0]!;
 const key = async (renderer: TestRenderer.ReactTestRenderer, press: Partial<Record<string, boolean | string>>) => {
@@ -245,6 +249,18 @@ describe("the session tree", () => {
     expect(items(renderer).find((node) => node.props["aria-selected"] === true)?.props.id).toContain("-a1");
   });
 
+  it("walks to the row a branch hangs under, and into a continuation, with Ctrl+←/→", async () => {
+    const renderer = await mount();
+    // a1 is a continuation of u1: it sits on u1's column, but u1 is still the row it hangs under
+    for (let at = 0; at < 3; at += 1) await key(renderer, { key: "ArrowUp" });
+    expect(selectedId(renderer)).toBe("a1");
+    await key(renderer, { key: "ArrowLeft", ctrlKey: true });
+    expect(selectedId(renderer)).toBe("u1");
+    // u1 is expanded and holds one child, drawn right under it: Ctrl+→ steps into that child
+    await key(renderer, { key: "ArrowRight", ctrlKey: true });
+    expect(selectedId(renderer)).toBe("a1");
+  });
+
   it("shows each recorded time only when Shift+T asks for it", async () => {
     const renderer = await mount();
     expect(renderer.root.findAllByProps({ className: "pi-tree-time" })).toEqual([]);
@@ -266,15 +282,32 @@ describe("the session tree", () => {
     expect(renderer.root.findByProps({ role: "tree" }).props["aria-busy"]).toBe(false);
   });
 
-  it("draws a window of a long tree, and widens it with Show more", async () => {
+  it("draws a window of a long tree, holds it still while the selection stays in it, and widens it above", async () => {
     tree = longTree(300);
     const renderer = await mount();
     // the window holds the selected row and says how many rows are left above it
     expect(items(renderer)).toHaveLength(200);
     expect(rowIds(renderer)[0]).toBe("e100");
+    // a press on a row already drawn leaves the window where it was: it used to re-anchor and jump
+    await pressRow(items(renderer)[50]!);
+    expect(rowIds(renderer)[0]).toBe("e100");
+    expect(rowIds(renderer).at(-1)).toBe("e299");
+    // Show more above keeps the rows drawn and adds the ones above them
     await press(button(renderer, "Show 100 more"));
     expect(items(renderer)).toHaveLength(300);
     expect(rowIds(renderer)[0]).toBe("e0");
+    expect(rowIds(renderer).at(-1)).toBe("e299");
+  });
+
+  it("widens the window below when the selection has walked out of its top", async () => {
+    tree = longTree(300);
+    const renderer = await mount();
+    // the window ends at the leaf, so walking 200 rows up leaves exactly one row below it
+    for (let at = 0; at < 200; at += 1) await key(renderer, { key: "ArrowUp" });
+    expect(selectedId(renderer)).toBe("e99");
+    expect(rowIds(renderer).at(-1)).toBe("e298");
+    await press(button(renderer, "Show 1 more"));
+    expect(rowIds(renderer).at(-1)).toBe("e299");
   });
 
   it("says a session has nothing to branch from yet, and reads again after a refusal", async () => {
