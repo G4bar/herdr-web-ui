@@ -1670,4 +1670,10 @@ export const JA: Record<string, string> = {
   "Clone session": "セッションを複製",
   "Fork was cancelled": "分岐はキャンセルされました",
   "Clone was cancelled": "複製はキャンセルされました",
+  // the Herdsman roster (DS §4.8)
+  "Asks you": "あなたに質問",
+  "Starting": "起動中",
+  "Not responding": "応答なし",
+  "+{n} deeper": "さらに {n} 件",
+  "No agents yet. Pi starts them when it delegates work.": "まだエージェントはいません。Pi が作業を委任すると起動します。",
 };

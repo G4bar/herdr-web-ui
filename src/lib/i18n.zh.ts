@@ -1672,4 +1672,10 @@ export const ZH: Record<string, string> = {
   "Clone session": "克隆会话",
   "Fork was cancelled": "分叉已取消",
   "Clone was cancelled": "克隆已取消",
+  // the Herdsman roster (DS §4.8)
+  "Asks you": "向你提问",
+  "Starting": "启动中",
+  "Not responding": "无响应",
+  "+{n} deeper": "更深 {n} 个",
+  "No agents yet. Pi starts them when it delegates work.": "还没有代理。Pi 委派工作时会启动它们。",
 };

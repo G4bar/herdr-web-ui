@@ -1668,4 +1668,10 @@ export const KO: Record<string, string> = {
   "Clone session": "세션 복제",
   "Fork was cancelled": "분기가 취소되었습니다",
   "Clone was cancelled": "복제가 취소되었습니다",
+  // the Herdsman roster (DS §4.8)
+  "Asks you": "당신에게 질문",
+  "Starting": "시작 중",
+  "Not responding": "응답 없음",
+  "+{n} deeper": "{n}개 더 깊이",
+  "No agents yet. Pi starts them when it delegates work.": "아직 에이전트가 없습니다. Pi가 작업을 위임하면 시작됩니다.",
 };

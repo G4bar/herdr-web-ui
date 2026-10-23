@@ -1,0 +1,136 @@
+/* The Herdsman roster inside the composer's popover (DS §4.8): section headers that fold, then one
+   row per agent, indented by its depth. Colors and sizes are tokens only. */
+.hm-tree {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hm-section {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: var(--space-1) var(--space-2);
+  background: transparent;
+  border: 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.hm-section svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+}
+
+.hm-section:hover {
+  color: var(--text);
+}
+
+.hm-section-count {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.hm-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: var(--row-h);
+  padding: var(--space-1) var(--space-2) var(--space-1) calc(var(--space-2) + var(--space-4) * var(--hm-depth));
+  background: transparent;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* the guide line under a deeper row's parent */
+.hm-row[data-hm-depth="1"]::before,
+.hm-row[data-hm-depth="2"]::before,
+.hm-row[data-hm-depth="3"]::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--space-2) + var(--space-4) * (var(--hm-depth) - 1));
+  border-left: var(--hairline) solid var(--border);
+}
+
+.hm-row:hover {
+  background: var(--bg-hover);
+}
+
+.hm-row-icon {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  color: var(--text-dim);
+}
+
+.hm-row-icon.is-stale {
+  color: var(--text-dim);
+}
+
+/* the one state that moves: a working agent's dot breathes, as the repo's other running dots do */
+.hm-row-icon.is-running,
+.hm-row-icon.is-starting {
+  color: var(--status-working);
+  animation: pulse var(--dur-pulse) var(--ease-pulse) infinite;
+}
+
+.hm-row-icon.is-asks {
+  color: var(--status-blocked);
+  fill: currentColor;
+}
+
+.hm-row-icon.is-finished {
+  color: var(--status-done);
+}
+
+.hm-row-icon.is-failed {
+  color: var(--status-blocked);
+}
+
+.hm-row-label {
+  flex: none;
+  max-width: 12rem;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-family: var(--font-mono);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-row-meta {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hm-row-time {
+  flex: none;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  font-variant-numeric: tabular-nums;
+}
+
+.hm-deeper {
+  flex: none;
+  color: var(--text-dim);
+  font-size: var(--fs-2xs);
+}
