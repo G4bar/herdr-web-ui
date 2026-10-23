@@ -1524,6 +1524,8 @@ export const JA: Record<string, string> = {
   "Restore to message box": "入力欄に戻す",
   "Couldn't take Pi's queue. Try again.": "Pi のキューを取得できませんでした。再試行してください。",
   "That row already left Pi's queue. The rest went back.": "その行はすでに Pi のキューから外れています。残りは戻しました。",
+  "Stopped. {n} queued message is back in the message box.": "停止しました。待機中のメッセージ {n} 件を入力欄に戻しました。",
+  "Stopped. {n} queued messages are back in the message box.": "停止しました。待機中のメッセージ {n} 件を入力欄に戻しました。",
   // a native Pi pane's stats popover (DS §4.5)
   "Context": "コンテキスト",
   "Context: {percent}% used": "コンテキスト: {percent}% 使用中",

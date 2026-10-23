@@ -2,6 +2,7 @@ import { useCallback, useEffect, useSyncExternalStore } from "react";
 import type { PiNativeState } from "../../shared/protocol.ts";
 import { paneStorageId } from "../../shared/machines.ts";
 import { ApiError, handBackPiPane, reconnectPiPane, takeOverPiPane, type PiRpcCommand, type PiTakeover, type PiTrustRequest } from "./api.ts";
+import type { Translate } from "./i18n.ts";
 import { useMachineApi, useMachineId } from "./machineContext.tsx";
 import { useMachineSessions } from "./machineSessionContext.tsx";
 
@@ -145,6 +146,11 @@ export function queuedTexts(queue: PiQueue): string[] {
 /** The queued messages a native Stop took back out of Pi's queue (`clear_queue`), in delivery order. */
 export function clearedQueue(cleared: unknown): string[] {
   return queuedTexts(asQueue(cleared));
+}
+
+/** The quiet transcript line after a Stop took `count` queued messages back into the box (DS §4.4). */
+export function stopReturnedNote(t: Translate, count: number): string {
+  return t(count === 1 ? "Stopped. {n} queued message is back in the message box." : "Stopped. {n} queued messages are back in the message box.", { n: count });
 }
 
 /** Pi's queue taken out whole (`clear_queue`): its answer, not the pushed state, is what goes back in. */

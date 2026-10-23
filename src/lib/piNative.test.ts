@@ -1,6 +1,7 @@
 import { afterEach, expect, it } from "bun:test";
 import { initialPiNativeState } from "../../server/pi-rpc.ts";
-import { clearedQueue, clearPiQueue, queueRows, queuedTexts, removeQueued, requeueCommands, PiNativeLanes, piNativeLanes, takeOverPi, handBackPi } from "./piNative.ts";
+import { clearedQueue, clearPiQueue, queueRows, queuedTexts, removeQueued, requeueCommands, stopReturnedNote, PiNativeLanes, piNativeLanes, takeOverPi, handBackPi } from "./piNative.ts";
+import { translate, type Translate } from "./i18n.ts";
 
 const native = (extra: Record<string, unknown> = {}) => ({ ...initialPiNativeState(), mode: "native" as const, ...extra });
 const realFetch = globalThis.fetch;
@@ -76,6 +77,12 @@ it("hands a native Stop's queue back in delivery order", () => {
   expect(clearedQueue({ steering: ["stop this"], followUp: ["then this", ""] })).toEqual(["stop this", "then this"]);
   expect(clearedQueue({})).toEqual([]);
   expect(clearedQueue(null)).toEqual([]);
+});
+
+it("says how many queued messages a Stop took back, one message or several", () => {
+  const en: Translate = (key, vars) => translate("en", key, vars);
+  expect(stopReturnedNote(en, 1)).toBe("Stopped. 1 queued message is back in the message box.");
+  expect(stopReturnedNote(en, 2)).toBe("Stopped. 2 queued messages are back in the message box.");
 });
 
 it("takes Pi's queue out whole for Alt+Up, and reads a refused clear_queue as nothing held", async () => {

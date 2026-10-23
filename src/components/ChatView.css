@@ -1857,6 +1857,10 @@
   font-size: var(--fs-xs);
 }
 
+/* a native Stop's returned queue: the run's one quiet line at the transcript's end, in the chip's
+   register and on the message's side (DS §4.4) */
+.chat-stop-note { margin: 0; }
+
 .chat-outcome-row {
   display: flex;
   flex-wrap: wrap;

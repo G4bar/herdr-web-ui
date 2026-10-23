@@ -2938,6 +2938,10 @@ export function PaneTerminal({
   // two values are read out here so the Stop stays one callback across renders (lib/piNative.ts)
   const nativePi = piNative.state !== null;
   const piRpc = piNative.piRpc;
+  // the quiet line a Stop's returned queue earns (DS §4.4), ended by the next turn or another pane
+  const [piStopReturned, setPiStopReturned] = useState<number | null>(null);
+  useEffect(() => { if (piNative.state?.isStreaming === true) setPiStopReturned(null); }, [piNative.state?.isStreaming]);
+  useEffect(() => { setPiStopReturned(null); }, [paneId]);
   const abortTurn = useCallback((): void | Promise<readonly string[]> => {
     // A pane the chat drives over RPC has no key to press: Stopping is Pi's own queue cleared, then the
     // turn aborted, and what the queue held goes back to the box (DS §4.4)
@@ -2945,7 +2949,10 @@ export function PaneTerminal({
       return (async (): Promise<readonly string[]> => {
         const cleared = await piRpc({ type: "clear_queue" }).catch(() => null);
         await piRpc({ type: "abort" }).catch((error: unknown) => setInputError(error instanceof Error ? error.message : String(error)));
-        return clearedQueue(cleared);
+        const texts = clearedQueue(cleared);
+        // the chat says how many went back (DS §4.4); nothing to say when the queue was empty
+        setPiStopReturned(texts.length > 0 ? texts.length : null);
+        return texts;
       })();
     }
     const term = termRef.current;
@@ -3550,6 +3557,7 @@ export function PaneTerminal({
             onRewindInTerminal={onOpenTerminal ? rewindInTerminal : undefined}
             // an opened bash card's Stop, while pi still runs that call
             onPiAbort={nativePi ? () => { void piRpc({ type: "abort" }).catch(() => undefined); } : undefined}
+            stoppedQueue={piStopReturned}
           />
           </RenderBoundary>
         )}

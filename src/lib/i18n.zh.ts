@@ -1526,6 +1526,8 @@ export const ZH: Record<string, string> = {
   "Restore to message box": "恢复到输入框",
   "Couldn't take Pi's queue. Try again.": "无法读取 Pi 的队列。请重试。",
   "That row already left Pi's queue. The rest went back.": "该行已离开 Pi 的队列。其余行已放回。",
+  "Stopped. {n} queued message is back in the message box.": "已停止。{n} 条待发消息已放回输入框。",
+  "Stopped. {n} queued messages are back in the message box.": "已停止。{n} 条待发消息已放回输入框。",
   // a native Pi pane's stats popover (DS §4.5)
   "Context": "上下文",
   "Context: {percent}% used": "上下文：已使用 {percent}%",

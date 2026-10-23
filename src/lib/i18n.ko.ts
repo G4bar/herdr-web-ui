@@ -1522,6 +1522,8 @@ export const KO: Record<string, string> = {
   "Restore to message box": "입력란으로 복원",
   "Couldn't take Pi's queue. Try again.": "Pi의 대기열을 가져오지 못했습니다. 다시 시도하세요.",
   "That row already left Pi's queue. The rest went back.": "그 행은 이미 Pi 대기열에서 빠졌습니다. 나머지는 다시 넣었습니다.",
+  "Stopped. {n} queued message is back in the message box.": "중지했습니다. 대기 중인 메시지 {n}개를 입력창으로 되돌렸습니다.",
+  "Stopped. {n} queued messages are back in the message box.": "중지했습니다. 대기 중인 메시지 {n}개를 입력창으로 되돌렸습니다.",
   // a native Pi pane's stats popover (DS §4.5)
   "Context": "컨텍스트",
   "Context: {percent}% used": "컨텍스트: {percent}% 사용",
