@@ -49,6 +49,7 @@ import {
 } from "../lib/compose.ts";
 import { compactCommandText } from "../lib/compactContext.ts";
 import { piSlashSurface, type PiSlashSurface } from "../lib/piSlashCommands.ts";
+import { requestScopedModels } from "../lib/piScopedModels.ts";
 import { openSessionContext } from "../lib/sessionContext.ts";
 import { requestSettingsPage } from "../lib/paletteSettings.ts";
 import { composerStrip } from "../lib/composerStrip.ts";
@@ -445,6 +446,8 @@ export function Composer({
         }, refused).catch(refused);
         return;
       case "hotkeys": requestSettingsPage("shortcuts"); onOpenSettings?.(); return;
+      case "settings": requestSettingsPage("pi"); onOpenSettings?.(); return;
+      case "scopedModels": requestScopedModels(); requestSettingsPage("pi"); onOpenSettings?.(); return;
       case "context": openSessionContext(); return;
       case "terminal":
         // DS §4.12: `/login` and `/logout` are Pi's own TUI, and their text left the box: the note

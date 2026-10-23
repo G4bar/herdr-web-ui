@@ -6,6 +6,7 @@ import TestRenderer, { act } from "react-test-renderer";
 import { initialPiNativeState } from "../../server/pi-rpc.ts";
 import type { PiNativeState } from "../../shared/protocol.ts";
 import { composerDrafts } from "../lib/composerDraft.ts";
+import { takeScopedModelsRequest } from "../lib/piScopedModels.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 import type { PiRpcCommand } from "../lib/api.ts";
 
@@ -142,12 +143,30 @@ describe("Pi's slash commands in the message box", () => {
     await session.unmount();
   });
 
-  it("opens Settings from `/hotkeys`", async () => {
+  it("opens Settings from `/hotkeys`, and its Pi page from `/settings`", async () => {
     const composer = await mount({ draft: "/hotkeys" });
 
     await composer.press("Enter");
     expect(composer.settingsOpened()).toBe(1);
     expect(composer.sent).toEqual([]);
+    await composer.unmount();
+
+    const pi = await mount({ draft: "/settings" });
+    await pi.press("Enter");
+    expect(pi.settingsOpened()).toBe(1);
+    expect(pi.sent).toEqual([]);
+    await pi.unmount();
+  });
+
+  it("opens the Scoped models dialog from `/scoped-models`, through Settings → Pi", async () => {
+    const composer = await mount({ draft: "/scoped-models" });
+
+    await composer.press("Enter");
+    expect(composer.settingsOpened()).toBe(1);
+    expect(composer.sent).toEqual([]);
+    // the request waits for the page that holds the dialog, and is the one it opens on
+    expect(takeScopedModelsRequest()).toBe(true);
+    expect(takeScopedModelsRequest()).toBe(false);
     await composer.unmount();
   });
 

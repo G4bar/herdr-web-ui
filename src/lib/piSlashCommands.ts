@@ -19,6 +19,8 @@ export type PiSlashSurface =
   | { kind: "export" }
   | { kind: "copy" }
   | { kind: "hotkeys" }
+  | { kind: "settings" }
+  | { kind: "scopedModels" }
   | { kind: "context" }
   // an OAuth dance needs Pi's own TUI, so these open the terminal (DS §4.12)
   | { kind: "terminal"; command: string };
@@ -39,6 +41,9 @@ const SURFACES: Readonly<Record<string, SurfaceFor>> = {
   export: bare({ kind: "export" }),
   copy: bare({ kind: "copy" }),
   hotkeys: bare({ kind: "hotkeys" }),
+  // Settings → Pi, and the Scoped models dialog it holds (DS §4.12)
+  settings: bare({ kind: "settings" }),
+  "scoped-models": bare({ kind: "scopedModels" }),
   context: bare({ kind: "context" }),
   login: bare({ kind: "terminal", command: "/login" }),
   logout: bare({ kind: "terminal", command: "/logout" }),

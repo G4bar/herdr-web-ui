@@ -1,0 +1,130 @@
+/* Scoped models (DS §4.11): a `.modal` card of checkbox rows, grouped by provider as the picker
+   groups its list. The provider's own row turns its whole group, and a checked model carries the
+   arrows that order Pi's cycle. A finger gets a row's worth of --touch-target (DS §7). */
+
+.scoped-dialog {
+  width: min(100%, 34rem);
+}
+
+.scoped-note {
+  margin: 0 0 var(--space-2);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.scoped-list,
+.scoped-rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.scoped-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.scoped-group {
+  display: flex;
+  flex-direction: column;
+}
+
+/* the provider's name as its group's toggle: the same micro heading the picker draws */
+.scoped-provider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.scoped-provider .menu-heading {
+  padding: 0;
+}
+
+.scoped-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  background: var(--bg-input);
+  border: var(--hairline) solid var(--border-strong);
+  border-radius: var(--radius-sm);
+}
+
+.scoped-box svg {
+  width: 10px;
+  height: 10px;
+  color: var(--accent);
+}
+
+.scoped-rows {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding-left: var(--space-4);
+}
+
+.scoped-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--row-h);
+  padding-right: var(--space-1);
+  border-radius: var(--radius-md);
+}
+
+.scoped-row input {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.scoped-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+  font-size: var(--fs-sm);
+}
+
+/* the arrows are the pointer's way to the Alt+↑/↓ keys: --pointer-target on a fine pointer */
+.scoped-move {
+  width: var(--pointer-target);
+  height: var(--pointer-target);
+}
+
+.scoped-move svg {
+  width: 14px;
+  height: 14px;
+}
+
+/* a write Pi refused: the dialog stays as it was, with the server's own sentence beside the buttons */
+.scoped-error {
+  flex: 1 1 auto;
+  margin: 0;
+  color: var(--danger-text);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  .scoped-row {
+    min-height: var(--touch-target);
+  }
+
+  .scoped-move {
+    width: var(--touch-target);
+    height: var(--touch-target);
+  }
+}

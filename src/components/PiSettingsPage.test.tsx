@@ -1,10 +1,15 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, mock } from "bun:test";
 import { createElement } from "react";
+import * as reactDom from "react-dom";
 import TestRenderer, { act } from "react-test-renderer";
 
 import type { PiNativeState } from "../../shared/protocol.ts";
 import * as actualApi from "../lib/api.ts";
+import { requestScopedModels } from "../lib/piScopedModels.ts";
 import { SettingsProvider } from "../lib/settings.ts";
+
+// the Scoped models dialog is a portal so a transformed page cannot clip it; the test renders it where it is
+mock.module("react-dom", () => ({ ...reactDom, createPortal: (node: unknown) => node }));
 
 /** every command the page sent, and every file it wrote: the mocks answer as the server would */
 const rpc: Record<string, unknown>[] = [];
@@ -221,13 +226,25 @@ describe("PiSettingsPage", () => {
     expect(renderer.root.findAllByProps({ role: "alert" }).map((node) => node.children.filter((child): child is string => typeof child === "string").join(""))).toEqual(["Pi refused it"]);
   });
 
-  it("opens the shortcut list and the scoped models dialog from their rows", async () => {
+  it("opens the shortcut list from its row, and the scoped models dialog from Edit…", async () => {
     let shortcuts = 0;
-    let scoped = 0;
-    const renderer = await mount({ onOpenShortcuts: () => { shortcuts += 1; }, onEditScopedModels: () => { scoped += 1; } });
+    const renderer = await mount({ onOpenShortcuts: () => { shortcuts += 1; } });
     const button = (label: string) => renderer.root.findAllByType("button").find((node) => (node.children as unknown[]).includes(label))!;
     await act(async () => { button("View").props.onClick(); });
+    expect(shortcuts).toBe(1);
+    expect(renderer.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
     await act(async () => { button("Edit…").props.onClick(); });
-    expect([shortcuts, scoped]).toEqual([1, 1]);
+    expect(renderer.root.findAllByProps({ role: "dialog" })).toHaveLength(1);
+    await act(async () => { button("Cancel").props.onClick(); });
+    expect(renderer.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
+  });
+
+  it("opens the scoped models dialog when `/scoped-models` asked for it", async () => {
+    requestScopedModels();
+    const renderer = await mount();
+    expect(renderer.root.findAllByProps({ role: "dialog" })).toHaveLength(1);
+    // the request is taken once: the next opening of the page is not steered by it
+    const again = await mount();
+    expect(again.root.findAllByProps({ role: "dialog" })).toHaveLength(0);
   });
 });

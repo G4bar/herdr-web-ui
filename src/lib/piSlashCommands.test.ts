@@ -11,6 +11,8 @@ describe("piSlashSurface", () => {
     expect(kind("/export")).toBe("export");
     expect(kind("/copy")).toBe("copy");
     expect(kind("/hotkeys")).toBe("hotkeys");
+    expect(kind("/settings")).toBe("settings");
+    expect(kind("/scoped-models")).toBe("scopedModels");
     expect(kind("/context")).toBe("context");
   });
 
@@ -24,6 +26,7 @@ describe("piSlashSurface", () => {
     expect(kind("/name")).toBeNull();
     expect(kind("/model sonnet")).toBeNull();
     expect(kind("/export /tmp/session.html")).toBeNull();
+    expect(kind("/scoped-models anthropic")).toBeNull();
   });
 
   it("is not a command: prose, a path, a second line, or a name Pi does not own", () => {

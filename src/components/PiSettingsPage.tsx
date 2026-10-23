@@ -5,13 +5,18 @@
  * are the pane's live RPC commands. A pane the terminal owns has no RPC, so its rows are drawn disabled
  * and say where they are changed instead. A control only moves once Pi or the file has answered: a
  * refusal leaves it as it was and puts the server's sentence under its label.
+ *
+ * The Scoped models dialog is this page's (DS §4.11): it holds Pi's model list and the file already,
+ * and `/scoped-models` in the message box asks for it through lib/piScopedModels.ts.
  */
 import { useEffect, useState, type ReactNode } from "react";
 
 import { ApiError, fetchPiNativeState, fetchPiSettings, savePiSettings, sendPiRpc, type PiSettingsFile } from "../lib/api.ts";
 import { useT } from "../lib/i18n.ts";
+import { takeScopedModelsRequest } from "../lib/piScopedModels.ts";
 import { useSettings } from "../lib/settings.ts";
 import { piModels, type PickerModel } from "./PiModelPicker.tsx";
+import { ScopedModelsDialog } from "./ScopedModelsDialog.tsx";
 import { THINKING_LEVELS, thinkingLevelLabel } from "./PiThinkingMenu.tsx";
 import { Segmented, SettingsGroup, SettingsRow, Toggle } from "./SettingsControls.tsx";
 
@@ -20,8 +25,6 @@ export interface PiSettingsPageProps {
   pane: { paneId: string; name: string; machineId: string } | null;
   /** Settings → Shortcuts, which holds the read-only list of Pi's keys */
   onOpenShortcuts: () => void;
-  /** the Scoped models dialog (a later phase): the row's Edit… waits for it */
-  onEditScopedModels?: (() => void) | null;
 }
 
 /** How Pi takes a message that arrives while a turn runs (`set_steering_mode`, `set_follow_up_mode`). */
@@ -58,12 +61,16 @@ const modelParts = (key: string): { provider: string; id: string } => {
   return at === -1 ? { provider: key, id: "" } : { provider: key.slice(0, at), id: key.slice(at + 1) };
 };
 
-export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = null }: PiSettingsPageProps) {
+export function PiSettingsPage({ pane, onOpenShortcuts }: PiSettingsPageProps) {
   const t = useT();
   const { settings, update } = useSettings();
   const [file, setFile] = useState<PiSettingsFile | null>(null);
   const [models, setModels] = useState<PickerModel[]>([]);
   const [session, setSession] = useState<PiSessionSettings | null>(null);
+  /** the Scoped models dialog; `/scoped-models` asked for it, and the row's Edit… opens it the same way */
+  const [editing, setEditing] = useState(() => takeScopedModelsRequest());
+  /** the scoped list was just written: the row says so until the dialog is opened again */
+  const [scopedSaved, setScopedSaved] = useState(false);
   const [readFailure, setReadFailure] = useState<string | null>(null);
   /** the terminal owns the pane's Pi: no RPC, so its rows only say where they are changed */
   const [terminal, setTerminal] = useState(false);
@@ -137,7 +144,7 @@ export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = nul
 
   /** A row's own sentence, with the reason a write it took was refused under it. The row is named by
    * its own label, which is also what the sentence says the setting is. */
-  const described = (row: string, text: string): ReactNode => <>
+  const described = (row: string, text: ReactNode): ReactNode => <>
     {text}
     {failure?.row === row && <span className="settings-error" role="alert">{failure.message}</span>}
   </>;
@@ -151,6 +158,8 @@ export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = nul
   const savedModel = typeof saved["defaultModel"] === "string" ? saved["defaultModel"] : "";
   const savedThinking = typeof saved["defaultThinkingLevel"] === "string" ? saved["defaultThinkingLevel"] : "";
   const scoped = Array.isArray(saved["enabledModels"]) ? saved["enabledModels"] : null;
+  /** what the Scoped models row says under its label: how much of Pi's list is in the cycle */
+  const scopedCount = models.length === 0 ? null : scoped === null ? t("Every model is in the cycle") : t("{scoped} of {total} in the cycle", { scoped: scoped.length, total: models.length });
   // the saved model stays an option even while Pi's list is unknown (a Terminal-mode pane has no list)
   const modelOptions = savedModel === "" ? models : models.some((model) => model.id === savedModel && model.provider === savedProvider) ? models : [...models, { provider: savedProvider, id: savedModel, name: savedModel, reasoning: false, images: false, contextWindow: null }];
   const providers = [...new Set(modelOptions.map((model) => model.provider))];
@@ -184,8 +193,11 @@ export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = nul
           {THINKING_LEVELS.map((level) => <option key={level} value={level}>{t(thinkingLevelLabel(level))}</option>)}
         </select>
       </SettingsRow>
-      <SettingsRow label={t("Scoped models")} description={models.length === 0 ? undefined : scoped === null ? t("Every model is in the cycle") : t("{scoped} of {total} in the cycle", { scoped: scoped.length, total: models.length })}>
-        <button type="button" className="btn" disabled={onEditScopedModels === null} onClick={() => onEditScopedModels?.()}>{t("Edit…")}</button>
+      <SettingsRow label={t("Scoped models")} description={scopedCount === null && !scopedSaved ? undefined : described(t("Scoped models"), <>
+        {scopedSaved && <span role="status">{t("Saved as default")} </span>}
+        {scopedCount}
+      </>)}>
+        <button type="button" className="btn" disabled={models.length === 0} onClick={() => { setScopedSaved(false); setEditing(true); }}>{t("Edit…")}</button>
       </SettingsRow>
     </SettingsGroup>
 
@@ -223,6 +235,7 @@ export function PiSettingsPage({ pane, onOpenShortcuts, onEditScopedModels = nul
         <button type="button" className="btn" onClick={onOpenShortcuts}>{t("View")}</button>
       </SettingsRow>
     </SettingsGroup>
+    {editing && <ScopedModelsDialog models={models} scoped={scoped} machineId={machineId} onSaved={(next) => { setFile(next); setScopedSaved(true); }} onClose={() => setEditing(false)} />}
   </>;
 }
 
