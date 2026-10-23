@@ -4,27 +4,34 @@ import * as reactDom from "react-dom";
 import TestRenderer, { act } from "react-test-renderer";
 
 import { ApiError, type PiRpcCommand } from "../lib/api.ts";
+import { SHEET_QUERY } from "../lib/sheets.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 
 // the menu is a portal so a transformed composer cannot clip it; the test renders it where it is
 mock.module("react-dom", () => ({ ...reactDom, createPortal: (node: unknown) => node }));
 const { PiThinkingMenu, PiPips, orderedLevels } = await import("./PiThinkingMenu.tsx");
 
-const browserGlobals = ["window", "document", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "getComputedStyle"] as const;
+const browserGlobals = ["window", "document", "HTMLElement", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "getComputedStyle"] as const;
 const savedGlobals = new Map<string, PropertyDescriptor | undefined>();
 // the menu's words go through useT, which reads the browser's languages
 const savedLanguages = Object.getOwnPropertyDescriptor(navigator, "languages");
 Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+/** a card at sheet width, for the test that opens the phone's form */
+let sheetMode = false;
 
 beforeAll(() => {
   for (const name of browserGlobals) savedGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
   const store = new Map<string, string>();
-  const media = { matches: false, media: "", addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false };
+  // only the sheet query answers true, and only where a test asked for the sheet
+  const media = (query: string) => ({ matches: sheetMode && query === SHEET_QUERY, media: query, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false });
   const localStorage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value), removeItem: (key: string) => void store.delete(key) };
   Object.defineProperty(globalThis, "localStorage", { configurable: true, value: localStorage });
   Object.defineProperty(globalThis, "window", { configurable: true, value: {
-    matchMedia: () => media, getSelection: () => null, addEventListener() {}, removeEventListener() {}, localStorage,
+    matchMedia: (query: string) => media(query), getSelection: () => null, addEventListener() {}, removeEventListener() {}, localStorage,
     innerWidth: 1280, innerHeight: 800, requestAnimationFrame: (run: () => void) => setTimeout(run, 0), cancelAnimationFrame: () => {},
+    // the sheet is a history entry (sheetHistory.ts) and keeps the address it opened on
+    history: { state: null as unknown, pushState(state: unknown) { this.state = state; }, replaceState(state: unknown) { this.state = state; }, back() {} },
+    location: { href: "http://localhost/" },
   } });
   Object.defineProperty(globalThis, "document", { configurable: true, value: {
     addEventListener() {}, removeEventListener() {}, activeElement: null, body: {}, querySelector: () => null,
@@ -32,6 +39,8 @@ beforeAll(() => {
     documentElement: { dataset: {}, style: { setProperty() {}, removeProperty() {} }, lang: "", colorScheme: "" },
   } });
   Object.defineProperty(globalThis, "getComputedStyle", { configurable: true, value: () => ({ getPropertyValue: () => "" }) });
+  // the sheet's focus trap reads document.activeElement against it
+  Object.defineProperty(globalThis, "HTMLElement", { configurable: true, value: class Element {} });
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
 });
 
@@ -45,7 +54,7 @@ afterAll(() => {
   }
 });
 
-const answers = (levels: unknown) => mock(() => Promise.resolve(levels));
+const answers = (levels: unknown) => mock((_command: PiRpcCommand) => Promise.resolve(levels));
 
 const mount = async (piRpc: (command: PiRpcCommand) => Promise<unknown>, props: Record<string, unknown> = {}) => {
   let renderer: TestRenderer.ReactTestRenderer | null = null;
@@ -133,6 +142,37 @@ describe("the thinking menu", () => {
     expect(chip(renderer).props.title).toBe("This model doesn't think");
     await open(renderer);
     expect(piRpc).not.toHaveBeenCalled();
+  });
+
+  it("runs a sheet's keys once: one arrow is one row, and Enter is one pick", async () => {
+    // the phone's form: the list holds the keys, and the sheet around it holds none, or each runs twice
+    sheetMode = true;
+    try {
+      const piRpc = answers({ levels: ["off", "high"] });
+      const renderer = await mount(piRpc);
+      await open(renderer);
+
+      const dialog = renderer.root.findByProps({ role: "dialog" });
+      expect(dialog.props.onKeyDown).toBeUndefined();
+      const menus = renderer.root.findAll((node) => typeof node.type === "string" && node.props.role === "menu");
+      expect(menus).toHaveLength(1);
+      const key = async (name: string): Promise<void> => {
+        await act(async () => { menus[0]!.props.onKeyDown({ key: name, preventDefault() {}, stopPropagation() {} }); });
+      };
+      const active = (): number => rows(renderer).findIndex((row) => row.props["data-active"] === true);
+
+      // it opens on the pane's own level, High, the top of the two offered
+      expect(active()).toBe(0);
+      await key("ArrowDown");
+      expect(active()).toBe(1);
+      await key("Enter");
+
+      const picks = piRpc.mock.calls.filter((call) => call[0].type === "set_thinking_level");
+      expect(picks).toHaveLength(1);
+      expect(picks[0]![0]).toEqual({ type: "set_thinking_level", level: "off" });
+    } finally {
+      sheetMode = false;
+    }
   });
 
   it("draws a level as five bars, lit to its height", () => {

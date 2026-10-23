@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test";
 
 import { skillSyntax } from "../../shared/skill-syntax.ts";
-import { agentDisplayLabel, composerDelivery, composerMessage, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, imageMention, insertLeadingMention, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage, pendingActionUncertain } from "./compose.ts";
+import { agentDisplayLabel, composerDelivery, composerMessage, composerPiChipsRow, composerSendShown, composerPayload, composerModelDraw, composerStatusCompact, composerStatusHint, composerStatusWord, COMPOSER_PI_CHIPS_MAX, COMPOSER_STATUS_COMPACT_BELOW, contextLeftPercent, formatTokens, imageMention, insertLeadingMention, MAX_COMPOSER_CHARS, QUEUE_READY_STATUS, rankSlashCommands, submitNote, submitNotTyped, submitRefusal, sameMessage, pendingActionUncertain } from "./compose.ts";
 import { briefDescription, COMMAND_GROUPS, commandGroup, commandsForTrigger, slashCommandReplacement, terminalCommand, typedTerminalCommand } from "./compose.ts";
 import type { SlashCommand } from "../../shared/protocol.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "./mentions.ts";
@@ -288,6 +288,17 @@ describe("composer presentation helpers", () => {
     expect(composerStatusCompact(820)).toBe(false);
     // a card that is not laid out yet has no width: it is not called narrow
     expect(composerStatusCompact(0)).toBe(false);
+  });
+
+  it("moves a Pi's chips to a row of their own by the card's width", () => {
+    // a phone's card, and the threshold itself, still keep the chips in one row over the controls
+    expect(composerPiChipsRow(374)).toBe(true);
+    expect(composerPiChipsRow(COMPOSER_PI_CHIPS_MAX)).toBe(true);
+    // one pixel wider and the controls row has room for them again
+    expect(composerPiChipsRow(COMPOSER_PI_CHIPS_MAX + 1)).toBe(false);
+    expect(composerPiChipsRow(820)).toBe(false);
+    // a card that is not laid out yet has no width: it is not called narrow
+    expect(composerPiChipsRow(0)).toBe(false);
   });
 
   it("uses one Stop or Send control and queues all agents' working-turn messages", () => {

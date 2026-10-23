@@ -217,6 +217,17 @@ export function composerStatusCompact(cardWidth: number): boolean {
   return cardWidth > 0 && cardWidth < COMPOSER_STATUS_COMPACT_BELOW;
 }
 
+/**
+ * The widest card a Pi's two chips still share the controls row at (DS §4.1, §7): past it they leave
+ * for a row of their own over it, where the model takes the width and the level keeps only its pips.
+ */
+export const COMPOSER_PI_CHIPS_MAX = 480;
+
+/** Whether the chips take a row of their own at this card width. An unmeasured card (0) does not: nothing is drawn yet. */
+export function composerPiChipsRow(cardWidth: number): boolean {
+  return cardWidth > 0 && cardWidth <= COMPOSER_PI_CHIPS_MAX;
+}
+
 /** The working agent rests with Stop; writing a message replaces it with Send. */
 export function composerSendShown(state: { working: boolean; text: string }): boolean {
   return !state.working || state.text.trim().length > 0;

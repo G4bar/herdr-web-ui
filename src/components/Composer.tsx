@@ -30,6 +30,7 @@ import {
   commandGroup,
   commandsForTrigger,
   composerModelDraw,
+  composerPiChipsRow,
   composerSendShown,
   composerStatusCompact,
   composerStatusHint,
@@ -1061,8 +1062,8 @@ export function Composer({
   // a native pane's level is live; a Terminal-owned Pi's is what its session file last recorded, and
   // one that recorded none names no level to draw (DS §3.0)
   const piThinkingLevel = piNative !== null ? piNative.thinkingLevel || null : metadata?.reasoning_effort ?? null;
-  // DS §4.1: on a phone the chips leave the controls row for one of their own over it
-  const piChipsRow = useMediaQuery("(max-width: 480px)");
+  // DS §4.1: on a narrow card the chips leave the controls row for one of their own over it
+  const piChipsRow = composerPiChipsRow(cardWidth);
   const hint = composerStatusHint({ uploading, connected, text, noRoom: roomless !== undefined, piConnecting: pi.connecting });
   // DS §4.1: a native pane's model and level are chips in the card's right group, so the quiet pill
   // beside the state drops its own copy of them. A Pi the terminal still owns reads the model from the

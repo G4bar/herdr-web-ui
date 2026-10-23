@@ -184,22 +184,28 @@ export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, 
       if (menuRef.current?.contains(event.target as Node)) return;
       dismiss();
     };
+    window.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("scroll", onScroll, true);
+    window.addEventListener("resize", dismiss);
+    return () => {
+      window.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", dismiss);
+    };
+  }, [close, dismiss, open, sheet]);
+
+  // Escape closes it whatever holds the focus in it (the sheet's Close, a row): the list's own keys
+  // stay on the list, which is what a pick's Enter and a move's arrows are about
+  useEffect(() => {
+    if (!open) return;
     const onKey = (event: globalThis.KeyboardEvent): void => {
       if (event.key !== "Escape") return;
       event.preventDefault();
       close();
     };
-    window.addEventListener("pointerdown", onPointer, true);
-    window.addEventListener("scroll", onScroll, true);
-    window.addEventListener("resize", dismiss);
     window.addEventListener("keydown", onKey, true);
-    return () => {
-      window.removeEventListener("pointerdown", onPointer, true);
-      window.removeEventListener("scroll", onScroll, true);
-      window.removeEventListener("resize", dismiss);
-      window.removeEventListener("keydown", onKey, true);
-    };
-  }, [close, dismiss, open, sheet]);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [close, open]);
 
   useSheetSwipe(trap, open && sheet ? close : null);
   useSheetHistory(open && sheet, close);
@@ -276,9 +282,11 @@ export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, 
 
   // a finger holds the sheet from its head; a press on the scrim or the X closes it, as Back does
   const onScrim = (event: MouseEvent<HTMLDivElement>): void => { if (event.target === event.currentTarget) close(); };
+  // the keys live on the list alone, in both forms: it is what holds the focus and the active row, and
+  // one on the sheet around it would run every key twice (two rows on an arrow, two pick sends)
   const surface = sheet
     ? <div className="modal-scrim" onMouseDown={onScrim}>
-      <div ref={trap} className="modal pi-thinking-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1} onKeyDown={onKeyDown}>
+      <div ref={trap} className="modal pi-thinking-sheet" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <header className="modal-header">
           <h2 className="modal-title" id={titleId}>{t("Thinking")}</h2>
           <button type="button" className="icon-button" aria-label={t("Close")} onClick={close}><X aria-hidden="true" /></button>
