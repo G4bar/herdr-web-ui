@@ -1,8 +1,8 @@
 /**
  * The native Pi routes: take a pane over in the chat, hand it back to its terminal, reconnect a
- * lost child, read the live state one pane's registry holds, and pass one allowlisted RPC command
- * to its child. Nothing here drives pi itself; the registry does, and every answer is its own or a
- * refusal it threw.
+ * lost child, read the live state one pane's registry holds, read the context files Pi would load
+ * for its folder, and pass one allowlisted RPC command to its child. Nothing here drives pi itself;
+ * the registry does, and every answer is its own or a refusal it threw.
  *
  * `pane_id` is checked against herdr's snapshot before the registry is asked, so a pane the
  * terminal no longer has is a 404 and its map entry is dropped, not a child spawned for nobody.
@@ -13,6 +13,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sessionSnapshot } from "./herdr/client.ts";
 import { badRequest, errorResponse, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
+import { paneContext } from "./pane-context.ts";
+import { piContextFiles } from "./pi-context.ts";
 import { type PiNativeControl, PiNeedsTrustError, PiNativeError, type PiTrust } from "./pi-native.ts";
 import { defaultPiSessionDir, piTranscriptInStore } from "./pi.ts";
 
@@ -20,9 +22,11 @@ export interface PiNativeRoutesOptions {
   registry: PiNativeControl;
   /** herdr's panes now; tests pass their own */
   snapshot?: () => Promise<{ panes: readonly { pane_id: string }[] }>;
+  /** the folder a pane works in, read from herdr; tests pass their own */
+  paneCwd?: (paneId: string) => Promise<string>;
 }
 
-const NATIVE_PATHS = new Set(["/api/pi/takeover", "/api/pi/handback", "/api/pi/reconnect", "/api/pi/state", "/api/pi/rpc"]);
+const NATIVE_PATHS = new Set(["/api/pi/takeover", "/api/pi/handback", "/api/pi/reconnect", "/api/pi/state", "/api/pi/rpc", "/api/pi/context"]);
 
 /**
  * The RPC commands the chat may send to a native pane's child, and the fields each may carry: the
@@ -80,6 +84,9 @@ const isTrust = (value: unknown): value is PiTrust => value === "approve" || val
  */
 const RPC_ID = /^web-bash-[A-Za-z0-9-]{1,48}$/;
 
+/** The folder a pane works in, as herdr has it now: a Terminal-mode Pi loads its context from it too. */
+const paneWorkingDir = (paneId: string): Promise<string> => paneContext(paneId).then((context) => context.cwd);
+
 /**
  * The command a client sent, cut to the allowlist: an unknown type, an unknown field, a field of
  * another kind or a value outside its closed set is refused, and nothing outside it reaches pi.
@@ -117,7 +124,7 @@ export async function handlePiNativeRequest(
 ): Promise<Response | null> {
   if (!NATIVE_PATHS.has(pathname)) return null;
   setRequestRoute(pathname);
-  const reading = pathname === "/api/pi/state";
+  const reading = pathname === "/api/pi/state" || pathname === "/api/pi/context";
   if (reading ? request.method !== "GET" : request.method !== "POST") {
     return badRequest("method_not_allowed", reading ? "use GET" : "use POST");
   }
@@ -152,6 +159,12 @@ export async function handlePiNativeRequest(
       const state = options.registry.state(paneId);
       if (state === null) return jsonResponse({ error: { code: "not_native", message: "this pane is not driven by the chat" } }, 404);
       return jsonResponse(state, 200, { "cache-control": "no-store" });
+    }
+    // What Pi loads for this folder: the same chain for a Terminal-mode pane, since it comes from
+    // herdr's own cwd and Pi's files, not from a child of the chat's
+    if (pathname === "/api/pi/context") {
+      const cwd = await (options.paneCwd ?? paneWorkingDir)(paneId);
+      return jsonResponse({ files: piContextFiles(cwd) }, 200, { "cache-control": "no-store" });
     }
     if (pathname === "/api/pi/takeover") return jsonResponse(await options.registry.takeover(paneId, trust === undefined ? {} : { trust }));
     if (pathname === "/api/pi/reconnect") return jsonResponse(await options.registry.reconnect(paneId));

@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
@@ -32,9 +32,14 @@ function call(
   init: RequestInit = {},
   registry: PiNativeControl = control(),
   panes: { pane_id: string }[] = [{ pane_id: paneId }],
+  cwd?: string,
 ): Promise<Response | null> {
   const url = new URL(`http://ovis${pathAndQuery}`);
-  return handlePiNativeRequest(new Request(url, init), url, url.pathname, { registry, snapshot: async () => ({ panes }) });
+  return handlePiNativeRequest(new Request(url, init), url, url.pathname, {
+    registry,
+    snapshot: async () => ({ panes }),
+    ...(cwd === undefined ? {} : { paneCwd: async () => cwd }),
+  });
 }
 
 const post = (pathname: string, body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
@@ -118,6 +123,58 @@ describe("native Pi routes", () => {
     expect(await (await call("/api/pi/handback", post("/api/pi/handback", { pane_id: paneId }), registry))?.json()).toEqual({ ok: true });
     expect(handed).toBe(paneId);
     expect(await (await call("/api/pi/reconnect", post("/api/pi/reconnect", { pane_id: paneId }), registry))?.json()).toMatchObject({ mode: "native" });
+  });
+});
+
+describe("native Pi context", () => {
+  it("names the agent directory's file first, then the root's down to the pane's own folder", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-pi-context-"));
+    const agentDir = join(root, "agent");
+    const project = join(root, "work", "project");
+    const before = process.env["PI_CODING_AGENT_DIR"];
+    process.env["PI_CODING_AGENT_DIR"] = agentDir;
+    try {
+      for (const dir of [agentDir, join(root, "work"), project]) mkdirSync(dir, { recursive: true });
+      writeFileSync(join(agentDir, "AGENTS.md"), "global\n");
+      // two names in one directory: Pi takes the override and leaves the other
+      writeFileSync(join(root, "AGENTS.md"), "root\n");
+      writeFileSync(join(root, "work", "CLAUDE.md"), "parent\n");
+      writeFileSync(join(project, "AGENTS.override.md"), "override\n");
+      writeFileSync(join(project, "AGENTS.md"), "shadowed\n");
+      const response = await call(`/api/pi/context?pane_id=${paneId}`, {}, control(), [{ pane_id: paneId }], project);
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get("cache-control")).toBe("no-store");
+      expect(await response?.json()).toEqual({
+        files: [
+          { path: join(agentDir, "AGENTS.md"), scope: "global", size: 7 },
+          { path: join(root, "AGENTS.md"), scope: "parent", size: 5 },
+          { path: join(root, "work", "CLAUDE.md"), scope: "parent", size: 7 },
+          { path: join(project, "AGENTS.override.md"), scope: "project", size: 9 },
+        ],
+      });
+    } finally {
+      if (before === undefined) delete process.env["PI_CODING_AGENT_DIR"];
+      else process.env["PI_CODING_AGENT_DIR"] = before;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("answers a folder with no context file, and a pane that is gone", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-pi-context-empty-"));
+    const before = process.env["PI_CODING_AGENT_DIR"];
+    process.env["PI_CODING_AGENT_DIR"] = join(root, "agent");
+    try {
+      const empty = await call(`/api/pi/context?pane_id=${paneId}`, {}, control(), [{ pane_id: paneId }], root);
+      expect(await empty?.json()).toEqual({ files: [] });
+      const gone = await call(`/api/pi/context?pane_id=w:gone`, {}, control(), [{ pane_id: paneId }], root);
+      expect(gone?.status).toBe(404);
+      const wrongMethod = await call(`/api/pi/context?pane_id=${paneId}`, post(`/api/pi/context`, { pane_id: paneId }), control(), [{ pane_id: paneId }], root);
+      expect(wrongMethod?.status).toBe(400);
+    } finally {
+      if (before === undefined) delete process.env["PI_CODING_AGENT_DIR"];
+      else process.env["PI_CODING_AGENT_DIR"] = before;
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
 

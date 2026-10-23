@@ -141,6 +141,7 @@ describe("demo transport", () => {
     "/api/pane/read": "the scrollback read behind a chat with no transcript: the demo answers /api/pane/conversation instead (listed when this guard was added)",
     "/api/pane/selection": "copying a selection across screens: not part of the demo (listed when this guard was added)",
     "/api/pi/handback": "the demo runs no Pi, so no pane is ever native to hand back (listed when this guard was added)",
+    "/api/pi/context": "Session context reads the context files of a pane's folder (listed when this guard was added)",
     "/api/pi/reconnect": "the demo runs no Pi, so no native pane is ever lost (listed when this guard was added)",
     "/api/pi/rpc": "the demo runs no Pi, so no pane has a child to pass an RPC command to (listed when this guard was added)",
     "/api/pi/state": "the demo runs no Pi, so it reads no native state (listed when this guard was added)",
