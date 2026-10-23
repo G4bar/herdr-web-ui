@@ -189,6 +189,49 @@ describe("the model picker", () => {
     expect(onSavedAsDefault).toHaveBeenCalledTimes(2);
   });
 
+  it("counts a glob and a suffixed entry as the models they name", async () => {
+    scoped = ["anthropic/claude*", "openai/gpt-5:high"];
+    try {
+      const renderer = await mount(answers(MODELS));
+      await act(async () => { chip(renderer).props.onClick(); });
+      await act(async () => {});
+
+      const buttons = renderer.root.findByProps({ className: "segmented pi-picker-modes" }).findAll((node) => node.type === "button");
+      expect(buttons.map((button) => button.children.join(""))).toEqual(["Scoped 3", "All 3"]);
+      await act(async () => { renderer.unmount(); });
+    } finally {
+      scoped = null;
+    }
+  });
+
+  it("leaves a footer button's Enter, arrows and Ctrl+S to the button", async () => {
+    const onSavedAsDefault = mock(() => {});
+    writes.length = 0;
+    const piRpc = mock((_command: PiRpcCommand) => Promise.resolve(MODELS));
+    const renderer = await mount(piRpc, { onSavedAsDefault });
+    await act(async () => { chip(renderer).props.onClick(); });
+    await act(async () => {});
+    const dialog = renderer.root.findByProps({ className: "menu pi-picker" });
+    // a key pressed on the footer's Save as default, bubbling up to the popover that holds it
+    const save = { closest: (selector: string) => selector === ".pi-picker-footer" ? save : null };
+    const active = (): number => renderer.root.findAllByProps({ role: "option" }).findIndex((row) => row.props["data-active"] === true);
+    const press = async (event: Record<string, unknown>): Promise<number> => {
+      let prevented = 0;
+      await act(async () => { dialog.props.onKeyDown({ target: save, preventDefault: () => { prevented += 1; }, ...event }); });
+      return prevented;
+    };
+
+    expect(await press({ key: "Enter" })).toBe(0);
+    expect(piRpc.mock.calls.filter((call) => call[0].type === "set_model")).toHaveLength(0);
+    expect(await press({ key: "ArrowDown" })).toBe(0);
+    expect(active()).toBe(0);
+    // Ctrl+S is the picker's wherever the focus is in it
+    expect(await press({ key: "s", ctrlKey: true })).toBe(1);
+    expect(writes[0]).toEqual({ defaultProvider: "anthropic", defaultModel: "claude-sonnet-4-5" });
+    expect(onSavedAsDefault).toHaveBeenCalledTimes(1);
+    await act(async () => { renderer.unmount(); });
+  });
+
   it("reads Pi's list into rows, and groups it in the order Pi gave", () => {
     const models = piModels(MODELS);
     expect(models.map((model) => model.id)).toEqual(["claude-sonnet-4-5", "claude-opus-4-1", "gpt-5"]);

@@ -210,6 +210,27 @@ describe("the thinking menu", () => {
     expect(onSavedAsDefault).toHaveBeenCalledTimes(2);
   });
 
+  it("leaves a footer button's Enter and arrows to the button", async () => {
+    const piRpc = answers({ levels: ["off", "high"] });
+    const renderer = await mount(piRpc);
+    await open(renderer);
+    const menu = renderer.root.findByProps({ role: "menu" });
+    // a key pressed on the footer's Save as default, bubbling up to the menu that holds it
+    const save = { closest: (selector: string) => selector === ".pi-thinking-footer" ? save : null };
+    const active = (): number => rows(renderer).findIndex((row) => row.props["data-active"] === true);
+    const press = async (event: Record<string, unknown>): Promise<number> => {
+      let prevented = 0;
+      await act(async () => { menu.props.onKeyDown({ target: save, preventDefault: () => { prevented += 1; }, ...event }); });
+      return prevented;
+    };
+
+    expect(await press({ key: "Enter" })).toBe(0);
+    expect(piRpc.mock.calls.filter((call) => call[0].type === "set_thinking_level")).toHaveLength(0);
+    expect(await press({ key: "ArrowDown" })).toBe(0);
+    expect(active()).toBe(0);
+    await act(async () => { renderer.unmount(); });
+  });
+
   it("draws a level as five bars, lit to its height", () => {
     // each renderer is held for as long as its bars are read: React unmounts one nobody refers to
     const pips = (level: string): TestRenderer.ReactTestRenderer => {

@@ -267,6 +267,9 @@ export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, 
       return;
     }
     saveShortcut(event);
+    // a key from the footer's button is the button's: Enter presses it, and the arrows are not the list's
+    const target = event.target as Element | null;
+    if (target?.closest?.(".pi-thinking-footer") != null) return;
     if (rows.length === 0) return;
     const last = rows.length - 1;
     if (event.key === "ArrowDown") { event.preventDefault(); setActive((index) => Math.min(last, index + 1)); }

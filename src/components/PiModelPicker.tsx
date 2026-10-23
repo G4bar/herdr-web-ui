@@ -102,6 +102,11 @@ const keyOf = (model: PickerModel): string => `${model.provider}:${model.id}`;
 /** A model as Pi's `enabledModels` names it. */
 const entryOf = (model: PickerModel): string => `${model.provider}/${model.id}`;
 
+/** One `enabledModels` entry as a matcher: Pi takes an exact id, a case-insensitive glob (`claude*`)
+ *  and an optional `:level` suffix (`x/y:high`), which the model itself does not carry. */
+const matcherOf = (entry: string): RegExp =>
+  new RegExp(`^${entry.replace(/:[a-z]+$/i, "").split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`, "i");
+
 /** The models Pi's own cycling is scoped to, or null when the file scopes none: every model cycles. */
 function scopedOf(file: PiSettingsFile): string[] | null {
   const list = file.settings["enabledModels"];
@@ -135,9 +140,11 @@ export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPic
   const [defaultError, setDefaultError] = useState<string | null>(null);
   const trap = useFocusTrap<HTMLDivElement>(open && sheet, { initialFocus: searchRef, shouldRestore: () => !toBox.current });
 
-  const scopedSet = new Set(scoped ?? []);
-  const scopedCount = (models ?? []).filter((model) => scopedSet.has(entryOf(model))).length;
-  const listed = showing === "scoped" && scopedCount > 0 ? (models ?? []).filter((model) => scopedSet.has(entryOf(model))) : models ?? [];
+  const scopedMatchers = (scoped ?? []).map(matcherOf);
+  /** the cycle covers a model by its `provider/id` or its bare id, so a pattern counts as what it names */
+  const inScope = (model: PickerModel): boolean => scopedMatchers.some((pattern) => pattern.test(entryOf(model)) || pattern.test(model.id));
+  const scopedCount = (models ?? []).filter(inScope).length;
+  const listed = showing === "scoped" && scopedCount > 0 ? (models ?? []).filter(inScope) : models ?? [];
   const groups = groupModels(listed, query);
   const rows = groups.flatMap((group) => group.models);
 
@@ -306,6 +313,9 @@ export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPic
       void saveDefault();
       return;
     }
+    // a key from a footer button is the button's: Enter presses it, and the arrows are not the list's
+    const target = event.target as Element | null;
+    if (target?.closest?.(".pi-picker-footer") != null) return;
     if (rows.length === 0) return;
     const last = rows.length - 1;
     if (event.key === "ArrowDown") { event.preventDefault(); setActive((index) => Math.min(last, index + 1)); }
