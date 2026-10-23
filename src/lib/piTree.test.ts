@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { nextPiTreeFilter, piTreeFilterKey, piTreeRows, type PiTreeAnswer } from "./piTree.ts";
+import { nextPiTreeFilter, piTreeFilterKey, piTreeRows, type PiTreeAnswer, type PiTreeNode } from "./piTree.ts";
 
 /**
  * A session with one branch: the chat sent three messages, the user navigated back to the second and
@@ -52,8 +52,9 @@ describe("piTreeRows", () => {
   it("names each row's role, its own words and how deep it sits", () => {
     const rows = piTreeRows(answer());
     expect(rows[0]).toMatchObject({ role: "user", text: "Add a retry to fetchData", depth: 0, forking: true, ts: "2026-10-01T10:02:00.000Z" });
-    expect(rows[1]).toMatchObject({ role: "assistant", depth: 1 });
-    expect(rows[2]).toMatchObject({ id: "u2", label: "jitter", labelTimestamp: "2026-10-01T10:06:00.000Z", depth: 2 });
+    // u1's answer is a plain continuation: pi indents where the row forks, not once per entry
+    expect(rows[1]).toMatchObject({ role: "assistant", depth: 0 });
+    expect(rows[2]).toMatchObject({ id: "u2", label: "jitter", labelTimestamp: "2026-10-01T10:06:00.000Z", depth: 1 });
     // a message whose content is a plain string reads the same way
     expect(rows[4]).toMatchObject({ id: "u3", text: "make it configurable" });
     expect(rows[1]?.forking).toBe(false);
@@ -106,7 +107,8 @@ describe("piTreeRows", () => {
     };
     expect(piTreeRows(withTool, { filter: "no-tools" }).map((row) => row.id)).toEqual(["u1", "a1"]);
     const toolRow = piTreeRows(withTool, { filter: "all" }).find((row) => row.id === "t1");
-    expect(toolRow).toMatchObject({ role: "tool", text: "bash", depth: 2 });
+    // no row forks here, so the whole exchange stays on one column
+    expect(toolRow).toMatchObject({ role: "tool", text: "bash", depth: 0 });
   });
 
   it("keeps only the rows every word of the query appears in", () => {
@@ -127,11 +129,49 @@ describe("piTreeRows", () => {
 
   it("draws a guide under an ancestor that still has a row below it", () => {
     const rows = piTreeRows(answer());
-    // one column per level above: a line runs there while that ancestor still has a row below it
-    expect(rows.find((row) => row.id === "u2")?.guides).toEqual([false, true]);
-    expect(rows.find((row) => row.id === "u4")?.guides).toEqual([false, false]);
-    expect(rows.find((row) => row.id === "a4")?.guides).toEqual([false, false, false]);
+    // one column per fork above: a line runs there while that branch still has a row below it
+    expect(rows.find((row) => row.id === "u2")?.guides).toEqual([true]);
+    expect(rows.find((row) => row.id === "u4")?.guides).toEqual([false]);
+    // u2's own answer is a continuation of that column, and u4 is the branch's last one
+    expect(rows.find((row) => row.id === "a2")?.guides).toEqual([true]);
+    expect(rows.find((row) => row.id === "a4")?.guides).toEqual([false]);
     expect(rows[0]?.guides).toEqual([]);
+  });
+
+  /** One entry under the next: a plain conversation with no fork anywhere in it. */
+  function chain(length: number, prefix = "e", rootParent: string | null = null): PiTreeNode {
+    let node: PiTreeNode = {
+      entry: { id: `${prefix}0`, parentId: rootParent, type: "message", message: { role: "user", content: "message 0" } },
+    };
+    for (let at = 1; at < length; at += 1) {
+      node = { entry: { id: `${prefix}${at}`, parentId: `${prefix}${at - 1}`, type: "message", message: { role: at % 2 === 0 ? "user" : "assistant", content: `message ${at}` } }, children: [node] };
+    }
+    return node;
+  }
+
+  it("keeps a long single chain on one column, and walks it without exhausting the call stack", () => {
+    const rows = piTreeRows({ leafId: "e4999", tree: [chain(5000)] });
+    expect(rows).toHaveLength(5000);
+    expect(Math.max(...rows.map((row) => row.depth))).toBe(0);
+    expect(rows.every((row) => row.guides.length === 0)).toBe(true);
+    // the leaf is last, and only it is where the conversation is
+    expect(rows.at(-1)).toMatchObject({ id: "e4999", current: true, active: true, depth: 0 });
+  });
+
+  it("indents once where a long chain forks, and not again along either branch", () => {
+    const rows = piTreeRows({
+      leafId: "a0",
+      tree: [{
+        entry: { id: "root", parentId: null, type: "message", message: { role: "user", content: "start" } },
+        children: [chain(50, "a", "root"), chain(50, "b", "root")],
+      }],
+    });
+    expect(Math.max(...rows.map((row) => row.depth))).toBe(1);
+    expect(rows.filter((row) => row.depth === 1)).toHaveLength(100);
+    expect(rows[0]).toMatchObject({ id: "root", foldable: true, depth: 0 });
+    // both branches hang one column in, and the one holding the leaf comes first
+    expect(rows[1]).toMatchObject({ id: "a0", depth: 1, guides: [true], active: true });
+    expect(rows[51]).toMatchObject({ id: "b0", depth: 1, guides: [false], active: false });
   });
 
   it("is empty for no tree at all", () => {

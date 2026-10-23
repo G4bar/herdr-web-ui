@@ -42,6 +42,13 @@ export interface SessionTreeProps {
 /** An entry's id is Pi's own (`abc123`), so it is safe in an id attribute and a selector. */
 const PLAIN_ID = /^[\w-]{1,80}$/u;
 
+/**
+ * Rows drawn at once. The tree is walked whole — that is one pass over the file — but a session of
+ * thousands of entries cannot be laid out in one paint, so the list is a window around the selected
+ * row and `Show more` widens it (DS §4.9: virtualised when long).
+ */
+const ROW_LIMIT = 200;
+
 /** `get_tree`'s answer as the tree reads it: anything else is an empty tree, not a crash. */
 function answerOf(data: unknown): PiTreeAnswer {
   const value = (data ?? {}) as { tree?: unknown; leafId?: unknown };
@@ -68,6 +75,7 @@ export function SessionTree({ paneId, machineId, streaming, onFork, onClose }: S
   const [folded, setFolded] = useState<ReadonlySet<string>>(new Set());
   const [times, setTimes] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
+  const [reach, setReach] = useState(ROW_LIMIT);
   const [forking, setForking] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,6 +95,16 @@ export function SessionTree({ paneId, machineId, streaming, onFork, onClose }: S
 
   const rows = useMemo(() => piTreeRows(read.answer, { filter, query, folded }), [read.answer, filter, query, folded]);
   const selectedRow = rows.find((row) => row.id === selected) ?? null;
+  // the window of rows on the page: it holds the selection, so a key press never acts on a row that is not drawn
+  const selectedAt = rows.findIndex((row) => row.id === selected);
+  const shownCount = Math.min(rows.length, reach);
+  const start = selectedAt < 0
+    ? Math.max(0, rows.length - shownCount)
+    : Math.min(Math.max(0, selectedAt - shownCount + 1), rows.length - shownCount);
+  const shown = rows.slice(start, start + shownCount);
+  const hiddenAbove = start;
+  const hiddenBelow = rows.length - start - shown.length;
+  const showMore = useCallback(() => setReach((value) => value + ROW_LIMIT), []);
 
   // the newest message the user sent on the path the conversation is on: where `/fork` and a first
   // Enter land, and the only kind of row Pi forks from
@@ -244,32 +262,36 @@ export function SessionTree({ paneId, machineId, streaming, onFork, onClose }: S
             <button type="button" className="btn" onClick={() => setTick((value) => value + 1)}>{t("Try again")}</button>
           </div>}
           {read.answer !== null && rows.length === 0 && <p className="pi-tree-empty">{query.trim() === "" ? t("Nothing to branch from yet.") : t("No entries match")}</p>}
-          {rows.length > 0 && <div ref={listRef} className="pi-tree-list" role="tree" aria-label={t("Session tree")} tabIndex={0}
-            aria-activedescendant={selected === null ? undefined : `${base}-row-${selected}`} aria-busy={forking}>
-            {rows.map((row) => {
-              const time = times ? formatChatTimestamp(row.ts, now, locale, t) : null;
-              const guides = row.guides.map((guide, level) => <span key={level} className={guide ? "pi-tree-guide is-line" : "pi-tree-guide"} aria-hidden="true" />);
-              return <div key={row.id} id={`${base}-row-${row.id}`} data-row={row.id} role="treeitem"
-                aria-level={row.depth + 1} aria-selected={selected === row.id}
-                {...(row.foldable ? { "aria-expanded": !row.folded } : {})}
-                className={`pi-tree-row${row.active ? " is-active" : ""}${selected === row.id ? " is-selected" : ""}`}
-                onClick={(event) => select(event, row)} onDoubleClick={() => fork(row)}>
-                {guides}
-                <span className="pi-tree-step" aria-hidden="true">
-                  {row.foldable && <button type="button" className="pi-tree-caret" aria-label={row.folded ? t("Unfold") : t("Fold")}
-                    onClick={(event) => { event.stopPropagation(); turnFold(row); }}>
-                    {row.folded ? <ChevronRight /> : <ChevronDown />}
-                  </button>}
-                </span>
-                <span className="pi-tree-role">{roleLabel(row.role)}</span>
-                <span className="pi-tree-text">{row.text}</span>
-                {row.folded && <span className="pi-tree-more">{t("({count} more)", { count: row.hidden })}</span>}
-                {row.label !== null && <span className="pill pi-tree-label"><Tag aria-hidden="true" />{row.label}</span>}
-                {row.current && <span className="pi-tree-here">{t("you are here")}</span>}
-                {time !== null && <span className="pi-tree-time" title={time.full}>{time.label}</span>}
-              </div>;
-            })}
-          </div>}
+          {rows.length > 0 && <>
+            {hiddenAbove > 0 && <button type="button" className="pi-tree-load" onClick={showMore}>{t("Show {count} more", { count: hiddenAbove })}</button>}
+            <div ref={listRef} className="pi-tree-list" role="tree" aria-label={t("Session tree")} tabIndex={0}
+              aria-activedescendant={selected === null ? undefined : `${base}-row-${selected}`} aria-busy={forking}>
+              {shown.map((row) => {
+                const time = times ? formatChatTimestamp(row.ts, now, locale, t) : null;
+                const guides = row.guides.map((guide, level) => <span key={level} className={guide ? "pi-tree-guide is-line" : "pi-tree-guide"} aria-hidden="true" />);
+                return <div key={row.id} id={`${base}-row-${row.id}`} data-row={row.id} role="treeitem"
+                  aria-level={row.depth + 1} aria-selected={selected === row.id}
+                  {...(row.foldable ? { "aria-expanded": !row.folded } : {})}
+                  className={`pi-tree-row${row.active ? " is-active" : ""}${selected === row.id ? " is-selected" : ""}`}
+                  onClick={(event) => select(event, row)} onDoubleClick={() => fork(row)}>
+                  {guides}
+                  <span className="pi-tree-step">
+                    {row.foldable && <button type="button" tabIndex={-1} className="pi-tree-caret" aria-label={row.folded ? t("Unfold") : t("Fold")}
+                      onClick={(event) => { event.stopPropagation(); turnFold(row); }}>
+                      {row.folded ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+                    </button>}
+                  </span>
+                  <span className="pi-tree-role">{roleLabel(row.role)}</span>
+                  <span className="pi-tree-text">{row.text}</span>
+                  {row.folded && <span className="pi-tree-more">{t("({count} more)", { count: row.hidden })}</span>}
+                  {row.label !== null && <span className="pill pi-tree-label"><Tag aria-hidden="true" />{row.label}</span>}
+                  {row.current && <span className="pi-tree-here">{t("you are here")}</span>}
+                  {time !== null && <span className="pi-tree-time" title={time.full}>{time.label}</span>}
+                </div>;
+              })}
+            </div>
+            {hiddenBelow > 0 && <button type="button" className="pi-tree-load" onClick={showMore}>{t("Show {count} more", { count: hiddenBelow })}</button>}
+          </>}
         </div>
         <footer className="modal-footer pi-tree-footer">
           {error !== null && <p className="pi-tree-error" role="alert">{error}</p>}

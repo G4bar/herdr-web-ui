@@ -49,6 +49,18 @@ const answer = {
   }],
 };
 
+/** One message under the next: Pi's own shape for a session longer than a window of rows. */
+function longTree(length: number): unknown {
+  let node: unknown = null;
+  for (let at = length - 1; at >= 0; at -= 1) {
+    node = {
+      entry: { id: `e${at}`, parentId: at === 0 ? null : `e${at - 1}`, type: "message", message: { role: "user", content: `message ${at}` } },
+      children: node === null ? [] : [node],
+    };
+  }
+  return { leafId: `e${length - 1}`, tree: [node] };
+}
+
 const browserGlobals = ["window", "document", "HTMLElement", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "getComputedStyle"] as const;
 const savedGlobals = new Map<string, PropertyDescriptor | undefined>();
 // the dialog's words go through useT, which reads the browser's languages
@@ -140,8 +152,9 @@ describe("the session tree", () => {
     const renderer = await mount();
     expect(rowIds(renderer)).toEqual(["u1", "a1", "u2", "a2", "u3", "u4"]);
     const rows = items(renderer);
-    // a row's level is its place in the visible tree, and the path to the leaf carries the rail
-    expect(rows.map((node) => node.props["aria-level"])).toEqual([1, 2, 3, 4, 5, 3]);
+    // a row's level is its place in the visible tree (one column per fork, see lib/piTree.ts), and the
+    // path to the leaf carries the rail
+    expect(rows.map((node) => node.props["aria-level"])).toEqual([1, 1, 2, 2, 2, 2]);
     expect(rows.map((node) => String(node.props.className).includes("is-active"))).toEqual([true, true, true, true, true, false]);
     expect(words(renderer)).toContain("You");
     expect(words(renderer)).toContain("Pi");
@@ -213,6 +226,8 @@ describe("the session tree", () => {
     // u2 starts a segment: it has one child chain and a sibling branch
     const u2 = items(renderer).find((node) => node.props.id.endsWith("-u2"))!;
     expect(u2.props["aria-expanded"]).toBe(true);
+    // the caret is a pointer target, not a tab stop of its own: the tree's keys fold
+    expect(u2.findByType("button").props.tabIndex).toBe(-1);
     await press(u2.findByType("button"));
     expect(rowIds(renderer)).toEqual(["u1", "a1", "u2", "u4"]);
     expect(words(renderer)).toContain("(2 more)");
@@ -232,6 +247,17 @@ describe("the session tree", () => {
     await key(renderer, { key: "T", shiftKey: true });
     // the fixture records a timestamp on u1, a1, u2 and u3; a row without one draws none
     expect(renderer.root.findAllByProps({ className: "pi-tree-time" }).length).toBe(3);
+  });
+
+  it("draws a window of a long tree, and widens it with Show more", async () => {
+    tree = longTree(300);
+    const renderer = await mount();
+    // the window holds the selected row and says how many rows are left above it
+    expect(items(renderer)).toHaveLength(200);
+    expect(rowIds(renderer)[0]).toBe("e100");
+    await press(button(renderer, "Show 100 more"));
+    expect(items(renderer)).toHaveLength(300);
+    expect(rowIds(renderer)[0]).toBe("e0");
   });
 
   it("says a session has nothing to branch from yet, and reads again after a refusal", async () => {

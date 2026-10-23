@@ -1222,6 +1222,7 @@ export const KO: Record<string, string> = {
   // ---- subscription usage ----
   "Shows plan usage beside Settings. Sign-ins are sent to each provider's usage API; never refreshed here.": "설정 옆에 요금제 사용량을 보여줘요. 로그인 정보가 각 서비스의 사용량 API로 전송되며, 여기서 갱신하지 않아요.",
   "Accounts": "계정",
+  "Show {count} more": "{count}개 더 보기",
   "Show {name}": "{name} 표시",
   "{percent} left": "{percent} 남음",
   "Meters show": "미터 표시",
@@ -1665,4 +1666,6 @@ export const KO: Record<string, string> = {
   "Forked from \"{name}\"": "\"{name}\"에서 분기했습니다",
   "Go back": "돌아가기",
   "Clone session": "세션 복제",
+  "Fork was cancelled": "분기가 취소되었습니다",
+  "Clone was cancelled": "복제가 취소되었습니다",
 };

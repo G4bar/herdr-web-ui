@@ -4,6 +4,9 @@
  * D5), so a row here is only ever something to read or a user message to fork from — nothing reorders
  * the file. The words a row is drawn with are the component's (each theme's own language); this module
  * only says which entry, how deep, folded or not, and its own recorded text.
+ *
+ * Every walk is a loop with an explicit stack: a long session is one chain of thousands of entries,
+ * and a recursive walk would exhaust the call stack before it drew the leaf.
  */
 
 /** One session entry, as far as the tree reads it: pi records the rest and the tree never looks. */
@@ -89,9 +92,12 @@ export interface PiTreeRow {
   ts: string | null;
   label: string | null;
   labelTimestamp: string | null;
-  /** indent in the visible tree: an entry filtered out above does not indent its children */
+  /**
+   * indent in the visible tree: one step per branch above it (pi indents where a branch starts, not
+   * once per entry), and an entry filtered out above does not indent its children
+   */
   depth: number;
-  /** per level above, whether a guide line runs on below this row */
+  /** per branch column above, whether a guide line runs on below this row */
   guides: boolean[];
   /** this row has visible children and is where a branch segment starts: the only rows that fold */
   foldable: boolean;
@@ -163,13 +169,12 @@ function silencedAssistant(entry: PiTreeEntry): boolean {
 /** The entries on the path from `leafId` back to its root: the conversation as the chat shows it. */
 function activeIds(nodes: readonly PiTreeNode[], leafId: string | null): Set<string> {
   const parents = new Map<string, string | null>();
-  const walk = (list: readonly PiTreeNode[]): void => {
-    for (const node of list) {
-      parents.set(node.entry.id, node.entry.parentId ?? null);
-      walk(node.children ?? []);
-    }
-  };
-  walk(nodes);
+  const stack = [...nodes];
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    parents.set(node.entry.id, node.entry.parentId ?? null);
+    stack.push(...(node.children ?? []));
+  }
   const active = new Set<string>();
   for (let id = leafId; id !== null && !active.has(id); id = parents.get(id) ?? null) {
     active.add(id);
@@ -182,17 +187,19 @@ interface Flat {
   node: PiTreeNode;
 }
 
+/** A node's children with the one leading to the leaf first: pi's own order, the active branch on top. */
+const leafFirst = (list: readonly PiTreeNode[], active: ReadonlySet<string>): PiTreeNode[] =>
+  [...list].sort((a, b) => Number(active.has(b.entry.id)) - Number(active.has(a.entry.id)));
+
 /** Every node in pi's own order: pre-order, with the child leading to the leaf first. */
 function flatten(nodes: readonly PiTreeNode[], active: ReadonlySet<string>): Flat[] {
   const flat: Flat[] = [];
-  const visit = (list: readonly PiTreeNode[]): void => {
-    const ordered = [...list].sort((a, b) => Number(active.has(b.entry.id)) - Number(active.has(a.entry.id)));
-    for (const node of ordered) {
-      flat.push({ node });
-      visit(node.children ?? []);
-    }
-  };
-  visit(nodes);
+  const stack = leafFirst(nodes, active).reverse();
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+    flat.push({ node });
+    stack.push(...leafFirst(node.children ?? [], active).reverse());
+  }
   return flat;
 }
 
@@ -244,15 +251,20 @@ export function piTreeRows(answer: PiTreeAnswer | null | undefined, options: PiT
     visibleChildren.set(parent, [...childrenUnder(parent), item]);
   }
   const rows: PiTreeRow[] = [];
-  const emit = (item: Flat, depth: number, guides: boolean[]): void => {
+  const pending: { item: Flat; depth: number; guides: boolean[] }[] = [];
+  const emit = (item: Flat, depth: number, guides: boolean[]): void => { pending.push({ item, depth, guides }); };
+  // a root has no level above it, so no guide column hangs over it
+  for (const root of [...childrenUnder(null)].reverse()) emit(root, 0, []);
+  while (pending.length > 0) {
+    const { item, depth, guides } = pending.pop()!;
     const entry = item.node.entry;
     const { role, text } = entryLine(entry);
     const children = childrenUnder(entry.id);
     // pi folds only where a branch segment starts: a root, or one of several branches
-    const siblings = childrenUnder(visibleParent.get(entry.id) ?? null);
-    const foldable = children.length > 0 && (depth === 0 || siblings.length > 1);
+    const parent = visibleParent.get(entry.id) ?? null;
+    const foldable = children.length > 0 && (parent === null || childrenUnder(parent).length > 1);
     const isFolded = foldable && folded.has(entry.id);
-    const hidden = isFolded ? children.reduce((count, child) => count + 1 + descendantCount(child, visibleChildren), 0) : 0;
+    const hidden = isFolded ? descendantCount(children, visibleChildren) : 0;
     rows.push({
       id: entry.id,
       kind: entry.type ?? "message",
@@ -270,16 +282,26 @@ export function piTreeRows(answer: PiTreeAnswer | null | undefined, options: PiT
       active: active.has(entry.id),
       forking: role === "user",
     });
-    if (isFolded) return;
-    children.forEach((child, at) => emit(child, depth + 1, [...guides, at < children.length - 1]));
-  };
-  // a root has no level above it, so no guide column hangs over it
-  for (const root of childrenUnder(null)) emit(root, 0, []);
+    if (isFolded) continue;
+    // a branch column is opened only where the row forks: a single-child chain stays on its line,
+    // so a long conversation does not staircase off the screen
+    const forks = children.length > 1;
+    // pushed last-first, so the stack gives the first child first
+    for (let at = children.length - 1; at >= 0; at -= 1) {
+      emit(children[at]!, forks ? depth + 1 : depth, forks ? [...guides, at < children.length - 1] : guides);
+    }
+  }
   return rows;
 }
 
-/** The visible rows under one row, however deep: what a fold is hiding. */
-function descendantCount(item: Flat, visibleChildren: ReadonlyMap<string | null, Flat[]>): number {
-  const children = visibleChildren.get(item.node.entry.id) ?? [];
-  return children.reduce((count, child) => count + 1 + descendantCount(child, visibleChildren), 0);
+/** The visible rows under one branch, however deep: what a fold is hiding. */
+function descendantCount(children: readonly Flat[], visibleChildren: ReadonlyMap<string | null, Flat[]>): number {
+  let count = 0;
+  const stack = [...children];
+  while (stack.length > 0) {
+    const child = stack.pop()!;
+    count += 1;
+    stack.push(...(visibleChildren.get(child.node.entry.id) ?? []));
+  }
+  return count;
 }

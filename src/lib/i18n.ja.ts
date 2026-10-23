@@ -1224,6 +1224,7 @@ export const JA: Record<string, string> = {
   // ---- subscription usage ----
   "Shows plan usage beside Settings. Sign-ins are sent to each provider's usage API; never refreshed here.": "設定の横にプラン使用量を表示します。ログイン情報を各サービスの使用量APIに送信し、ここでは更新しません。",
   "Accounts": "アカウント",
+  "Show {count} more": "さらに {count} 件表示",
   "Show {name}": "{name} を表示",
   "{percent} left": "残り {percent}",
   "Meters show": "メーターの表示",
@@ -1667,4 +1668,6 @@ export const JA: Record<string, string> = {
   "Forked from \"{name}\"": "「{name}」から分岐しました",
   "Go back": "戻る",
   "Clone session": "セッションを複製",
+  "Fork was cancelled": "分岐はキャンセルされました",
+  "Clone was cancelled": "複製はキャンセルされました",
 };

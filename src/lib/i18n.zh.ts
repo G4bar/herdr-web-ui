@@ -1226,6 +1226,7 @@ export const ZH: Record<string, string> = {
   // ---- subscription usage ----
   "Shows plan usage beside Settings. Sign-ins are sent to each provider's usage API; never refreshed here.": "在设置旁显示套餐用量。登录信息会发送至各服务的用量 API，此处不会刷新。",
   "Accounts": "账户",
+  "Show {count} more": "再显示 {count} 项",
   "Show {name}": "显示 {name}",
   "{percent} left": "剩余 {percent}",
   "Meters show": "计量显示",
@@ -1669,4 +1670,6 @@ export const ZH: Record<string, string> = {
   "Forked from \"{name}\"": "已从“{name}”分叉",
   "Go back": "返回",
   "Clone session": "克隆会话",
+  "Fork was cancelled": "分叉已取消",
+  "Clone was cancelled": "克隆已取消",
 };
