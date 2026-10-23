@@ -1661,4 +1661,8 @@ export const KO: Record<string, string> = {
   "No entries match": "일치하는 항목이 없습니다",
   "Couldn't fork: {reason}": "분기하지 못했습니다: {reason}",
   "({count} more)": "({count}개 더)",
+  "Fork from here": "여기서 분기",
+  "Forked from \"{name}\"": "\"{name}\"에서 분기했습니다",
+  "Go back": "돌아가기",
+  "Clone session": "세션 복제",
 };

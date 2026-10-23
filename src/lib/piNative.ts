@@ -77,7 +77,7 @@ export class PiNativeLanes {
 export const piNativeLanes = new PiNativeLanes();
 
 /** The server's sentence for a refused action: what the pane said, not the URL and status around it. */
-const refusal = (error: unknown): string => error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error);
+export const refusal = (error: unknown): string => error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error);
 
 /** POST /api/pi/takeover: Pi's state lands in the lane, or the trust question its folder raised does. */
 export async function takeOverPi(paneId: string, machineId = "local", trust?: "approve" | "deny"): Promise<PiTakeover> {

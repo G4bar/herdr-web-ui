@@ -1663,4 +1663,8 @@ export const JA: Record<string, string> = {
   "No entries match": "一致する項目はありません",
   "Couldn't fork: {reason}": "分岐できませんでした: {reason}",
   "({count} more)": "（他 {count} 件）",
+  "Fork from here": "ここから分岐",
+  "Forked from \"{name}\"": "「{name}」から分岐しました",
+  "Go back": "戻る",
+  "Clone session": "セッションを複製",
 };

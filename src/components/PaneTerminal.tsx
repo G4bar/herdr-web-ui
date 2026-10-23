@@ -52,7 +52,8 @@ import { TrustCard } from "./PromptCard.tsx";
 import type { AgentStatus, ClientRole, ConversationMetadata, InteractivePrompt, PlanSummary, ServerMessage } from "../../shared/protocol.ts";
 import type { PaneControls, PaneView } from "../lib/actions.ts";
 import { usePaneLane } from "../lib/chatLane.ts";
-import { clearedQueue, queueRows, usePiNative } from "../lib/piNative.ts";
+import { clearedQueue, piNativeLanes, queueRows, refusal, usePiNative } from "../lib/piNative.ts";
+import { forkNoteName, piForks, usePiForkNote } from "../lib/piFork.ts";
 import { useSettings, terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings.ts";
 import { loadFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "../lib/fontFamily.ts";
 import { useT } from "../lib/i18n.ts";
@@ -2950,6 +2951,34 @@ export function PaneTerminal({
   const [piStopReturned, setPiStopReturned] = useState<number | null>(null);
   useEffect(() => { if (piNative.state?.isStreaming === true) setPiStopReturned(null); }, [piNative.state?.isStreaming]);
   useEffect(() => { setPiStopReturned(null); }, [paneId]);
+  // A fork from a message the chat shows (DS §4.9): Pi restores it and continues in another session
+  // file the registry follows, the message goes back into the box, and the transcript keeps a row
+  // naming where it began, with the way back to the file Pi held before it
+  const forkKey = paneId === null ? null : paneStorageId(machineId, paneId);
+  const forkNote = usePiForkNote(machineId, paneId);
+  const forkFromHere = useCallback((entryId: string, text: string): void => {
+    if (forkKey === null) return;
+    const previous = piNative.state?.sessionFile ?? null;
+    void piRpc({ type: "fork", entryId }).then(
+      (data) => {
+        // Pi hands the message back to be edited; a child that answers nothing keeps the turn's own words
+        const handed = (data as { text?: unknown } | null)?.text;
+        composerDrafts.set(`ovis:composer-draft:${forkKey}`, typeof handed === "string" && handed !== "" ? handed : text);
+        piForks.set(forkKey, { from: forkNoteName(text), sessionFile: previous });
+      },
+      (error: unknown) => piNativeLanes.fail(forkKey, refusal(error)),
+    );
+  }, [forkKey, piNative.state?.sessionFile, piRpc]);
+  const forkBack = useCallback((): void => {
+    const sessionFile = piForks.get(forkKey)?.sessionFile ?? null;
+    if (forkKey === null || sessionFile === null) return;
+    void piRpc({ type: "switch_session", sessionPath: sessionFile }).then(
+      () => piForks.clear(forkKey),
+      (error: unknown) => piNativeLanes.fail(forkKey, refusal(error)),
+    );
+  }, [forkKey, piRpc]);
+  // the row names a thing the reader has since finished: Pi streaming is the forked message going out
+  useEffect(() => { if (piNative.state?.isStreaming === true) piForks.clear(forkKey); }, [forkKey, piNative.state?.isStreaming]);
   const abortTurn = useCallback((): void | Promise<readonly string[]> => {
     // A pane the chat drives over RPC has no key to press: Stopping is Pi's own queue cleared, then the
     // turn aborted, and what the queue held goes back to the box (DS §4.4)
@@ -3572,6 +3601,9 @@ export function PaneTerminal({
             // an opened bash card's Stop, while pi still runs that call
             onPiAbort={nativePi ? () => { void piRpc({ type: "abort" }).catch(() => undefined); } : undefined}
             stoppedQueue={piStopReturned}
+            onPiFork={forkFromHere}
+            forkNote={forkNote}
+            onForkBack={forkBack}
           />
           </RenderBoundary>
         )}

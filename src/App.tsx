@@ -60,7 +60,7 @@ import { formatKeys, shortcutDisplayKeys, useShortcuts } from "./lib/shortcuts.t
 import { useMediaQuery } from "./lib/useMediaQuery.ts";
 import { useAnnouncedText } from "./lib/useAnnouncedText.ts";
 import { PaneLenses } from "./lib/paneLens.ts";
-import { handBackPi, reconnectPi, takeOverPi, usePiNativeLane } from "./lib/piNative.ts";
+import { handBackPi, piNativeLanes, reconnectPi, refusal, takeOverPi, usePiNativeLane } from "./lib/piNative.ts";
 import { paneContextPress } from "./lib/paneCanvas.ts";
 import type { AppActions, PaneView, PaneControls } from "./lib/actions.ts";
 import {
@@ -1667,7 +1667,11 @@ export function App() {
     // what Pi loaded for this session (DS §4.10): a Pi pane's alone, in either mode
     ...(piPane ? [{ id: "session-context", label: t("Session context"), icon: Package, run: openSessionContext }] : []),
     // the session tree, and the fork a row offers (DS §4.9): a pane the chat drives has one
-    ...(piPane && piMode === "native" ? [{ id: "session-tree", label: t("Session tree"), icon: GitFork, run: openSessionTree }] : []),
+    ...(piPane && piMode === "native" ? [
+      { id: "session-tree", label: t("Session tree"), icon: GitFork, run: openSessionTree },
+      // Pi continues this conversation in another session file, which the chat then follows
+      { id: "clone-session", label: t("Clone session"), icon: GitFork, run: () => { void sendPiRpc(piPane.pane_id, { type: "clone" }, selectedMachineId).catch((error: unknown) => piNativeLanes.fail(paneStorageId(selectedMachineId, piPane.pane_id), refusal(error))); } },
+    ] : []),
     ...(bellVisible ? [{ id: "alerts", label: t("Alerts"), hint: bell.state, checked: bell.on, title: bell.title, icon: Bell, run: () => void bell.run() }] : []),
   ];
 

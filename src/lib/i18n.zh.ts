@@ -1665,4 +1665,8 @@ export const ZH: Record<string, string> = {
   "No entries match": "没有匹配的条目",
   "Couldn't fork: {reason}": "无法分叉：{reason}",
   "({count} more)": "（另有 {count} 个）",
+  "Fork from here": "从此处分叉",
+  "Forked from \"{name}\"": "已从“{name}”分叉",
+  "Go back": "返回",
+  "Clone session": "克隆会话",
 };

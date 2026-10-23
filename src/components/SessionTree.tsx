@@ -17,6 +17,9 @@ import { ChevronDown, ChevronRight, Tag, X } from "lucide-react";
 import "./SessionTree.css";
 
 import { ApiError, sendPiRpc } from "../lib/api.ts";
+import { paneStorageId } from "../../shared/machines.ts";
+import { forkNoteName, piForks } from "../lib/piFork.ts";
+import { piNativeLanes } from "../lib/piNative.ts";
 import { formatChatTimestamp } from "../lib/chatTimestamp.ts";
 import { useLocale, useT } from "../lib/i18n.ts";
 import { PI_TREE_FILTERS, piTreeFilterKey, piTreeRows, type PiTreeAnswer, type PiTreeFilter, type PiTreeNode, type PiTreeRow } from "../lib/piTree.ts";
@@ -125,11 +128,15 @@ export function SessionTree({ paneId, machineId, streaming, onFork, onClose }: S
     if (!row.forking || streaming || forking) return;
     setForking(true);
     setError(null);
+    // the file Pi holds now is the way back: read before the fork, since the child reports the new one
+    const previous = piNativeLanes.get(paneStorageId(machineId, paneId)).state?.sessionFile ?? null;
     void sendPiRpc(paneId, { type: "fork", entryId: row.id }, machineId).then(
       (data) => {
         const text = (data as { text?: unknown } | null)?.text;
         // Pi hands the message back; a child that answers nothing keeps the row's own words
-        onFork(typeof text === "string" && text !== "" ? text : row.text);
+        const message = typeof text === "string" && text !== "" ? text : row.text;
+        piForks.set(paneStorageId(machineId, paneId), { from: forkNoteName(message), sessionFile: previous });
+        onFork(message);
         onClose();
       },
       (reason: unknown) => {

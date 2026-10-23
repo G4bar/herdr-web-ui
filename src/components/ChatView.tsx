@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleQuestionMark, CircleSlash, CircleX, Copy, Layers, SquareTerminal, Target, TriangleAlert, Undo2,
+  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleQuestionMark, CircleSlash, CircleX, Copy, GitFork, Layers, SquareTerminal, Target, TriangleAlert, Undo2,
   type LucideProps,
 } from "lucide-react";
 
@@ -28,6 +28,7 @@ import { seenKey } from "../lib/seenFinishes.ts";
 import { useWholeOutput as useScopedOutput } from "../lib/useWholeOutput.ts";
 import { turnSkills } from "../lib/skillActivity.ts";
 import { ApiError } from "../lib/api.ts";
+import { type PiForkNote } from "../lib/piFork.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
@@ -206,6 +207,13 @@ export interface ChatViewProps {
   onRewindInTerminal?: () => void;
   /** an opened bash card's Stop, while a native Pi still runs the call: the pane's `abort` (nothing without a native Pi) */
   onPiAbort?: () => void;
+  /** a native Pi's user turn forks from itself (DS §4.9): `fork` names the message by its entry id and
+   *  hands its text back for the box, and Pi moves to a new session file */
+  onPiFork?: (entryId: string, text: string) => void;
+  /** the fork this page last made in this pane: the row under the transcript, with Go back */
+  forkNote?: PiForkNote | null;
+  /** Go back: `switch_session` to the file Pi held before that fork */
+  onForkBack?: () => void;
   /** the queued messages a native Stop just took back into the message box: its quiet line ends the transcript (DS §4.4) */
   stoppedQueue?: number | null;
 }
@@ -832,6 +840,10 @@ interface TurnProps {
   onRewindInTerminal?: (() => void) | null;
   /** the runtime writes its own custom messages into the user's seat (pi's `role:"custom"`): they read as a card */
   customMessage?: boolean;
+  /** native Pi: this user turn's "Fork from here", which sends the turn's own entry id (null for every other pane) */
+  onFork?: ((entryId: string, text: string) => void) | null;
+  /** Pi is running a turn, so it takes no fork: the button stays, disabled (DS §4.9) */
+  forkBlocked?: boolean;
 }
 
 const TASK_RESULT_ICONS: Record<OmoTaskResult["status"], ComponentType<LucideProps>> = { completed: CircleCheck, failed: CircleX, cancelled: CircleSlash };
@@ -915,6 +927,19 @@ export function RuntimeNoticeRow({ notice, time, custom }: { notice: Extract<Con
   </ChatDetails>;
 }
 
+/**
+ * The quiet row a fork leaves (DS §4.9): the message it started from, and the way back to the file
+ * Pi held before it. A live region — the fork moved the session without the reader seeing it move.
+ */
+export function PiForkNoteRow({ note, onBack }: { note: PiForkNote; onBack: (() => void) | null }) {
+  const t = useT();
+  return <p className="chat-note chat-fork-note" role="status">
+    <GitFork className="chat-note-icon" aria-hidden="true" />
+    <span className="chat-note-text">{t("Forked from \"{name}\"", { name: note.from })}</span>
+    {onBack !== null && note.sessionFile !== null && <button type="button" className="btn btn-ghost chat-fork-back" onClick={onBack}>{t("Go back")}</button>}
+  </p>;
+}
+
 /** what one `notify` reads as: the severity is the glyph and its colour, the words are the extension's own */
 const NOTICE_GLYPH = { info: CircleDot, warning: TriangleAlert, error: CircleX } as const;
 
@@ -934,7 +959,7 @@ export function PiNoticeRows({ notices }: { notices: readonly PiNativeNotice[] }
 }
 
 // a turn that did not change keeps its object across polls: skip re-rendering it
-const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, expandRows, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null, customMessage = false }: TurnProps) {
+export const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, expandRows, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null, customMessage = false, onFork = null, forkBlocked = false }: TurnProps) {
   const t = useT();
   // under the turn, not in its meta row: that row fades out once the pointer and focus leave
   const [copyFailed, setCopyFailed] = useChatRowToggle("copy-failed", false);
@@ -980,6 +1005,10 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, exp
         <div className="chat-turn-meta">{time}{text.length > 0 && <CopyButton text={text} label={t("Copy message")} onResult={copied} />}
           {text.length > 0 && onRewindInTerminal !== null && (
             <button type="button" className="icon-button chat-copy chat-rewind" aria-label={t("Rewind in terminal")} title={t("Rewind in terminal")} onClick={onRewindInTerminal}><Undo2 aria-hidden="true" /></button>
+          )}
+          {/* native Pi's own rewind: Pi restores this message and continues in another session file */}
+          {text.length > 0 && onFork !== null && typeof turn.entry_id === "string" && (
+            <button type="button" className="icon-button chat-copy chat-fork" disabled={forkBlocked} aria-label={t("Fork from here")} title={t("Fork from here")} onClick={() => onFork(turn.entry_id!, text)}><GitFork aria-hidden="true" /></button>
           )}
         </div>
       </div>
@@ -1068,7 +1097,7 @@ function TerminalFallback({ paneId, visible }: { paneId: string; visible: boolea
 }
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, onRewindInTerminal, piNative = null, onPiAbort, stoppedQueue = null }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, onRewindInTerminal, piNative = null, onPiAbort, stoppedQueue = null, onPiFork, forkNote = null, onForkBack }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -1859,15 +1888,19 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   // Nothing is typed: drafts and the agent's own rewind remain in the terminal.
   const offered = rewindOffer({ agent, interactive, connected, ended, conversation: state.source === "conversation" });
   const rewindInTerminal = offered === "terminal" ? onRewindInTerminal ?? null : null;
+  // a native Pi's own branch from here (DS §4.9): it takes no fork mid-turn, so the button waits
+  const forkFromTurn = piNative?.mode === "native" ? onPiFork ?? null : null;
+  const forkBlocked = piNative?.isStreaming === true;
   const renderTurn = useCallback((row: ChatRow) => {
     if (row.turn === null) return <OutcomeRow outcome={row.outcome} actions={outcomeActions} skills={skillMatcher} />;
     const { turn } = row;
     const live = isLiveWorkTurn(turn, row.index === shownTurns.length - 1, workStatus, finishedBeforeSend);
     return <RenderBoundary resetKey={turnRevision(turn, true)} fallback={() => <p className="chat-inline-state chat-inline-error" data-pane-content-error>{t("This message can't be shown here. The terminal has it.")}</p>}>
       <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} showThinking={settings.showThinking} expandRows={settings.expandToolOutput} skills={skillMatcher} userSkills={skillMatcher} outcome={row.outcome} outcomeActions={outcomeActions}
-        onRewindInTerminal={turn.role === "user" ? rewindInTerminal : null} customMessage={agent === "pi"} />
+        onRewindInTerminal={turn.role === "user" ? rewindInTerminal : null} customMessage={agent === "pi"}
+        onFork={turn.role === "user" ? forkFromTurn : null} forkBlocked={forkBlocked} />
     </RenderBoundary>;
-  }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agent, agentStatus, settings.showThinking, settings.expandToolOutput, skillMatcher, outcomeActions, rewindInTerminal]);
+  }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agent, agentStatus, settings.showThinking, settings.expandToolOutput, skillMatcher, outcomeActions, rewindInTerminal, forkFromTurn, forkBlocked]);
   // displayPaneTitle falls back to the pane id for a pane with nothing else to call it
   const shownTitle = title?.trim() ?? "";
   const logLabel = shownTitle !== "" && shownTitle !== paneId ? t("conversation of {pane}", { pane: shownTitle }) : t("Conversation");
@@ -1910,6 +1943,8 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
       {/* a native Stop that took Pi's queue back into the message box (DS §4.4): the run's own quiet line,
           in the chip's register, gone at the next turn */}
       {stoppedQueue !== null && stoppedQueue > 0 && <p className="chat-outcome chat-stop-note" role="status">{stopReturnedNote(t, stoppedQueue)}</p>}
+      {/* a fork this pane made (DS §4.9): Pi holds another file now, and the row says where it began */}
+      {forkNote !== null && <PiForkNoteRow note={forkNote} onBack={onForkBack ?? null} />}
       {/* The agent's activity, where no open work block says it: before the turn has an assistant or
           tool row (Claude Code's spinner writes nothing to the transcript), and while a native turn
           thinks (a work block's head says Working). Without native activity the pane status stands

@@ -1939,6 +1939,19 @@
    register and on the message's side (DS §4.4) */
 .chat-stop-note { margin: 0; }
 
+/* the row a fork leaves (DS §4.9): where the branch began, and Go back, its one control */
+.chat-fork-note {
+  flex-wrap: wrap;
+  margin: 0;
+}
+
+.chat-fork-back {
+  margin-left: auto;
+  height: var(--chip-h);
+  padding: 0 var(--space-2);
+  font-size: var(--fs-xs);
+}
+
 .chat-outcome-row {
   display: flex;
   flex-wrap: wrap;
