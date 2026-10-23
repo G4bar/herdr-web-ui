@@ -261,7 +261,12 @@ export interface TranscriptParser {
   snapshot(tail?: string): ConversationTurn[];
 }
 
-type OmpTranscriptOptions = { toolImages?: boolean; taskTitles?: Map<string, string> };
+/**
+ * `entryIds`: put each user entry's own id on its turn. Pi's session file is an entry tree and its RPC
+ * commands (`get_tree`, `fork`) name entries by that id, so a turn the reader may fork from has to
+ * carry it; the other pi-family readers share the parse but have no such command.
+ */
+type OmpTranscriptOptions = { toolImages?: boolean; taskTitles?: Map<string, string>; entryIds?: boolean };
 
 interface OmpParseState {
   turns: ConversationTurn[];
@@ -285,10 +290,10 @@ function ompParseState(options: OmpTranscriptOptions): OmpParseState {
  * notification. Merging across it folded the answer before it into the next turn's work block.
  */
 export function createOmpTranscriptParser(options: OmpTranscriptOptions = {}): TranscriptParser {
-  return ompTranscriptParser(ompParseState(options), options.toolImages === true);
+  return ompTranscriptParser(ompParseState(options), options.toolImages === true, options.entryIds === true);
 }
 
-function ompTranscriptParser(state: OmpParseState, toolImages: boolean): TranscriptParser {
+function ompTranscriptParser(state: OmpParseState, toolImages: boolean, entryIds = false): TranscriptParser {
   const { turns, pending, taskTitles } = state;
   const assistantTurn = (ts?: string): ConversationTurn => {
     const last = turns[turns.length - 1];
@@ -374,7 +379,13 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
         // SKILL.md the runtime put before it. Kept on this record, so no page boundary can part them
         const invocation = skillInvocationPrompt(prompt);
         const asked = invocation === null ? prompt : invocation.request || invocation.skills.map((skill) => `/skill:${skill.name}`).join(" ");
-        turns.push({ role: "user", ts: timestamp ?? null, parts: [{ kind: "text", text: asked }, ...(invocation?.skills ?? []).map((skill) => ({ kind: "skill" as const, skill }))] });
+        const id = (entry as { id?: unknown }).id;
+        turns.push({
+          role: "user",
+          ts: timestamp ?? null,
+          ...(entryIds && typeof id === "string" && id.length > 0 ? { entry_id: id } : {}),
+          parts: [{ kind: "text", text: asked }, ...(invocation?.skills ?? []).map((skill) => ({ kind: "skill" as const, skill }))],
+        });
         continue;
       }
 
@@ -424,7 +435,7 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
         // Clone the whole graph together: pending must point at the preview's tool parts,
         // and neither speculative title updates nor settled boundaries may escape it.
         const preview = structuredClone(state);
-        ompTranscriptParser(preview, toolImages).write(tail);
+        ompTranscriptParser(preview, toolImages, entryIds).write(tail);
         return preview.turns.filter((turn) => turn.parts.length > 0);
       }
       return structuredClone(turns.filter((turn) => turn.parts.length > 0));
@@ -435,7 +446,7 @@ function ompTranscriptParser(state: OmpParseState, toolImages: boolean): Transcr
 /** One-shot parsing shares the incremental record rules, including valid no-newline tails. */
 export function parseOmpTranscript(text: string, maxTurns = MAX_TURNS, options: OmpTranscriptOptions = {}): ConversationTurn[] {
   const state = ompParseState(options);
-  ompTranscriptParser(state, options.toolImages === true).write(text);
+  ompTranscriptParser(state, options.toolImages === true, options.entryIds === true).write(text);
   // No writer survives this call, so its owned turns need no detached snapshot.
   return state.turns.filter((turn) => turn.parts.length > 0).slice(-maxTurns);
 }

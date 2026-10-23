@@ -544,6 +544,9 @@ export interface ConversationTurn {
   ts: string | null;
   /** Last recorded assistant activity, never the next user's timestamp. */
   end_ts?: string;
+  /** The entry's own id in a Pi session file, when the turn is one entry: `get_tree` and `fork` name
+   * entries by it, so a user turn's "Fork from here" has the id to send. Absent for every other reader. */
+  entry_id?: string;
   parts: ConversationPart[];
 }
 

@@ -1138,6 +1138,21 @@ describe("parseOmpTranscript", () => {
     ].join("\n");
     expect(parseOmpTranscript(plain)[0]?.parts[0]).not.toHaveProperty("nested_calls");
   });
+
+  // Pi's `get_tree` and `fork` name a message by its session entry id, so a pi page carries it
+  it("carries a user entry's own id when the reader asks for ids, and only for the prompt", () => {
+    const pi = [
+      JSON.stringify({ type: "message", id: "u1", timestamp: "2026-10-01T00:00:00.000Z", message: { role: "user", content: [{ type: "text", text: "fix the crash" }] } }),
+      JSON.stringify({ type: "message", id: "a1", timestamp: "2026-10-01T00:00:01.000Z", message: { role: "assistant", content: [{ type: "text", text: "Guarded." }] } }),
+    ].join("\n");
+    expect(parseOmpTranscript(pi, Infinity, { entryIds: true })).toMatchObject([
+      { role: "user", entry_id: "u1" },
+      { role: "assistant" },
+    ]);
+    expect(parseOmpTranscript(pi, Infinity, { entryIds: true })[1]).not.toHaveProperty("entry_id");
+    // an omp or gjc session has ids of its own and no command that takes one
+    expect(parseOmpTranscript(pi)[0]).not.toHaveProperty("entry_id");
+  });
 });
 
 describe("omo transcript resolution", () => {
@@ -2181,6 +2196,9 @@ describe("a native Pi pane's transcript", () => {
       const conversation = await paneConversation(pane.pane_id, undefined, {}, undefined, undefined, undefined, undefined, native);
       expect(conversation.source).toBe("pi-transcript");
       expect(conversation.turns.map((turn) => turn.role)).toEqual(["user", "assistant"]);
+      // the id of the entry the chat forks from: `get_tree` and `fork` name it, the turn carries it
+      expect(conversation.turns[0]?.entry_id).toBe("u1");
+      expect(conversation.turns[1]).not.toHaveProperty("entry_id");
     } finally { snapshot.mockRestore(); forgetTranscriptState(); rmSync(root, { recursive: true, force: true }); }
     if (before === undefined) delete process.env["PI_CODING_AGENT_SESSION_DIR"];
     else process.env["PI_CODING_AGENT_SESSION_DIR"] = before;

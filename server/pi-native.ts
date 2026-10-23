@@ -101,6 +101,12 @@ export interface PiNativeOptions {
   log?: (line: string) => void;
 }
 
+/**
+ * The commands that leave pi holding another session file. pi answers them without a state record, so
+ * only a `get_state` after one says which file it holds now (PLAN D5: the chat reads the new one).
+ */
+const SESSION_MOVES = new Set(["fork", "clone", "switch_session", "new_session"]);
+
 /** The project resources pi protects (docs/security.md, `project trust`). `.agents/skills` is looked for upward. */
 const PROJECT_RESOURCES = [".pi/settings.json", ".pi/mcp.json", ".pi/extensions", ".pi/skills", ".pi/prompts", ".pi/themes", ".pi/SYSTEM.md", ".pi/APPEND_SYSTEM.md"] as const;
 const AGENTS_SKILLS = [".agents", "skills"] as const;
@@ -184,7 +190,7 @@ class Entry implements PiNativePane {
   constructor(
     readonly paneId: string,
     /** the session file the pane's child holds: a session move (switch_session, new_session, fork, clone)
-     * changes it, and the child's own state says which one it holds now */
+     * changes it, and the state read after one (`SESSION_MOVES`) says which one it holds now */
     public sessionFile: string,
     readonly cwd: string,
     readonly trust: PiTrust | undefined,
@@ -267,7 +273,15 @@ export class PiNativeRegistry implements PiNativeControl {
     const entry = this.panes.get(paneId);
     if (entry === undefined) throw new PiNativeError("not_native", "this pane is not driven by the chat", 404);
     if (entry.rpc === null) throw new PiNativeError("not_connected", "pi in this pane is not connected; reconnect it first", 409);
-    return await entry.rpc.call(command);
+    const answer = await entry.rpc.call(command);
+    if (SESSION_MOVES.has(command.type)) {
+      // pi answers a move without its new file: `get_state` names the one it holds now, and the state
+      // listener keeps it (the map, a reconnect, the transcript). The stats belonged to the old session.
+      // A read that fails is logged: the move already happened, and pi alone could say where it went.
+      await entry.rpc.call({ type: "get_state" }).catch((error: unknown) => this.log(`session move in ${paneId}: ${describe(error)}`));
+      void entry.rpc.call({ type: "get_session_stats" }).catch(() => undefined);
+    }
+    return answer;
   }
 
   /** The answer to the dialog the child waits on: its `extension_ui_response`, and the state stops waiting.

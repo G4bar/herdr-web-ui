@@ -21,7 +21,7 @@ class FakeChild implements PiNativeChild {
   private readonly stateListeners = new Set<(state: PiNativeState) => void>();
   private readonly exitListeners = new Set<(code: number | null) => void>();
 
-  constructor(private readonly sessionFile: string) {
+  constructor(private sessionFile: string) {
     this.state = { ...initialPiNativeState(), sessionFile };
   }
 
@@ -36,6 +36,14 @@ class FakeChild implements PiNativeChild {
       this.notify();
     }
     return {};
+  }
+
+  /**
+   * pi moved to another session file and said nothing else: a `fork`, `clone`, `switch_session` or
+   * `new_session` answer carries no state record, so only a later `get_state` names the new file.
+   */
+  movedTo(sessionFile: string): void {
+    this.sessionFile = sessionFile;
   }
 
   respond(id: string, answer: PiNativeUiAnswer): boolean {
@@ -319,8 +327,8 @@ describe("PiNativeRegistry lost and hand-back", () => {
     expect(h.registry.sessionFile("w:p1")).toBe(h.sessionFile);
     // `switch_session` is allowlisted: pi holds another file afterwards, and its own state says which
     const moved = join(h.root, "moved.jsonl");
+    h.children[0]!.movedTo(moved);
     await h.registry.call("w:p1", { type: "switch_session", sessionPath: moved });
-    h.children[0]!.move(moved);
     expect(h.registry.sessionFile("w:p1")).toBe(moved);
     // the map keeps it, so a bridge restart reconnects to the session pi actually holds
     const saved = JSON.parse(readFileSync(join(h.root, "state", "pi-native.json"), "utf8")) as { pane_id: string; session: string; cwd: string }[];
@@ -332,6 +340,31 @@ describe("PiNativeRegistry lost and hand-back", () => {
     h.children[1]!.move(again);
     await h.registry.handBack("w:p1");
     expect(h.calls).toEqual([`start:w:p1:${again}`]);
+  });
+
+  // a fork once carried nothing back: the pane kept reading the session it forked away from
+  it("reads the moved-to session back after a fork, a clone and a new session", async () => {
+    const h = setup();
+    await h.registry.takeover("w:p1");
+    const child = h.children[0]!;
+    for (const command of [{ type: "fork", entryId: "entry-2" }, { type: "clone" }, { type: "new_session" }]) {
+      const file = join(h.root, `${command.type}.jsonl`);
+      child.movedTo(file);
+      await expect(h.registry.call("w:p1", command)).resolves.toEqual({});
+      expect(h.registry.sessionFile("w:p1")).toBe(file);
+      expect(h.registry.state("w:p1")?.sessionFile).toBe(file);
+      const saved = JSON.parse(readFileSync(join(h.root, "state", "pi-native.json"), "utf8")) as { pane_id: string; session: string; cwd: string }[];
+      expect(saved).toEqual([{ pane_id: "w:p1", session: file, cwd: h.project }]);
+    }
+  });
+
+  it("answers a session move even when the read-back fails, and keeps the session it had", async () => {
+    const h = setup();
+    await h.registry.takeover("w:p1");
+    const child = h.children[0]!;
+    child.exitOnGetState = true;
+    await expect(h.registry.call("w:p1", { type: "clone" })).resolves.toEqual({});
+    expect(h.registry.sessionFile("w:p1")).toBe(h.sessionFile);
   });
 
   it("tells a watcher the last state of a pane it hands back or drops", async () => {
