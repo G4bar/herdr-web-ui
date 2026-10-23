@@ -4,7 +4,7 @@
  * (design/pi-native-chat/DESIGN.md §4.8). It reads only the snapshot the server parsed, so the
  * client never sees the raw status string.
  */
-import type { HerdsmanAgent, HerdsmanAgentState, PiNativeHerdsman } from "../../shared/protocol.ts";
+import type { ConversationPart, ConversationTurn, HerdsmanAgent, HerdsmanAgentState, PiNativeHerdsman } from "../../shared/protocol.ts";
 
 export type HerdsmanSection = "asks" | "running" | "finished" | "closed";
 
@@ -174,4 +174,56 @@ export function herdsmanElapsedMs(agent: HerdsmanAgent, now: number): number | n
 /** The roster ticks its elapsed times only while something can still move. */
 export function herdsmanLive(herdsman: PiNativeHerdsman | null): boolean {
   return herdsman ? herdsman.agents.some((agent) => isLive(agent.state)) : false;
+}
+
+/** What one turn's end draws for the agents it started: the ones that ended, and the ones asking (DS §4.8). */
+export interface HerdsmanTurnAgents {
+  finished: HerdsmanAgent[];
+  asking: HerdsmanAgent[];
+}
+
+/** The calls that start an agent, and so the turn an agent reads back in. */
+const DELEGATING_CALLS: readonly string[] = ["delegate_agent", "continue_agent"];
+
+/** The label a delegating call names, from its arguments: one this reader cannot parse names nobody. */
+function delegatedLabel(part: Extract<ConversationPart, { kind: "tool" }>): string | null {
+  if (!DELEGATING_CALLS.includes(part.name)) return null;
+  let args: unknown;
+  try { args = JSON.parse(part.input); } catch { return null; }
+  if (typeof args !== "object" || args === null) return null;
+  const label = (args as Record<string, unknown>)["label"];
+  return typeof label === "string" && label.trim() !== "" ? label : null;
+}
+
+/**
+ * Which turn's end draws which agents: each one where its own `delegate_agent` call is, so a
+ * second delegation below the first does not push the first agent's result down the transcript.
+ * An agent no call names (one a child delegated, or a transcript that starts after the call) is
+ * drawn under the last turn, where the live editor left it. Only the agents worth a row are
+ * listed: one that ended, or one waiting with a question.
+ */
+export function herdsmanTurnAgents(turns: readonly ConversationTurn[], herdsman: PiNativeHerdsman | null): Map<number, HerdsmanTurnAgents> {
+  const cards = new Map<number, HerdsmanTurnAgents>();
+  if (!herdsman || turns.length === 0) return cards;
+  // the last call for a label is the one that started the run the roster shows now
+  const startedOn = new Map<string, number>();
+  turns.forEach((turn, index) => {
+    for (const part of turn.parts) {
+      const label = part.kind === "tool" ? delegatedLabel(part) : null;
+      if (label !== null) startedOn.set(label, index);
+    }
+  });
+  const seen = new Set<string>();
+  for (const agent of herdsman.agents) {
+    if (seen.has(agent.label)) continue;
+    seen.add(agent.label);
+    const finished = agent.state === "finished" || agent.state === "failed";
+    const asking = agent.state === "asks" && agent.question !== undefined;
+    if (!finished && !asking) continue;
+    const index = startedOn.get(agent.label) ?? turns.length - 1;
+    const entry = cards.get(index) ?? { finished: [], asking: [] };
+    (finished ? entry.finished : entry.asking).push(agent);
+    cards.set(index, entry);
+  }
+  return cards;
 }

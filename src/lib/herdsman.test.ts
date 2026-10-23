@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
-import type { HerdsmanAgent, HerdsmanAgentState, PiNativeHerdsman } from "../../shared/protocol.ts";
-import { herdsmanChanges, herdsmanCounts, herdsmanElapsedMs, herdsmanLive, herdsmanRows } from "./herdsman.ts";
+import type { ConversationTurn, HerdsmanAgent, HerdsmanAgentState, PiNativeHerdsman } from "../../shared/protocol.ts";
+import { herdsmanChanges, herdsmanCounts, herdsmanElapsedMs, herdsmanLive, herdsmanRows, herdsmanTurnAgents } from "./herdsman.ts";
 
 function agent(label: string, state: HerdsmanAgentState, extra: Partial<HerdsmanAgent> = {}): HerdsmanAgent {
   return { label, definition: "worker", parent: null, state, ...extra };
@@ -126,5 +126,49 @@ describe("herdsman elapsed time", () => {
     expect(herdsmanLive(null)).toBe(false);
     expect(herdsmanLive(snapshot(agent("done", "finished"), agent("stale", "stale")))).toBe(false);
     expect(herdsmanLive(snapshot(agent("done", "finished"), agent("asks", "asks")))).toBe(true);
+  });
+});
+
+describe("herdsman agents in the transcript", () => {
+  const call = (name: string, input: unknown, summary = "Delegating"): ConversationTurn => ({
+    role: "assistant", ts: null, parts: [{ kind: "tool", name, summary, input: JSON.stringify(input), output: "" }],
+  });
+  const words = (text: string): ConversationTurn => ({ role: "assistant", ts: null, parts: [{ kind: "text", text }] });
+
+  it("draws each agent under the last turn that delegated it", () => {
+    const turns = [call("delegate_agent", { label: "scout_ui" }), words("working"), call("delegate_agent", { label: "researcher" }), call("continue_agent", { label: "scout_ui" })];
+    const cards = herdsmanTurnAgents(turns, snapshot(agent("scout_ui", "finished"), agent("researcher", "finished")));
+    // the later continue_agent is the run the roster shows, so scout_ui reads back there
+    expect(cards.get(3)?.finished.map((a) => a.label)).toEqual(["scout_ui"]);
+    expect(cards.get(2)?.finished.map((a) => a.label)).toEqual(["researcher"]);
+    expect(cards.size).toBe(2);
+  });
+
+  it("puts an agent no delegating call names on the last turn, and lists only the agents worth a row", () => {
+    const turns = [call("delegate_agent", { label: "scout_ui" }), words("done")];
+    const cards = herdsmanTurnAgents(turns, snapshot(
+      agent("scout_ui", "running"),
+      agent("child-of-a-child", "finished"),
+      agent("broke", "failed"),
+      agent("waiting", "asks", { question: { text: "Postgres or SQLite?", files: [] } }),
+      agent("shut", "closed"),
+    ));
+    expect(cards.has(0)).toBe(false);
+    expect(cards.get(1)?.finished.map((a) => a.label)).toEqual(["child-of-a-child", "broke"]);
+    expect(cards.get(1)?.asking.map((a) => a.label)).toEqual(["waiting"]);
+  });
+
+  it("reads a label only from arguments it can parse, and never from another tool", () => {
+    const broken: ConversationTurn = { role: "assistant", ts: null, parts: [{ kind: "tool", name: "delegate_agent", summary: "Delegated x", input: "{not json", output: "" }] };
+    const other = call("steer_agent", { label: "steered_one" });
+    const cards = herdsmanTurnAgents([broken, other, words("end")], snapshot(agent("legacy", "finished"), agent("steered_one", "finished")));
+    expect(cards.get(2)?.finished.map((a) => a.label)).toEqual(["legacy", "steered_one"]);
+  });
+
+  it("draws nothing without a roster or without a turn to draw it under", () => {
+    const turns = [call("delegate_agent", { label: "scout_ui" })];
+    expect(herdsmanTurnAgents(turns, null).size).toBe(0);
+    expect(herdsmanTurnAgents([], snapshot(agent("scout_ui", "finished"))).size).toBe(0);
+    expect(herdsmanTurnAgents(turns, snapshot(agent("scout_ui", "running"))).size).toBe(0);
   });
 });

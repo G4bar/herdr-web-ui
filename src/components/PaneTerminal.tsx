@@ -3614,6 +3614,8 @@ export function PaneTerminal({
             onPiFork={forkFromHere}
             forkNote={forkNote}
             onForkBack={forkBack}
+            // a finished agent's row and a child's question in the transcript lead to the same panel the roster opens
+            onOpenAgent={onOpenAgent}
           />
           </RenderBoundary>
         )}

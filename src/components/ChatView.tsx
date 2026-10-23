@@ -1,7 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleQuestionMark, CircleSlash, CircleX, Copy, GitFork, Layers, SquareTerminal, Target, TriangleAlert, Undo2,
+  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleQuestionMark, CircleSlash, CircleX, Copy, GitFork, Layers, MessageCircle, SquareTerminal, Target, TriangleAlert, Undo2, Users,
   type LucideProps,
 } from "lucide-react";
 
@@ -29,6 +29,7 @@ import { useWholeOutput as useScopedOutput } from "../lib/useWholeOutput.ts";
 import { turnSkills } from "../lib/skillActivity.ts";
 import { ApiError } from "../lib/api.ts";
 import { type PiForkNote } from "../lib/piFork.ts";
+import { herdsmanTurnAgents, type HerdsmanTurnAgents } from "../lib/herdsman.ts";
 import { copyText } from "../lib/clipboard.ts";
 import { attachmentFileName, mentionFileName, type GalleryImage } from "../lib/imageViewer.ts";
 import { useMachineApi } from "../lib/machineContext.tsx";
@@ -88,7 +89,7 @@ const ChatHistoryContext = createContext("");
  */
 const ImageViewerContext = createContext<(images: GalleryImage[], index: number) => void>(() => {});
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
-import type { AgentStatus, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, PiNativeNotice, PiNativeState, SlashCommand } from "../../shared/protocol.ts";
+import type { AgentStatus, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, HerdsmanAgent, InteractivePrompt, OmoTaskResult, PiNativeNotice, PiNativeState, SlashCommand } from "../../shared/protocol.ts";
 import { PI_NOTICE_MESSAGE_CHARS } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
@@ -216,6 +217,8 @@ export interface ChatViewProps {
   onForkBack?: () => void;
   /** the queued messages a native Stop just took back into the message box: its quiet line ends the transcript (DS §4.4) */
   stoppedQueue?: number | null;
+  /** opens one of the pane's Herdsman agents beside it (App's AgentPanel): a finished agent's row and a child's question lead there */
+  onOpenAgent?: (label: string) => void;
 }
 
 
@@ -903,6 +906,75 @@ function TeammateMessageRow({ message, stateKey }: { message: TeammateMessage; s
   </ChatDetails>;
 }
 
+/** What a Herdsman agent that ended reads back as: who it was, how it went, and its answer on request. */
+function AgentResultRow({ agent }: { agent: HerdsmanAgent }) {
+  const t = useT();
+  const failed = agent.state === "failed";
+  const Icon = failed ? CircleX : CircleCheck;
+  const duration = agent.startedAt === undefined || agent.endedAt === undefined ? null : formatElapsed(Math.max(0, agent.endedAt - agent.startedAt));
+  const meta = [
+    duration,
+    agent.toolCalls === undefined ? null : t(agent.toolCalls === 1 ? "{n} tool call" : "{n} tool calls", { n: agent.toolCalls }),
+    agent.tokens === undefined || agent.tokens === 0 ? null : t("{n} tokens", { n: formatTokens(agent.tokens) }),
+  ].filter((item): item is string => item !== null).join(" · ");
+  // the answer is drawn once the row is opened: a whole run's answer is long, and a turn can bring several
+  const [opened, setOpened] = useChatRowToggle(`agent-loaded:${agent.label}`, false);
+  return <ChatDetails memoryKey={`agent:${agent.label}`} className={`chat-task-result is-${failed ? "failed" : "completed"}`} onToggle={(event) => { if (event.currentTarget.open) setOpened(true); }}>
+    <summary>
+      <Icon className="chat-task-result-icon" aria-hidden="true" />
+      <span className="chat-task-result-main">
+        <span className="chat-task-result-title chat-agent-title"><span className="chat-agent-label">{agent.label}</span><span className="pill">{agent.definition}</span></span>
+        {meta !== "" && <span className="chat-task-result-meta">{meta}</span>}
+      </span>
+      <span className="chat-task-result-status">{failed ? t("Failed") : t("Done")}</span>
+      <ChevronDown className="chat-skill-caret" aria-hidden="true" />
+    </summary>
+    {opened && <div className="chat-task-result-body">
+      {agent.answer !== undefined && agent.answer.length > 0 ? <Markdown>{agent.answer}</Markdown> : <p className="chat-task-result-note">{t("The agent gave no answer")}</p>}
+    </div>}
+  </ChatDetails>;
+}
+
+/**
+ * A child agent waiting on an answer: its question as the transcript's own row, and the way into the
+ * panel's reply field (DS §4.8). It never folds, so the question reads without a press.
+ */
+function AgentQuestionRow({ agent, onOpenAgent }: { agent: HerdsmanAgent; onOpenAgent?: ((label: string) => void) | undefined }) {
+  const t = useT();
+  const question = agent.question;
+  if (question === undefined) return null;
+  const asks = t("{label} asks: {question}", { label: agent.label, question: question.text });
+  return <div className="chat-task-results chat-agent-question">
+    <div className="chat-task-result">
+      <div className="chat-agent-question-row">
+        <MessageCircle className="chat-task-result-icon" aria-hidden="true" />
+        <span className="chat-task-result-main">
+          <span className="chat-task-result-title chat-agent-question-text">{asks}</span>
+          {question.files.length > 0 && <span className="chat-task-result-meta">{question.files.map((file) => <code key={file} className="chat-agent-question-file">{file}</code>)}</span>}
+        </span>
+        {onOpenAgent !== undefined && <button type="button" className="btn btn-ghost chat-agent-reply" onClick={() => onOpenAgent(agent.label)}>{t("Reply")}</button>}
+      </div>
+    </div>
+  </div>;
+}
+
+/**
+ * What the Herdsman agents a turn started read back as at its end (DS §4.8 "In the transcript"): one
+ * card of the ones that finished, and a row for each one waiting on an answer.
+ */
+export function HerdsmanTurnCards({ entry, onOpenAgent }: { entry: HerdsmanTurnAgents; onOpenAgent?: (label: string) => void }) {
+  const t = useT();
+  if (entry.finished.length === 0 && entry.asking.length === 0) return null;
+  const heading = entry.finished.length === 1 ? t("1 agent finished") : t("{n} agents finished", { n: entry.finished.length });
+  return <>
+    {entry.finished.length > 0 && <section className="chat-task-results" aria-label={heading}>
+      <p className="chat-task-results-head"><Users aria-hidden="true" /><span>{heading}</span></p>
+      {entry.finished.map((agent) => <AgentResultRow key={agent.label} agent={agent} />)}
+    </section>}
+    {entry.asking.map((agent) => <AgentQuestionRow key={agent.label} agent={agent} onOpenAgent={onOpenAgent} />)}
+  </>;
+}
+
 /** what a runtime notice was: a background result by name, anything else by its own first line */
 function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPart, { kind: "notice" }>): string {
   if (notice.source === undefined || notice.source === "async-result") return t("Background result delivered");
@@ -1097,7 +1169,7 @@ function TerminalFallback({ paneId, visible }: { paneId: string; visible: boolea
 }
 
 // the app re-renders on every pane-status and poll; an unchanged transcript sits those out
-export const ChatView = memo(function ChatView({ paneId, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, onRewindInTerminal, piNative = null, onPiAbort, stoppedQueue = null, onPiFork, forkNote = null, onForkBack }: ChatViewProps) {
+export const ChatView = memo(function ChatView({ paneId, presentationKey, finishEpoch, finishId, active = true, visible: paneVisible = true, pageScroll, refreshKey, invalidationKey = 0, onConversationWatch, conversationPushes = false, onTerminalOutput, sentKey = 0, connected, ended, agent, agentStatus, onMetadata, onRead, greeted = false, onPrompt, onSuggestion, onRestored, promptRefreshKey = 0, pendingAnswer = null, onPendingAnswerDone, promptDock = null, onPromptAnswered, title = null, onOpenTerminal, covered = false, peek = null, onCommandScreenClosed, onOutcomes, interactive = false, onRewindInTerminal, piNative = null, onPiAbort, stoppedQueue = null, onPiFork, forkNote = null, onForkBack, onOpenAgent }: ChatViewProps) {
   const t = useT();
   const { fetchPaneConversation, peekPaneConversation, fetchPanePromptState, fetchPaneTranscript } = useMachineApi();
   const { settings } = useSettings();
@@ -1891,16 +1963,21 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
   // a native Pi's own branch from here (DS §4.9): it takes no fork mid-turn, so the button waits
   const forkFromTurn = piNative?.mode === "native" ? onPiFork ?? null : null;
   const forkBlocked = piNative?.isStreaming === true;
+  // what the Herdsman agents this transcript started read back as, by the turn that delegated them
+  const herdsman = piNative?.herdsman ?? null;
+  const agentCards = useMemo(() => herdsmanTurnAgents(shownTurns, herdsman), [shownTurns, herdsman]);
   const renderTurn = useCallback((row: ChatRow) => {
     if (row.turn === null) return <OutcomeRow outcome={row.outcome} actions={outcomeActions} skills={skillMatcher} />;
     const { turn } = row;
     const live = isLiveWorkTurn(turn, row.index === shownTurns.length - 1, workStatus, finishedBeforeSend);
+    const cards = agentCards.get(row.index);
     return <RenderBoundary resetKey={turnRevision(turn, true)} fallback={() => <p className="chat-inline-state chat-inline-error" data-pane-content-error>{t("This message can't be shown here. The terminal has it.")}</p>}>
       <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} showThinking={settings.showThinking} expandRows={settings.expandToolOutput} skills={skillMatcher} userSkills={skillMatcher} outcome={row.outcome} outcomeActions={outcomeActions}
         onRewindInTerminal={turn.role === "user" ? rewindInTerminal : null} customMessage={agent === "pi"}
         onFork={turn.role === "user" ? forkFromTurn : null} forkBlocked={forkBlocked} />
+      {cards !== undefined && <HerdsmanTurnCards entry={cards} onOpenAgent={onOpenAgent} />}
     </RenderBoundary>;
-  }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agent, agentStatus, settings.showThinking, settings.expandToolOutput, skillMatcher, outcomeActions, rewindInTerminal, forkFromTurn, forkBlocked]);
+  }, [shownTurns.length, agentCards, workStatus, finishedBeforeSend, t, paneId, agent, agentStatus, settings.showThinking, settings.expandToolOutput, skillMatcher, outcomeActions, rewindInTerminal, forkFromTurn, forkBlocked, onOpenAgent]);
   // displayPaneTitle falls back to the pane id for a pane with nothing else to call it
   const shownTitle = title?.trim() ?? "";
   const logLabel = shownTitle !== "" && shownTitle !== paneId ? t("conversation of {pane}", { pane: shownTitle }) : t("Conversation");
