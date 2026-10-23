@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { PiNativeState } from "../shared/protocol.ts";
-import { consumeEditorText, initialPiNativeState, NOTICE_LIMIT, PiRpc, reducePiEvent, TAIL_LINE_CHARS, TAIL_LINES } from "./pi-rpc.ts";
+import { consumeEditorText, initialPiNativeState, NOTICE_LIMIT, PiRpc, reducePiEvent, TAIL_LINE_CHARS, TAIL_LINES, WIDGET_LIMIT, WIDGET_LINES, WIDGET_LINE_CHARS } from "./pi-rpc.ts";
+import { PI_NOTICE_MESSAGE_CHARS } from "../shared/protocol.ts";
 
 // A fake pi on the other end of the RPC pipe: it answers commands by type, answers `get_state`
 // late (pi's handlers are async, so responses arrive out of order) and streams the records framing
@@ -295,6 +296,23 @@ describe("reducePiEvent", () => {
     const state = reduced(initialPiNativeState(), Array.from({ length: NOTICE_LIMIT + 5 }, (_, index) => ({ type: "extension_ui_request", id: `n${index}`, method: "notify", message: `notice ${index}` })));
     expect(state.notices).toHaveLength(NOTICE_LIMIT);
     expect(state.notices.at(-1)?.message).toBe(`notice ${NOTICE_LIMIT + 4}`);
+  });
+
+  it("cuts a notice's own text, so a chatty extension cannot fill the state with it", () => {
+    const state = reducePiEvent(initialPiNativeState(), { type: "extension_ui_request", id: "big", method: "notify", message: "x".repeat(100_000) });
+    expect(state.notices.at(-1)?.message).toHaveLength(PI_NOTICE_MESSAGE_CHARS);
+  });
+
+  it("keeps a widget to six lines of its own length, and eight widgets at once", () => {
+    const huge = reducePiEvent(initialPiNativeState(), { type: "extension_ui_request", id: "big", method: "setWidget", widgetKey: "w", widgetLines: Array.from({ length: 50 }, () => "y".repeat(100_000)) });
+    expect(huge.widgets["w"]?.lines).toHaveLength(WIDGET_LINES);
+    expect(huge.widgets["w"]?.lines.every((line) => line.length === WIDGET_LINE_CHARS)).toBe(true);
+
+    const many = reduced(initialPiNativeState(), Array.from({ length: WIDGET_LIMIT + 2 }, (_, index) => ({ type: "extension_ui_request", id: `w${index}`, method: "setWidget", widgetKey: `w${index}`, widgetLines: [`line ${index}`] })));
+    expect(Object.keys(many.widgets)).toHaveLength(WIDGET_LIMIT);
+    // the oldest key went, the newest kept its place
+    expect(many.widgets["w0"]).toBeUndefined();
+    expect(many.widgets[`w${WIDGET_LIMIT + 1}`]).toEqual({ lines: [`line ${WIDGET_LIMIT + 1}`], placement: "aboveEditor" });
   });
 
   it("keeps the last lines of a running tool and drops them when it ends", () => {

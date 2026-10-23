@@ -780,10 +780,14 @@ export interface PiNativeUiRequest {
 /** The answer to one `PiNativeUiRequest`: exactly one of the three shapes pi accepts. */
 export type PiNativeUiAnswer = { value: string } | { confirmed: boolean } | { cancelled: true };
 
+/** A notice's own text as the state keeps it: an extension's long message is cut here. */
+export const PI_NOTICE_MESSAGE_CHARS = 2000;
+
 /** One fire-and-forget `notify`, capped in the state and dropped oldest first. */
 export interface PiNativeNotice {
   id: string;
   type: "info" | "warning" | "error";
+  /** the extension's words, cut to `PI_NOTICE_MESSAGE_CHARS` */
   message: string;
 }
 

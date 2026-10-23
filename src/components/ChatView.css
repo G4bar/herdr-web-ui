@@ -1620,8 +1620,9 @@
 }
 
 /* a message the runtime put in the user's seat (pi's custom role): a quiet card rather than a
-   divider, its rail and label naming it as custom — no status colour means this */
-.chat-notice {
+   divider, its rail and label naming it as custom — no status colour means this. Another agent's
+   notice keeps the divider row it had */
+.chat-notice-custom {
   padding: var(--space-2) var(--space-3);
   border: var(--hairline) solid var(--border);
   border-left: var(--rail-w) solid var(--custom-label);
@@ -1629,8 +1630,8 @@
   background: var(--bg-elevated);
 }
 
-.chat-notice > summary::before,
-.chat-notice > summary::after {
+.chat-notice-custom > summary::before,
+.chat-notice-custom > summary::after {
   content: none;
 }
 
@@ -1641,6 +1642,9 @@
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+}
+
+.chat-notice-custom .chat-notice-label {
   color: var(--custom-label);
 }
 

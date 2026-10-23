@@ -88,6 +88,7 @@ const ChatHistoryContext = createContext("");
 const ImageViewerContext = createContext<(images: GalleryImage[], index: number) => void>(() => {});
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
 import type { AgentStatus, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, PiNativeNotice, PiNativeState, SlashCommand } from "../../shared/protocol.ts";
+import { PI_NOTICE_MESSAGE_CHARS } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
 import { useT } from "../lib/i18n.ts";
@@ -829,6 +830,8 @@ interface TurnProps {
   outcomeActions?: OutcomeActions | null;
   /** Claude Code, grok, agy: the message offers to open the terminal, where the agent's own rewind is run (lib/rewindAction.ts) */
   onRewindInTerminal?: (() => void) | null;
+  /** the runtime writes its own custom messages into the user's seat (pi's `role:"custom"`): they read as a card */
+  customMessage?: boolean;
 }
 
 const TASK_RESULT_ICONS: Record<OmoTaskResult["status"], ComponentType<LucideProps>> = { completed: CircleCheck, failed: CircleX, cancelled: CircleSlash };
@@ -902,10 +905,11 @@ function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPar
 /**
  * A message the agent's runtime put in the user's seat (pi's `role:"custom"`): a quiet card, its rail
  * and label naming it as custom rather than as one of the status colours, the text itself on request.
+ * `custom` is false for every other agent's notice, which keeps the divider row it had.
  */
-export function RuntimeNoticeRow({ notice, time }: { notice: Extract<ConversationPart, { kind: "notice" }>; time: ReactNode }) {
+export function RuntimeNoticeRow({ notice, time, custom }: { notice: Extract<ConversationPart, { kind: "notice" }>; time: ReactNode; custom: boolean }) {
   const t = useT();
-  return <ChatDetails memoryKey="notice" className="chat-compact chat-notice">
+  return <ChatDetails memoryKey="notice" className={custom ? "chat-compact chat-notice chat-notice-custom" : "chat-compact chat-notice"}>
     <summary><span className="chat-notice-label">{noticeLabel(t, notice)}</span>{time !== null && <> · {time}</>}</summary>
     <pre className="chat-compact-text chat-notice-text">{notice.text}</pre>
   </ChatDetails>;
@@ -922,7 +926,7 @@ const NOTICE_GLYPH = { info: CircleDot, warning: TriangleAlert, error: CircleX }
 export function PiNoticeRows({ notices }: { notices: readonly PiNativeNotice[] }) {
   return <>{notices.map((notice) => {
     const Glyph = NOTICE_GLYPH[notice.type];
-    return <p key={notice.id} className="chat-note" data-notice={notice.type} title={notice.message}>
+    return <p key={notice.id} className="chat-note" data-notice={notice.type} title={notice.message.slice(0, PI_NOTICE_MESSAGE_CHARS)}>
       <Glyph className="chat-note-icon" aria-hidden="true" />
       <span className="chat-note-text">{notice.message}</span>
     </p>;
@@ -930,7 +934,7 @@ export function PiNoticeRows({ notices }: { notices: readonly PiNativeNotice[] }
 }
 
 // a turn that did not change keeps its object across polls: skip re-rendering it
-const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, expandRows, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null }: TurnProps) {
+const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, expandRows, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null, customMessage = false }: TurnProps) {
   const t = useT();
   // under the turn, not in its meta row: that row fades out once the pointer and focus leave
   const [copyFailed, setCopyFailed] = useChatRowToggle("copy-failed", false);
@@ -955,7 +959,7 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, exp
   }
   // the runtime spoke, not the user: a quiet card of its own, the text on request
   const notice = turn.parts.find((part): part is Extract<ConversationPart, { kind: "notice" }> => part.kind === "notice");
-  if (notice !== undefined) return <RuntimeNoticeRow notice={notice} time={time} />;
+  if (notice !== undefined) return <RuntimeNoticeRow notice={notice} time={time} custom={customMessage} />;
   if (turn.role === "user") {
     if (outcome !== null && terminalOnlyOutcome(outcome, outcomeActions)) return <TerminalCommandRow outcome={outcome} actions={outcomeActions} />;
     const text = userText(turn);
@@ -1024,7 +1028,7 @@ export function ChatFallback({ paneId, agent, visible, messages, outcomes, resto
     {agent !== null && <TerminalFallback key={paneId} paneId={paneId} visible={visible} />}
     {rows.map((row) => row.kind === "sent"
       ? <OutcomeRow key={`outcome:${row.outcome.id}`} outcome={row.outcome} actions={actions} skills={skills} />
-      : <Turn key={row.index} paneId={paneId} turn={turns[row.index]!} live={false} waiting={false} showThinking={false} expandRows={false} outcome={row.outcome} outcomeActions={actions} />)}
+      : <Turn key={row.index} paneId={paneId} turn={turns[row.index]!} live={false} waiting={false} showThinking={false} expandRows={false} outcome={row.outcome} outcomeActions={actions} customMessage={agent === "pi"} />)}
   </>;
 }
 
@@ -1861,9 +1865,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
     const live = isLiveWorkTurn(turn, row.index === shownTurns.length - 1, workStatus, finishedBeforeSend);
     return <RenderBoundary resetKey={turnRevision(turn, true)} fallback={() => <p className="chat-inline-state chat-inline-error" data-pane-content-error>{t("This message can't be shown here. The terminal has it.")}</p>}>
       <Turn paneId={paneId} turn={turn} live={live} waiting={isWaitingWorkTurn(live, agentStatus)} showThinking={settings.showThinking} expandRows={settings.expandToolOutput} skills={skillMatcher} userSkills={skillMatcher} outcome={row.outcome} outcomeActions={outcomeActions}
-        onRewindInTerminal={turn.role === "user" ? rewindInTerminal : null} />
+        onRewindInTerminal={turn.role === "user" ? rewindInTerminal : null} customMessage={agent === "pi"} />
     </RenderBoundary>;
-  }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agentStatus, settings.showThinking, settings.expandToolOutput, skillMatcher, outcomeActions, rewindInTerminal]);
+  }, [shownTurns.length, workStatus, finishedBeforeSend, t, paneId, agent, agentStatus, settings.showThinking, settings.expandToolOutput, skillMatcher, outcomeActions, rewindInTerminal]);
   // displayPaneTitle falls back to the pane id for a pane with nothing else to call it
   const shownTitle = title?.trim() ?? "";
   const logLabel = shownTitle !== "" && shownTitle !== paneId ? t("conversation of {pane}", { pane: shownTitle }) : t("Conversation");

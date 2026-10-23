@@ -1,4 +1,5 @@
 import type { PiNativeModel, PiNativeNotice, PiNativeState, PiNativeStats, PiNativeUiAnswer, PiNativeUiRequest } from "../shared/protocol.ts";
+import { PI_NOTICE_MESSAGE_CHARS } from "../shared/protocol.ts";
 
 /**
  * pi driven over its RPC mode (`pi --mode rpc --session <file>`), one child per native pane, and
@@ -14,6 +15,11 @@ export const NOTICE_LIMIT = 20;
 /** How much of a running tool's output a tail keeps, and how long each of its lines may be. */
 export const TAIL_LINES = 12;
 export const TAIL_LINE_CHARS = 400;
+/** The widgets kept at once, the lines of each, and how long such a line may be: the composer draws
+ * six lines of them, and the oldest key goes when another arrives. */
+export const WIDGET_LIMIT = 8;
+export const WIDGET_LINES = 6;
+export const WIDGET_LINE_CHARS = 500;
 /** A stderr line longer than this is cut instead of read whole. */
 const STDERR_LINE_CHARS = 400;
 /** An exiting child gets this long to dispose its runtime before it is killed. */
@@ -24,6 +30,9 @@ let noticeSequence = 0;
 const nextNoticeId = (): string => `notice-${++noticeSequence}`;
 
 const utf8 = new TextDecoder();
+
+/** A notice's text, cut: an extension's own long message must not fill the state. */
+const noticeMessage = (value: string): string => value.slice(0, PI_NOTICE_MESSAGE_CHARS);
 
 /** One stdout record: a session event, an `extension_ui_request`, or a response. Only `type` is trusted. */
 export type PiRpcRecord = Record<string, unknown>;
@@ -272,7 +281,7 @@ function reduceUiRequest(state: PiNativeState, event: PiRpcRecord): PiNativeStat
   }
   switch (method) {
     case "notify": {
-      const notice: PiNativeNotice = { id, type: oneOf(event["notifyType"], NOTICE_TYPES) ?? "info", message: text(event["message"]) ?? "" };
+      const notice: PiNativeNotice = { id, type: oneOf(event["notifyType"], NOTICE_TYPES) ?? "info", message: noticeMessage(text(event["message"]) ?? "") };
       return { ...state, notices: [...state.notices, notice].slice(-NOTICE_LIMIT) };
     }
     case "setStatus": {
@@ -290,7 +299,12 @@ function reduceUiRequest(state: PiNativeState, event: PiRpcRecord): PiNativeStat
       if (key === null) return state;
       const widgets = { ...state.widgets };
       if (lines.length === 0) delete widgets[key];
-      else widgets[key] = { lines, placement: oneOf(event["widgetPlacement"], WIDGET_PLACEMENTS) ?? "aboveEditor" };
+      else {
+        widgets[key] = { lines: lines.slice(0, WIDGET_LINES).map((line) => line.slice(0, WIDGET_LINE_CHARS)), placement: oneOf(event["widgetPlacement"], WIDGET_PLACEMENTS) ?? "aboveEditor" };
+        // a record keeps its insertion order, so the keys past the cap are the oldest
+        const keys = Object.keys(widgets);
+        for (const oldest of keys.slice(0, Math.max(0, keys.length - WIDGET_LIMIT))) delete widgets[oldest];
+      }
       return { ...state, widgets };
     }
     case "set_editor_text": return { ...state, editorText: text(event["text"]) };
@@ -315,7 +329,7 @@ function reduceCompactionEnd(state: PiNativeState, event: PiRpcRecord): PiNative
   const failure = text(event["errorMessage"]);
   const next = { ...state, isCompacting: false };
   if (failure === null) return next;
-  const notice: PiNativeNotice = { id: nextNoticeId(), type: "error", message: `Compaction failed: ${failure}` };
+  const notice: PiNativeNotice = { id: nextNoticeId(), type: "error", message: noticeMessage(`Compaction failed: ${failure}`) };
   return { ...next, notices: [...state.notices, notice].slice(-NOTICE_LIMIT) };
 }
 
@@ -323,7 +337,7 @@ function reduceRetryEnd(state: PiNativeState, event: PiRpcRecord): PiNativeState
   const failure = text(event["finalError"]);
   const next = { ...state, retry: null };
   if (event["success"] === true || failure === null) return next;
-  const notice: PiNativeNotice = { id: nextNoticeId(), type: "error", message: `Retries failed: ${failure}` };
+  const notice: PiNativeNotice = { id: nextNoticeId(), type: "error", message: noticeMessage(`Retries failed: ${failure}`) };
   return { ...next, notices: [...state.notices, notice].slice(-NOTICE_LIMIT) };
 }
 

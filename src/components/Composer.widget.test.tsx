@@ -129,4 +129,15 @@ describe("set_editor_text", () => {
     expect(composer.draft()).toBe("my own words\ntheirs");
     await composer.unmount();
   });
+
+  it("fills the same text again once the state has let it go", async () => {
+    const composer = await mount({ draft: "", piNative: native({ editorText: "run the tests" }) });
+    expect(composer.draft()).toBe("run the tests");
+
+    // the prefill was consumed and the box cleared: sending the very same text again fills it
+    await composer.update(native({ editorText: null }));
+    await composer.update(native({ editorText: "run the tests" }));
+    expect(composer.draft()).toBe("run the tests\nrun the tests");
+    await composer.unmount();
+  });
 });

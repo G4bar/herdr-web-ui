@@ -51,13 +51,26 @@ describe("a custom message from the session file", () => {
     const html = render(createElement(RuntimeNoticeRow, {
       notice: { kind: "notice", text: "async-result:\nthe job is done", source: "async-result" },
       time: null,
+      custom: true,
     }));
 
     expect(html).toContain("chat-notice");
+    expect(html).toContain("chat-notice-custom");
     expect(html).toContain("chat-notice-label");
     expect(html).toContain("Background result delivered");
     // the raw text is folded under the summary, as a runtime notice's own output
     expect(html).toContain("the job is done");
     expect(html).toContain("chat-notice-text");
+  });
+
+  it("leaves another agent's notice the divider row it had, without the custom rail", () => {
+    const html = render(createElement(RuntimeNoticeRow, {
+      notice: { kind: "notice", text: "goal refused", source: "local-command" },
+      time: null,
+      custom: false,
+    }));
+
+    expect(html).toContain("chat-notice");
+    expect(html).not.toContain("chat-notice-custom");
   });
 });

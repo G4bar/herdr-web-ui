@@ -799,7 +799,12 @@ export function Composer({
   // holds is never replaced, the extension's text goes on a line under it.
   useEffect(() => {
     const prefill = piNative?.editorText ?? null;
-    if (prefill === null || prefill === "" || prefill === editorTextDrawn.current) return;
+    // a state that carries none forgets the last one: the same text sent again fills the box again
+    if (prefill === null) {
+      editorTextDrawn.current = null;
+      return;
+    }
+    if (prefill === "" || prefill === editorTextDrawn.current) return;
     editorTextDrawn.current = prefill;
     const current = textRef.current.replace(/\s+$/u, "");
     const next = current === "" ? prefill : `${current}\n${prefill}`;
