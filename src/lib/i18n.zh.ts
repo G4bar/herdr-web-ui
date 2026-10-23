@@ -1678,4 +1678,11 @@ export const ZH: Record<string, string> = {
   "Not responding": "无响应",
   "+{n} deeper": "更深 {n} 个",
   "No agents yet. Pi starts them when it delegates work.": "还没有代理。Pi 委派工作时会启动它们。",
+  "Agents: {n}, {k} waiting for you": "代理 {n} 个，{k} 个等待你",
+  "{n} asks you": "{n} 个提问",
+  "{n} finished": "{n} 个已完成",
+  "Open panel": "打开面板",
+  "{label} asks you": "{label} 向你提问",
+  "{label} finished": "{label} 已完成",
+  "{label} failed": "{label} 失败",
 };

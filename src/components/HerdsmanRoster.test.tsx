@@ -2,10 +2,11 @@ import { afterAll, beforeAll, describe, expect, it } from "bun:test";
 import { createElement } from "react";
 import TestRenderer, { act } from "react-test-renderer";
 
-import type { HerdsmanAgent } from "../../shared/protocol.ts";
+import type { HerdsmanAgent, PiNativeHerdsman } from "../../shared/protocol.ts";
 import { SettingsProvider } from "../lib/settings.ts";
 
 const { HerdsmanRoster } = await import("./HerdsmanRoster.tsx");
+const { HerdsmanChip } = await import("./HerdsmanChip.tsx");
 
 const browserGlobals = ["window", "document", "localStorage", "getComputedStyle", "IS_REACT_ACT_ENVIRONMENT"] as const;
 const savedGlobals = new Map<string, PropertyDescriptor | undefined>();
@@ -139,5 +140,92 @@ describe("HerdsmanRoster", () => {
     const renderer = await mount([]);
     expect(strings(renderer.root).join(" ")).toContain("No agents yet. Pi starts them when it delegates work.");
     expect(renderer.root.findAllByProps({ role: "tree" })).toEqual([]);
+  });
+});
+
+/** One chip over a snapshot, with the presses and announcements it hands to its caller. */
+const mountChip = async (herdsman: PiNativeHerdsman | null, handlers: { onOpenAgent?: (label: string) => void; onAnnounce?: (text: string) => void } = {}) => {
+  const element = (next: PiNativeHerdsman | null) => createElement(SettingsProvider, {
+    children: createElement(HerdsmanChip, { herdsman: next, onOpenAgent: handlers.onOpenAgent, onAnnounce: handlers.onAnnounce }),
+  });
+  let renderer: TestRenderer.ReactTestRenderer | null = null;
+  await act(async () => { renderer = TestRenderer.create(element(herdsman)); });
+  return {
+    renderer: renderer!,
+    update: async (next: PiNativeHerdsman | null): Promise<void> => { await act(async () => { renderer!.update(element(next)); }); },
+  };
+};
+
+const chipToggle = (renderer: TestRenderer.ReactTestRenderer) =>
+  renderer.root.findAll((node) => node.type === "button" && String(node.props.className ?? "").startsWith("bg-tasks-toggle"))[0]!;
+const chipRows = (renderer: TestRenderer.ReactTestRenderer) => renderer.root.findAll((node) => node.type === "button" && node.props.className === "hm-row");
+
+const one = (label: string, state: HerdsmanAgent["state"]): PiNativeHerdsman => ({
+  agents: [{ label, definition: "scout", parent: null, state, startedAt: 0, ...(state === "running" || state === "asks" ? {} : { endedAt: 5_000 }) }],
+  capabilities: [],
+});
+
+describe("HerdsmanChip", () => {
+  it("draws no chip for a session without a snapshot or agents", async () => {
+    for (const herdsman of [null, { agents: [], capabilities: [] }]) {
+      const { renderer } = await mountChip(herdsman);
+      expect(renderer.toJSON()).toBeNull();
+    }
+  });
+
+  it("names the count and the number waiting for you, over the chip's counts line", async () => {
+    const { renderer } = await mountChip({ agents, capabilities: [] });
+    expect(chipToggle(renderer).props["aria-label"]).toBe("Agents: 11, 1 waiting for you");
+    expect(chipToggle(renderer).props.title).toBe("6 running · 1 asks you");
+  });
+
+  it("counts what ended once nothing runs and nobody asks", async () => {
+    const { renderer } = await mountChip(one("researcher", "finished"));
+    expect(chipToggle(renderer).props.title).toBe("1 finished");
+    expect(String(chipToggle(renderer).props.className)).toContain("is-idle");
+  });
+
+  it("draws the roster when the chip is pressed", async () => {
+    const { renderer } = await mountChip({ agents, capabilities: [] });
+    expect(chipToggle(renderer).props["aria-expanded"]).toBe(false);
+    await act(async () => { chipToggle(renderer).props.onClick(); });
+    expect(chipToggle(renderer).props["aria-expanded"]).toBe(true);
+    expect(renderer.root.findAll((node) => String(node.props.className ?? "").includes("hm-menu")).length).toBe(1);
+    expect(labels(renderer)).toContain("scout_ui");
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("draws the blocked dot only while an agent asks", async () => {
+    const asking = await mountChip({ agents, capabilities: [] });
+    expect(asking.renderer.root.findAllByProps({ className: "hm-chip-dot" }).length).toBe(1);
+    const running = await mountChip({ agents: agents.filter((agent) => agent.state !== "asks"), capabilities: [] });
+    expect(running.renderer.root.findAllByProps({ className: "hm-chip-dot" }).length).toBe(0);
+  });
+
+  it("hands a pressed row's label, and the first row's for the panel, to the caller", async () => {
+    const pressed: string[] = [];
+    const { renderer } = await mountChip({ agents, capabilities: [] }, { onOpenAgent: (label) => pressed.push(label) });
+    await act(async () => { chipToggle(renderer).props.onClick(); });
+    const scout = chipRows(renderer).find((row) => String(row.findAllByProps({ className: "hm-row-label" })[0]!.children[0]) === "scout_ui")!;
+    await act(async () => { scout.props.onClick(); });
+    await act(async () => { renderer.root.findAllByProps({ className: "hm-open-panel" })[0]!.props.onClick(); });
+    expect(pressed).toEqual(["scout_ui", "lead"]);
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("announces a state change once, and nothing for the first snapshot", async () => {
+    const said: string[] = [];
+    const { renderer, update } = await mountChip(one("scout_ui", "running"), { onAnnounce: (text) => said.push(text) });
+    expect(said).toEqual([]);
+    await update(one("scout_ui", "finished"));
+    expect(said).toEqual(["scout_ui finished"]);
+    await act(async () => { renderer.unmount(); });
+  });
+
+  it("says nothing when an agent closes", async () => {
+    const said: string[] = [];
+    const { update } = await mountChip(one("scout_ui", "running"), { onAnnounce: (text) => said.push(text) });
+    await update(one("scout_ui", "closed"));
+    expect(said).toEqual([]);
   });
 });

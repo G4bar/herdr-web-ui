@@ -1,0 +1,53 @@
+/* The Herdsman chip and its roster's header (DS §4.8, §5.4). The chip's box, tint and compact
+   behaviour are the Plan chip's (BackgroundTasks.css); only what that skin does not give is here.
+   Colors and sizes are tokens only. */
+
+/* the number is the chip's point at every card width; the shared skin shows it on a narrow one */
+.hm-chip .bg-tasks-count {
+  display: inline;
+}
+
+/* one agent waits for the owner: the skin's working tint stays, the dot says which chip asks */
+.hm-chip-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--status-blocked);
+}
+
+/* the header: the name, what the agents do, and the way into the panel on one line */
+.hm-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* the counts are a detail line, not part of the heading's uppercase title */
+.hm-head-counts {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+  font-weight: normal;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+/* a small text button: the keycaps' caps and weight do not suit a pressable label */
+.hm-open-panel {
+  margin-left: auto;
+  min-height: var(--pointer-target);
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font-size: var(--fs-xs);
+  font-weight: normal;
+  letter-spacing: normal;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.hm-open-panel:hover {
+  color: var(--text-strong);
+}

@@ -1676,4 +1676,11 @@ export const JA: Record<string, string> = {
   "Not responding": "応答なし",
   "+{n} deeper": "さらに {n} 件",
   "No agents yet. Pi starts them when it delegates work.": "まだエージェントはいません。Pi が作業を委任すると起動します。",
+  "Agents: {n}, {k} waiting for you": "エージェント {n} 体、あなたの返答待ち {k} 体",
+  "{n} asks you": "{n} 件があなたに質問",
+  "{n} finished": "完了 {n} 件",
+  "Open panel": "パネルを開く",
+  "{label} asks you": "{label} が質問しています",
+  "{label} finished": "{label} が完了しました",
+  "{label} failed": "{label} が失敗しました",
 };

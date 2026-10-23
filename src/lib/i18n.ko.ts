@@ -1674,4 +1674,11 @@ export const KO: Record<string, string> = {
   "Not responding": "응답 없음",
   "+{n} deeper": "{n}개 더 깊이",
   "No agents yet. Pi starts them when it delegates work.": "아직 에이전트가 없습니다. Pi가 작업을 위임하면 시작됩니다.",
+  "Agents: {n}, {k} waiting for you": "에이전트 {n}개, 답변 대기 {k}개",
+  "{n} asks you": "{n}개 질문",
+  "{n} finished": "{n}개 완료",
+  "Open panel": "패널 열기",
+  "{label} asks you": "{label} 질문이 있습니다",
+  "{label} finished": "{label} 완료했습니다",
+  "{label} failed": "{label} 실패했습니다",
 };
