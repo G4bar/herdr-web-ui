@@ -124,11 +124,32 @@ export async function reconnectPi(paneId: string, machineId = "local"): Promise<
   }
 }
 
-/** The queued messages a native Stop took back out of Pi's queue (`clear_queue`), in delivery order. */
-export function clearedQueue(cleared: unknown): string[] {
+/** How Pi holds a message sent while a turn runs: a steer lands mid-turn, a follow-up after it (DS §3.2). */
+export type PiDeliver = "steer" | "followUp";
+
+/** A native pane's held messages by kind, as `clear_queue` answered with them. */
+export interface PiQueue { steering: string[]; followUp: string[] }
+
+/** `clear_queue`'s answer as a queue: anything else (`null` on a refused command) holds nothing. */
+function asQueue(cleared: unknown): PiQueue {
   const queue = cleared as { steering?: unknown; followUp?: unknown } | null;
   const texts = (values: unknown): string[] => Array.isArray(values) ? values.filter((value): value is string => typeof value === "string" && value !== "") : [];
-  return queue === null || typeof queue !== "object" ? [] : [...texts(queue.steering), ...texts(queue.followUp)];
+  return queue === null || typeof queue !== "object" ? { steering: [], followUp: [] } : { steering: texts(queue.steering), followUp: texts(queue.followUp) };
+}
+
+/** A queue's texts in delivery order: steers first, then follow-ups (DS §4.4). */
+export function queuedTexts(queue: PiQueue): string[] {
+  return [...queue.steering, ...queue.followUp];
+}
+
+/** The queued messages a native Stop took back out of Pi's queue (`clear_queue`), in delivery order. */
+export function clearedQueue(cleared: unknown): string[] {
+  return queuedTexts(asQueue(cleared));
+}
+
+/** Pi's queue taken out whole (`clear_queue`): its answer, not the pushed state, is what goes back in. */
+export async function clearPiQueue(piRpc: (command: PiRpcCommand) => Promise<unknown>): Promise<PiQueue> {
+  return asQueue(await piRpc({ type: "clear_queue" }));
 }
 
 export interface PiNativeHandle {

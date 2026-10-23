@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "bun:test";
 import { initialPiNativeState } from "../../server/pi-rpc.ts";
-import { clearedQueue, PiNativeLanes, piNativeLanes, takeOverPi, handBackPi } from "./piNative.ts";
+import { clearedQueue, clearPiQueue, queuedTexts, PiNativeLanes, piNativeLanes, takeOverPi, handBackPi } from "./piNative.ts";
 
 const native = (extra: Record<string, unknown> = {}) => ({ ...initialPiNativeState(), mode: "native" as const, ...extra });
 const realFetch = globalThis.fetch;
@@ -76,4 +76,18 @@ it("hands a native Stop's queue back in delivery order", () => {
   expect(clearedQueue({ steering: ["stop this"], followUp: ["then this", ""] })).toEqual(["stop this", "then this"]);
   expect(clearedQueue({})).toEqual([]);
   expect(clearedQueue(null)).toEqual([]);
+});
+
+it("takes Pi's queue out whole for Alt+Up, and reads a refused clear_queue as nothing held", async () => {
+  const calls: string[] = [];
+  const piRpc = async (command: { type: string }): Promise<unknown> => {
+    calls.push(command.type);
+    return { steering: ["steer me"], followUp: ["later"] };
+  };
+  const queue = await clearPiQueue(piRpc);
+  expect(queuedTexts(queue)).toEqual(["steer me", "later"]);
+  expect(calls).toEqual(["clear_queue"]);
+  // a command the bridge refused answered nothing: the box stays as the user left it
+  expect(await clearPiQueue(async () => null)).toEqual({ steering: [], followUp: [] });
+  expect(clearedQueue({ steering: ["only steers"] })).toEqual(["only steers"]);
 });

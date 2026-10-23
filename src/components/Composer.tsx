@@ -63,6 +63,7 @@ import { AgentMark } from "./AgentMark.tsx";
 import { PiModelPicker } from "./PiModelPicker.tsx";
 import { PiThinkingMenu, thinkingLevelLabel } from "./PiThinkingMenu.tsx";
 import { PI_ANNOUNCE_MS, piChipChange, piComposerMode } from "../lib/piComposer.ts";
+import { clearPiQueue, queuedTexts } from "../lib/piNative.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
@@ -126,8 +127,9 @@ export interface ComposerProps {
   worktreeRepo?: string | null;
   /** true: sent, clear the box; a string: keep the text and say why; a DraftRefusal: the same, and the
    * note offers to send again with `clearDraft`, which clears that draft from the terminal first, or,
-   * where it named none, with `sendAnyway`; a promise settles to any of them */
-  onSend: (text: string, clearDraft?: string, sendAnyway?: boolean) => boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal>;
+   * where it named none, with `sendAnyway`; a promise settles to any of them. `deliver` says how a native
+   * Pi holds the message while a turn runs (DS §3.2); other agents ignore it */
+  onSend: (text: string, clearDraft?: string, sendAnyway?: boolean, deliver?: "steer" | "followUp") => boolean | string | DraftRefusal | Promise<boolean | string | DraftRefusal>;
   /** Stop; a native Pi pane answers with the messages Pi still held, which go back into the box (DS §4.4) */
   onAbort: () => void | Promise<readonly string[]>;
   onUploadImage: (file: File) => Promise<string>;
@@ -327,6 +329,8 @@ export function Composer({
   // DS §8.3: a model or a level the chips changed to is said once. Rapid cycling (Ctrl+P held,
   // Shift+Tab pressed through) waits the debounce out and only the last level is read
   const [piSaid, setPiSaid] = useState<string | null>(null);
+  /** DS §4.1: how Enter sends while Pi runs. Steer unless the user picked Follow-up; Alt+Enter always follows up */
+  const [sendAs, setSendAs] = useState<"steer" | "followUp">("steer");
   // the words of the chip last drawn: what a change is measured against, and nothing on the first
   const piDrawn = useRef<{ model: string | null; level: string | null } | null>(null);
   const [slashUsage, setSlashUsage] = useState<Record<string, number>>(readSlashUsage);
@@ -370,9 +374,11 @@ export function Composer({
   // the agent's suggestion stands in the empty box as it does in its own input, until anything is typed
   const offered = connected && answerHint === null && suggestion !== null ? suggestion : null;
   const offlineSentence = t(connectedBefore ? "Reconnecting…" : "Connecting…");
+  // DS §9: a Pi that is running is steered, and Alt+Enter says when its follow-up lands
+  const streaming = piNative?.mode === "native" && piNative.isStreaming;
   const placeholder = !connected
     ? offlineSentence
-    : answerHint ?? offered ?? t("Message {agent}…", { agent: agentLabel });
+    : answerHint ?? offered ?? (streaming ? t("Steer Pi… (Alt+Enter: after it finishes)") : t("Message {agent}…", { agent: agentLabel }));
 
   // A cancelled send the agent put back in its input box fills an empty box again — without
   // focus, which would raise a phone's keyboard. When it is gone, only the untouched fill is
@@ -647,18 +653,28 @@ export function Composer({
     if (activeRef.current) element.focus();
   }, []);
 
+  // Messages Pi gave back (a Stop's cleared queue, Alt+Up): under whatever the user typed, in delivery order
+  const putBack = useCallback((texts: readonly string[]) => {
+    if (texts.length === 0) return;
+    const current = textRef.current.replace(/\s+$/u, "");
+    const next = current === "" ? texts.join("\n") : `${current}\n${texts.join("\n")}`;
+    setTextAndCaret(next, next.length);
+  }, [setTextAndCaret]);
+
   // Stop. A native Pi pane answers with the messages Pi still held, and they come back into the box in
   // delivery order, under whatever was already typed (DS §4.4); every other agent answers nothing.
   const abort = useCallback(() => {
     const back = onAbort();
     if (back === undefined) return;
-    void back.then((texts) => {
-      if (texts.length === 0) return;
-      const current = textRef.current.replace(/\s+$/u, "");
-      const next = current === "" ? texts.join("\n") : `${current}\n${texts.join("\n")}`;
-      setTextAndCaret(next, next.length);
-    }, () => undefined);
-  }, [onAbort, setTextAndCaret]);
+    void back.then((texts) => putBack(texts), () => undefined);
+  }, [onAbort, putBack]);
+
+  // DS §6.1 Alt+Up: Pi's queue is taken out whole and comes back into the box, under the draft.
+  // Pi holds no per-item queue, so the answer of clear_queue is the truth, never the pushed state.
+  const restoreHeld = useCallback(() => {
+    if (piRpc === undefined || piNative === null) return;
+    void clearPiQueue(piRpc).then((queue) => putBack(queuedTexts(queue)), () => undefined);
+  }, [piNative, piRpc, putBack]);
 
   // an upload finishes while the user may be typing: its mention goes to the start (insertLeadingMention),
   // and the caret and selection only move along with the text they sit in, without taking focus
@@ -846,7 +862,7 @@ export function Composer({
 
   /** `clearDraft`: the terminal draft a DraftRefusal named, which the user asked to clear and send over;
    * `sendAnyway`: the user saw the box a DraftRefusal showed and sends over it. */
-  const send = useCallback((clearDraft?: string, sendAnyway = false): boolean => {
+  const send = useCallback((clearDraft?: string, sendAnyway = false, deliver?: "steer" | "followUp"): boolean => {
     if (composingRef.current) return false;
     if (role === "observe" || !connected || uploading || roomless || sending || text.trim().length === 0) return false;
     if (terminalTyped?.name === "resume" && onOpenHistory) { setMenuDismissed(true); onOpenHistory(); return true; }
@@ -871,7 +887,7 @@ export function Composer({
     // a polish landing before the acknowledgement would count as an edit and keep the sent message here
     dictation.forget();
     try {
-      const result = onSend(text, clearDraft, sendAnyway);
+      const result = onSend(text, clearDraft, sendAnyway, streaming ? deliver ?? sendAs : undefined);
       if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return true; }
       void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey));
     } catch {
@@ -879,7 +895,7 @@ export function Composer({
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
     return true;
-  }, [attachments, connected, dictation.forget, draftKey, onOpenHistory, onSend, role, roomless, sending, terminalTyped, text, uploading]);
+  }, [attachments, connected, dictation.forget, draftKey, onOpenHistory, onSend, role, roomless, sendAs, sending, streaming, terminalTyped, text, uploading]);
   const sendRef = useRef(send);
   sendRef.current = send;
   const connectedRef = useRef(connected);
@@ -968,6 +984,12 @@ export function Composer({
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
       // an IME keeps its keys; WebKit can send the committing Enter after compositionend, as key code 229
       if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+      // DS §6.1 Alt+Up: Pi's held messages come back into the box, as Held's Restore all does
+      if (event.key === "ArrowUp" && event.altKey && streaming) {
+        event.preventDefault();
+        restoreHeld();
+        return;
+      }
       if (menuOpen && trigger) {
         if (event.key === "ArrowDown" || event.key === "ArrowUp") {
           event.preventDefault();
@@ -1012,9 +1034,10 @@ export function Composer({
         : (event.metaKey || event.ctrlKey) && !event.shiftKey;
       if (!shouldSend) return;
       event.preventDefault();
-      send();
+      // Alt+Enter always sends a follow-up (DS §3.2); every other Enter follows the Send-as row
+      send(undefined, false, event.altKey ? "followUp" : undefined);
     },
-    [agentStatus, abort, choices, connected, menuDismissed, menuOpen, offered, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, trigger],
+    [agentStatus, abort, choices, connected, menuDismissed, menuOpen, offered, restoreHeld, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, streaming, trigger],
   );
 
   const onPaste = useCallback(
@@ -1055,7 +1078,7 @@ export function Composer({
   // what the status line says; what may be sent, queued or stopped goes by the agent's own status
   const shownStatus = paneStatus({ agent_status: agentStatus, ...(backgroundWait ? { background_wait: true as const } : {}) });
   const statusCompact = composerStatusCompact(cardWidth);
-  const sendShown = sending || composerSendShown({ working: isWorking, text });
+  const sendShown = sending || composerSendShown({ working: isWorking || streaming === true, text });
   const model = metadata?.model ? modelLabel(metadata.model) : null;
   // the two chips and what the pane's mode says of them (DS §3.0, §4.1)
   const pi = piComposerMode({ agent, piNative, modelKnown: model !== null });
@@ -1359,6 +1382,17 @@ export function Composer({
                 </button>
               </div>
             ))}
+          </div>
+        )}
+
+        {streaming && text.trim().length > 0 && (
+          <div className="composer-send-as">
+            <span className="composer-send-as-label">{t("Send as")}</span>
+            <div className="segmented composer-send-as-modes" role="group" aria-label={t("Send as")}>
+              <button type="button" aria-pressed={sendAs === "steer"} onClick={() => setSendAs("steer")}>{t("Steer")}</button>
+              <button type="button" aria-pressed={sendAs === "followUp"} onClick={() => setSendAs("followUp")}>{t("Follow-up")}</button>
+            </div>
+            <span className="composer-send-as-hint" aria-hidden="true">{t("Enter · Alt+Enter follows up")}</span>
           </div>
         )}
 

@@ -200,6 +200,7 @@
    the fit that measures the row */
 .composer-surface[data-compact]:has(> .composer-status[data-hint]) {
   grid-template-areas:
+    "send-as send-as send-as"
     "attachments attachments attachments"
     "text text text"
     "status status status"
@@ -217,6 +218,7 @@
    line under the chips, over the controls, as it does on any other narrow card. */
 .composer-surface[data-pi-chips] {
   grid-template-areas:
+    "send-as send-as send-as"
     "attachments attachments attachments"
     "text text text"
     "pi pi pi"
@@ -225,6 +227,7 @@
 
 .composer-surface[data-pi-chips]:has(> .composer-status[data-hint]) {
   grid-template-areas:
+    "send-as send-as send-as"
     "attachments attachments attachments"
     "text text text"
     "pi pi pi"
@@ -259,6 +262,43 @@
 
 .composer-pi-chips > .pi-thinking-chip {
   flex: none;
+}
+
+/* The Send-as row (DS §4.1): the mode Enter sends with while Pi runs and the box holds text. It sits
+   in the row the card gives it, over the box, at the card's width; the hint gives way first on a
+   narrow card (DS §7: the labels stay, the hint drops). */
+.composer-send-as {
+  grid-area: send-as;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  min-height: calc(var(--control-h) - 6px);
+  padding: var(--space-1) var(--space-3) 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.composer-send-as-label {
+  flex: none;
+}
+
+.composer-send-as-modes {
+  flex: none;
+}
+
+.composer-send-as-hint {
+  flex: 0 1 auto;
+  min-width: 0;
+  margin-inline-start: auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.composer-surface[data-pi-chips] .composer-send-as-hint {
+  display: none;
 }
 
 /* everything but the sentence. No box of its own at rest: its items are the status line's. Beside
@@ -518,6 +558,7 @@
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
   grid-template-areas:
+    "send-as send-as send-as"
     "attachments attachments attachments"
     "text text text"
     "left status right";
