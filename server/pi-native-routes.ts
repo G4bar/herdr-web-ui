@@ -9,9 +9,9 @@
  * terminal no longer has is a 404 and its map entry is dropped, not a child spawned for nobody.
  */
 import { randomUUID } from "node:crypto";
-import { readFile, unlink } from "node:fs/promises";
+import { mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { sessionSnapshot } from "./herdr/client.ts";
 import { badRequest, errorResponse, jsonResponse, readJsonObject, setRequestRoute } from "./http.ts";
 import { paneContext } from "./pane-context.ts";
@@ -29,8 +29,9 @@ export interface PiNativeRoutesOptions {
 }
 
 const KEYBINDINGS_PATH = "/api/pi/keybindings";
+const SETTINGS_PATH = "/api/pi/settings";
 
-const NATIVE_PATHS = new Set(["/api/pi/takeover", "/api/pi/handback", "/api/pi/reconnect", "/api/pi/state", "/api/pi/rpc", "/api/pi/context", KEYBINDINGS_PATH]);
+const NATIVE_PATHS = new Set(["/api/pi/takeover", "/api/pi/handback", "/api/pi/reconnect", "/api/pi/state", "/api/pi/rpc", "/api/pi/context", KEYBINDINGS_PATH, SETTINGS_PATH]);
 
 /**
  * Pi's defaults for the actions the chat has a surface for (`docs/keybindings.md`), for an action
@@ -85,6 +86,110 @@ async function piKeybindings(agentDir = piAgentDir()): Promise<PiKeybindings> {
     else if (Array.isArray(value)) keys[id] = value.filter((chord): chord is string => typeof chord === "string");
   }
   return { path, keys };
+}
+
+/**
+ * The `settings.json` keys the web may write (PLAN D8): the startup model and thinking level, and the
+ * models Pi's own cycle is scoped to (`docs/settings.md`). Everything else in that file is Pi's.
+ */
+const PI_SETTINGS_KEYS: Readonly<Record<string, (value: unknown) => boolean>> = {
+  defaultProvider: isSettingName,
+  defaultModel: isSettingName,
+  defaultThinkingLevel: (value) => typeof value === "string" && PI_THINKING_LEVELS.includes(value),
+  enabledModels: (value) => Array.isArray(value) && value.every(isSettingName),
+};
+
+/** The thinking levels `defaultThinkingLevel` accepts, as Pi's own reference lists them. */
+const PI_THINKING_LEVELS: readonly string[] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
+/** A model or provider id: Pi's own are never blank. */
+function isSettingName(value: unknown): boolean {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+interface PiSettings {
+  /** the file that was read, or would be written */
+  path: string;
+  /** the allowlisted keys the file holds; a key Pi has not set is absent */
+  settings: Record<string, string | readonly string[]>;
+}
+
+/**
+ * Pi's own file, whole, and why it cannot be read: a file that is not a JSON object is refused
+ * rather than overwritten, since every key in it belongs to Pi and its TUI. An absent file is an
+ * empty document, which the first write creates.
+ */
+async function readPiSettings(path: string): Promise<{ file: Record<string, unknown> } | { error: string }> {
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    return code === "ENOENT" ? { file: {} } : { error: `could not be read: ${(error as Error).message}` };
+  }
+  if (text.trim().length === 0) return { file: {} };
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { error: "not valid JSON" };
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return { error: "not a JSON object" };
+  return { file: parsed as Record<string, unknown> };
+}
+
+/** The allowlisted keys of Pi's file, in the shape the page reads them. */
+function piSettingsOf(file: Record<string, unknown>): PiSettings["settings"] {
+  const settings: PiSettings["settings"] = {};
+  for (const key of ["defaultProvider", "defaultModel", "defaultThinkingLevel"]) {
+    if (typeof file[key] === "string") settings[key] = file[key];
+  }
+  const models = file["enabledModels"];
+  if (Array.isArray(models)) settings["enabledModels"] = models.filter((model): model is string => typeof model === "string");
+  return settings;
+}
+
+/**
+ * Pi's settings, or the answer that says why they cannot be read. A file Pi cannot parse is a 409 for
+ * both a read and a write: the page shows the reason instead of a guess, and no key of Pi's is lost.
+ */
+async function piSettings(): Promise<PiSettings | Response> {
+  const path = join(piAgentDir(), "settings.json");
+  const read = await readPiSettings(path);
+  if ("error" in read) return jsonResponse({ error: { code: "invalid_settings_file", message: `${path}: ${read.error}` } }, 409);
+  return { path, settings: piSettingsOf(read.file) };
+}
+
+/**
+ * Writes the keys a client sent, and only those: every other key of Pi's file is carried over as it
+ * was, the file is re-read right before it is replaced, and the new document reaches the disk under a
+ * temp name so a reader never sees half of one (PLAN D8).
+ */
+async function writePiSettings(request: Request): Promise<Response> {
+  const payload = await readJsonObject(request);
+  if (payload instanceof Response) return payload;
+  const changes: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    const valid = PI_SETTINGS_KEYS[key];
+    if (valid === undefined) return badRequest("unknown_setting", `${key} is not one of the settings the chat may write`);
+    if (!valid(value)) return badRequest("invalid_setting", `${key}'s value is not one pi accepts`);
+    changes[key] = value;
+  }
+  const path = join(piAgentDir(), "settings.json");
+  const read = await readPiSettings(path);
+  if ("error" in read) return jsonResponse({ error: { code: "invalid_settings_file", message: `${path}: ${read.error}` } }, 409);
+  // nothing to write: Pi's own file is left alone rather than rewritten with the same content
+  if (Object.keys(changes).length === 0) return jsonResponse({ path, settings: piSettingsOf(read.file) });
+  const next = { ...read.file, ...changes };
+  const temp = join(dirname(path), `.settings-${randomUUID()}.tmp`);
+  try {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(temp, JSON.stringify(next, null, 2), "utf8");
+    await rename(temp, path);
+  } finally {
+    await unlink(temp).catch(() => undefined);
+  }
+  return jsonResponse({ path, settings: piSettingsOf(next) });
 }
 
 /**
@@ -184,11 +289,16 @@ export async function handlePiNativeRequest(
   if (!NATIVE_PATHS.has(pathname)) return null;
   setRequestRoute(pathname);
   const reading = pathname === "/api/pi/state" || pathname === "/api/pi/context" || pathname === KEYBINDINGS_PATH;
-  if (reading ? request.method !== "GET" : request.method !== "POST") {
-    return badRequest("method_not_allowed", reading ? "use GET" : "use POST");
-  }
-  // one machine's keybindings, no pane: the same answer for every chat on it
+  // Pi's settings are read and written on one path; every other route has one method
+  const methods = pathname === SETTINGS_PATH ? ["GET", "POST"] : [reading ? "GET" : "POST"];
+  if (!methods.includes(request.method)) return badRequest("method_not_allowed", `use ${methods.join(" or ")}`);
+  // one machine's keybindings and one machine's defaults, no pane: the same answer for every chat on it
   if (pathname === KEYBINDINGS_PATH) return jsonResponse(await piKeybindings(), 200, { "cache-control": "no-store" });
+  if (pathname === SETTINGS_PATH) {
+    if (request.method === "POST") return writePiSettings(request);
+    const settings = await piSettings();
+    return settings instanceof Response ? settings : jsonResponse(settings, 200, { "cache-control": "no-store" });
+  }
 
   let paneId: string | null = null;
   let trust: PiTrust | undefined;

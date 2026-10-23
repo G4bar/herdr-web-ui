@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "bun:test";
@@ -43,6 +43,20 @@ function call(
 }
 
 const post = (pathname: string, body: unknown): RequestInit => ({ method: "POST", body: JSON.stringify(body) });
+
+/** Runs `run` against a temp agent directory, so Pi's own files are never read or written. */
+async function withAgentDir(run: (dir: string) => Promise<void>): Promise<void> {
+  const root = mkdtempSync(join(tmpdir(), "ovis-pi-agent-"));
+  const before = process.env["PI_CODING_AGENT_DIR"];
+  process.env["PI_CODING_AGENT_DIR"] = root;
+  try {
+    await run(root);
+  } finally {
+    if (before === undefined) delete process.env["PI_CODING_AGENT_DIR"];
+    else process.env["PI_CODING_AGENT_DIR"] = before;
+    rmSync(root, { recursive: true, force: true });
+  }
+}
 
 describe("native Pi routes", () => {
   it("leaves other paths alone", async () => {
@@ -179,19 +193,6 @@ describe("native Pi context", () => {
 });
 
 describe("native Pi keybindings", () => {
-  const withAgentDir = async (run: (dir: string) => Promise<void>): Promise<void> => {
-    const root = mkdtempSync(join(tmpdir(), "ovis-pi-keys-"));
-    const before = process.env["PI_CODING_AGENT_DIR"];
-    process.env["PI_CODING_AGENT_DIR"] = root;
-    try {
-      await run(root);
-    } finally {
-      if (before === undefined) delete process.env["PI_CODING_AGENT_DIR"];
-      else process.env["PI_CODING_AGENT_DIR"] = before;
-      rmSync(root, { recursive: true, force: true });
-    }
-  };
-
   it("answers Pi's own keys for a machine with no file, and says why", async () => {
     await withAgentDir(async (dir) => {
       const response = await call("/api/pi/keybindings");
@@ -241,6 +242,103 @@ describe("native Pi keybindings", () => {
       writeFileSync(join(dir, "keybindings.json"), "[\"ctrl+l\"]");
       expect(((await (await call("/api/pi/keybindings"))?.json()) as { warning?: string }).warning).toContain("not a JSON object");
       expect((await call("/api/pi/keybindings", post("/api/pi/keybindings", {})))?.status).toBe(400);
+    });
+  });
+});
+
+describe("native Pi settings", () => {
+  const readSettings = (dir: string): Record<string, unknown> => JSON.parse(readFileSync(join(dir, "settings.json"), "utf8"));
+
+  it("answers only the keys the web may write, for a machine with or without a file", async () => {
+    await withAgentDir(async (dir) => {
+      const absent = await call("/api/pi/settings");
+      expect(absent?.status).toBe(200);
+      expect(absent?.headers.get("cache-control")).toBe("no-store");
+      expect(await absent?.json()).toEqual({ path: join(dir, "settings.json"), settings: {} });
+
+      writeFileSync(join(dir, "settings.json"), JSON.stringify({
+        theme: "rose-pine",
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4.5",
+        defaultThinkingLevel: "high",
+        enabledModels: ["anthropic/claude-sonnet-4.5", 7],
+      }));
+      expect(await (await call("/api/pi/settings"))?.json()).toEqual({
+        path: join(dir, "settings.json"),
+        settings: {
+          defaultProvider: "anthropic",
+          defaultModel: "claude-sonnet-4.5",
+          defaultThinkingLevel: "high",
+          enabledModels: ["anthropic/claude-sonnet-4.5"],
+        },
+      });
+    });
+  });
+
+  it("writes the keys it is given, keeps every other one, and leaves no temp file behind", async () => {
+    await withAgentDir(async (dir) => {
+      const kept = { theme: "rose-pine", packages: ["npm:pi-lens"], compaction: { modelOverrides: { "a/b": { reserveTokens: 5 } } }, defaultModel: "old-model" };
+      writeFileSync(join(dir, "settings.json"), JSON.stringify(kept));
+      const response = await call("/api/pi/settings", post("/api/pi/settings", { defaultThinkingLevel: "low", enabledModels: [] }));
+      expect(response?.status).toBe(200);
+      expect(readSettings(dir)).toEqual({ ...kept, defaultThinkingLevel: "low", enabledModels: [] });
+      expect(await response?.json()).toMatchObject({ settings: { defaultModel: "old-model", defaultThinkingLevel: "low", enabledModels: [] } });
+      // the new document arrives under a temp name that never outlives the write
+      expect(readdirSync(dir)).toEqual(["settings.json"]);
+    });
+  });
+
+  it("creates the file for an agent directory that has none", async () => {
+    await withAgentDir(async (dir) => {
+      const nested = join(dir, "nested");
+      mkdirSync(nested);
+      process.env["PI_CODING_AGENT_DIR"] = nested;
+      const response = await call("/api/pi/settings", post("/api/pi/settings", { defaultModel: "gpt-5" }));
+      expect(response?.status).toBe(200);
+      expect(JSON.parse(readFileSync(join(nested, "settings.json"), "utf8"))).toEqual({ defaultModel: "gpt-5" });
+    });
+  });
+
+  it("refuses an unknown key and a value pi would not accept, and writes nothing", async () => {
+    await withAgentDir(async (dir) => {
+      const path = join(dir, "settings.json");
+      writeFileSync(path, JSON.stringify({ theme: "rose-pine" }));
+      const refused: [Record<string, unknown>, string][] = [
+        [{ theme: "dark" }, "unknown_setting"],
+        [{ defaultModel: "" }, "invalid_setting"],
+        [{ defaultProvider: "   " }, "invalid_setting"],
+        [{ defaultThinkingLevel: "ultra" }, "invalid_setting"],
+        [{ enabledModels: "anthropic/claude-sonnet-4.5" }, "invalid_setting"],
+        [{ enabledModels: ["ok", 3] }, "invalid_setting"],
+      ];
+      for (const [body, code] of refused) {
+        const response = await call("/api/pi/settings", post("/api/pi/settings", body));
+        expect(response?.status).toBe(400);
+        expect(await response?.json()).toMatchObject({ error: { code } });
+      }
+      expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ theme: "rose-pine" });
+    });
+  });
+
+  it("refuses a file that is not valid JSON, on a read and on a write, and leaves it as it was", async () => {
+    await withAgentDir(async (dir) => {
+      const path = join(dir, "settings.json");
+      writeFileSync(path, "{ not json");
+      for (const init of [{}, post("/api/pi/settings", { defaultModel: "gpt-5" })]) {
+        const response = await call("/api/pi/settings", init);
+        expect(response?.status).toBe(409);
+        expect(await response?.json()).toMatchObject({ error: { code: "invalid_settings_file" } });
+      }
+      expect(readFileSync(path, "utf8")).toBe("{ not json");
+    });
+  });
+
+  it("answers an empty body and the wrong method", async () => {
+    await withAgentDir(async (dir) => {
+      const empty = await call("/api/pi/settings", post("/api/pi/settings", {}));
+      expect(empty?.status).toBe(200);
+      expect(empty?.status === 200 && readdirSync(dir)).toEqual([]);
+      expect((await call("/api/pi/settings", { method: "PUT" }))?.status).toBe(400);
     });
   });
 });
