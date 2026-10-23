@@ -1,6 +1,6 @@
 import { describe, expect, it } from "bun:test";
 
-import { forkNoteName, piForks } from "./piFork.ts";
+import { draftAfterFork, forkNoteName, piForks, piMoveCancelled } from "./piFork.ts";
 
 describe("a fork's quiet row names its message", () => {
   it("by the first line with something in it", () => {
@@ -12,6 +12,20 @@ describe("a fork's quiet row names its message", () => {
     const name = forkNoteName("x".repeat(200));
     expect(name).toHaveLength(80);
     expect(name.endsWith("…")).toBe(true);
+  });
+});
+
+describe("what a fork answered", () => {
+  it("reads an extension's veto as cancelled, and anything else as a fork that happened", () => {
+    expect(piMoveCancelled({ cancelled: true })).toBe(true);
+    expect(piMoveCancelled({ text: "Add a retry", cancelled: false })).toBe(false);
+    expect(piMoveCancelled({ text: "Add a retry" })).toBe(false);
+    expect(piMoveCancelled(null)).toBe(false);
+  });
+
+  it("puts the message under a draft the reader was already typing", () => {
+    expect(draftAfterFork("", "Add a retry")).toBe("Add a retry");
+    expect(draftAfterFork("then fetchData", "Add a retry")).toBe("then fetchData\nAdd a retry");
   });
 });
 

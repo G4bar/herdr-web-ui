@@ -53,7 +53,7 @@ import type { AgentStatus, ClientRole, ConversationMetadata, InteractivePrompt, 
 import type { PaneControls, PaneView } from "../lib/actions.ts";
 import { usePaneLane } from "../lib/chatLane.ts";
 import { clearedQueue, piNativeLanes, queueRows, refusal, usePiNative } from "../lib/piNative.ts";
-import { forkNoteName, piForks, usePiForkNote } from "../lib/piFork.ts";
+import { draftAfterFork, forkNoteName, piForks, piMoveCancelled, usePiForkNote } from "../lib/piFork.ts";
 import { useSettings, terminalTheme, type Palette, type ResolvedTheme } from "../lib/settings.ts";
 import { loadFontStack, TERMINAL_FONT_STACK, terminalFontStack } from "../lib/fontFamily.ts";
 import { useT } from "../lib/i18n.ts";
@@ -2956,24 +2956,31 @@ export function PaneTerminal({
   // naming where it began, with the way back to the file Pi held before it
   const forkKey = paneId === null ? null : paneStorageId(machineId, paneId);
   const forkNote = usePiForkNote(machineId, paneId);
+  // one fork at a time: a second press while the first is on its way would be refused by Pi
+  const forkingRef = useRef(false);
   const forkFromHere = useCallback((entryId: string, text: string): void => {
-    if (forkKey === null) return;
+    if (forkKey === null || forkingRef.current) return;
+    forkingRef.current = true;
     const previous = piNative.state?.sessionFile ?? null;
     void piRpc({ type: "fork", entryId }).then(
       (data) => {
+        // an extension vetoed the fork: Pi stayed, so the box and the transcript stay as they were
+        if (piMoveCancelled(data)) { piNativeLanes.fail(forkKey, t("Fork was cancelled")); return; }
         // Pi hands the message back to be edited; a child that answers nothing keeps the turn's own words
         const handed = (data as { text?: unknown } | null)?.text;
-        composerDrafts.set(`ovis:composer-draft:${forkKey}`, typeof handed === "string" && handed !== "" ? handed : text);
+        const message = typeof handed === "string" && handed !== "" ? handed : text;
+        composerDrafts.set(`ovis:composer-draft:${forkKey}`, (draft) => draftAfterFork(draft, message));
         piForks.set(forkKey, { from: forkNoteName(text), sessionFile: previous });
       },
       (error: unknown) => piNativeLanes.fail(forkKey, refusal(error)),
-    );
-  }, [forkKey, piNative.state?.sessionFile, piRpc]);
+    ).finally(() => { forkingRef.current = false; });
+  }, [forkKey, piNative.state?.sessionFile, piRpc, t]);
   const forkBack = useCallback((): void => {
     const sessionFile = piForks.get(forkKey)?.sessionFile ?? null;
     if (forkKey === null || sessionFile === null) return;
     void piRpc({ type: "switch_session", sessionPath: sessionFile }).then(
-      () => piForks.clear(forkKey),
+      // a switch an extension vetoed left Pi on the forked file: the note still says the way back
+      (data) => { if (!piMoveCancelled(data)) piForks.clear(forkKey); },
       (error: unknown) => piNativeLanes.fail(forkKey, refusal(error)),
     );
   }, [forkKey, piRpc]);

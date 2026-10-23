@@ -24,6 +24,16 @@ export function forkNoteName(text: string): string {
   return first.length > NAME_CHARS ? `${first.slice(0, NAME_CHARS - 1)}…` : first;
 }
 
+/** An extension vetoed a fork or a session move: Pi stayed, and nothing is written. */
+export function piMoveCancelled(answer: unknown): boolean {
+  return (answer as { cancelled?: unknown } | null)?.cancelled === true;
+}
+
+/** The box after a fork: the message goes under what the reader was already typing, never over it. */
+export function draftAfterFork(previous: string, text: string): string {
+  return previous === "" ? text : `${previous}\n${text}`;
+}
+
 class PiForks {
   private readonly notes = new Map<string, PiForkNote>();
   private readonly listeners = new Set<() => void>();

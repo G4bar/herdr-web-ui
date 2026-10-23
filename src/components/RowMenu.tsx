@@ -36,6 +36,8 @@ export interface RowMenuItem {
   current?: boolean;
   /** a switch's state, when the item is one: it is then a checkbox item (a pressed button in the sheet), not a plain item */
   checked?: boolean;
+  /** the pane cannot take it right now (Pi's Clone mid-turn): shown, and out of reach */
+  disabled?: boolean;
   run: () => void;
 }
 
@@ -151,7 +153,9 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
   }, [anchor, onClose, point, sheet]);
 
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    const buttons = [...(surface.current?.querySelectorAll<HTMLElement>(sheet ? SHEET_ITEMS : POPOVER_ITEMS) ?? [])];
+    // an item the pane cannot take (a disabled Clone) is there but not a stop: the arrows skip it
+    const buttons = [...(surface.current?.querySelectorAll<HTMLElement>(sheet ? SHEET_ITEMS : POPOVER_ITEMS) ?? [])]
+      .filter((button) => !(button as HTMLButtonElement).disabled);
     const index = buttons.indexOf(document.activeElement as HTMLElement);
     const move = (next: number): void => {
       event.preventDefault();
@@ -196,7 +200,7 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
           {/* the items scroll between the head and Cancel: a tab's menu is taller than a short phone, and `.modal` hides its overflow */}
           <div className="row-sheet-items">
             {items.map((item) => (
-              <button key={item.id} type="button" className={`row-sheet-item${item.danger ? " is-danger" : ""}${item.divider ? " has-divider" : ""}`} aria-current={item.current ? "true" : undefined} aria-pressed={item.checked} title={item.title} onMouseDown={keepFocus} onMouseEnter={point ? (event) => event.currentTarget.focus({ preventScroll: true }) : undefined} onClick={() => run(item)}>
+              <button key={item.id} type="button" className={`row-sheet-item${item.danger ? " is-danger" : ""}${item.divider ? " has-divider" : ""}`} aria-current={item.current ? "true" : undefined} aria-pressed={item.checked} disabled={item.disabled} title={item.title} onMouseDown={keepFocus} onMouseEnter={point ? (event) => event.currentTarget.focus({ preventScroll: true }) : undefined} onClick={() => run(item)}>
                 {item.glyph ?? <item.icon aria-hidden="true" />}
                 <span className="row-sheet-label">{item.label}</span>
                 {item.hint && <span className="row-sheet-hint">{item.hint}</span>}
@@ -217,7 +221,7 @@ export function RowMenu({ anchor, point, restoreFocusTo, title, subtitle, detail
       {items.map((item) => (
         <Fragment key={item.id}>
           {item.divider && <span className="row-menu-divider" role="separator" />}
-          <button type="button" role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"} aria-checked={item.checked} className={`menu-item${item.danger ? " is-danger" : ""}`} aria-current={item.current ? "true" : undefined} title={item.title} onMouseDown={keepFocus} onMouseEnter={point ? (event) => event.currentTarget.focus({ preventScroll: true }) : undefined} onClick={() => run(item)}>
+          <button type="button" role={item.checked === undefined ? "menuitem" : "menuitemcheckbox"} aria-checked={item.checked} className={`menu-item${item.danger ? " is-danger" : ""}`} aria-current={item.current ? "true" : undefined} disabled={item.disabled} title={item.title} onMouseDown={keepFocus} onMouseEnter={point ? (event) => event.currentTarget.focus({ preventScroll: true }) : undefined} onClick={() => run(item)}>
             {item.glyph ?? <item.icon aria-hidden="true" />}
             <span className="menu-item-main">{item.label}</span>
             {item.hint && <span className="menu-item-hint">{item.hint}</span>}

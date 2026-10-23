@@ -50,6 +50,14 @@
   color: currentColor;
 }
 
+/* an item the pane cannot take right now (Pi's Clone mid-turn): there, and visibly out of reach */
+.row-menu .menu-item:disabled,
+.row-sheet-item:disabled {
+  opacity: 0.5;
+  cursor: default;
+  pointer-events: none;
+}
+
 /* a picker's item that is what is open now: named in the strong colour, with its mark unfaded */
 .row-menu .menu-item[aria-current="true"],
 .row-sheet-item[aria-current="true"] {

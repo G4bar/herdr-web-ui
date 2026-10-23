@@ -61,6 +61,7 @@ import { useMediaQuery } from "./lib/useMediaQuery.ts";
 import { useAnnouncedText } from "./lib/useAnnouncedText.ts";
 import { PaneLenses } from "./lib/paneLens.ts";
 import { handBackPi, piNativeLanes, reconnectPi, refusal, takeOverPi, usePiNativeLane } from "./lib/piNative.ts";
+import { draftAfterFork, piMoveCancelled } from "./lib/piFork.ts";
 import { paneContextPress } from "./lib/paneCanvas.ts";
 import type { AppActions, PaneView, PaneControls } from "./lib/actions.ts";
 import {
@@ -1670,7 +1671,7 @@ export function App() {
     ...(piPane && piMode === "native" ? [
       { id: "session-tree", label: t("Session tree"), icon: GitFork, run: openSessionTree },
       // Pi continues this conversation in another session file, which the chat then follows
-      { id: "clone-session", label: t("Clone session"), icon: GitFork, run: () => { void sendPiRpc(piPane.pane_id, { type: "clone" }, selectedMachineId).catch((error: unknown) => piNativeLanes.fail(paneStorageId(selectedMachineId, piPane.pane_id), refusal(error))); } },
+      { id: "clone-session", label: t("Clone session"), icon: GitFork, disabled: piLane.state?.isStreaming === true, run: () => { const key = paneStorageId(selectedMachineId, piPane.pane_id); void sendPiRpc(piPane.pane_id, { type: "clone" }, selectedMachineId).then((data) => { if (piMoveCancelled(data)) piNativeLanes.fail(key, t("Clone was cancelled")); }, (error: unknown) => piNativeLanes.fail(key, refusal(error))); } },
     ] : []),
     ...(bellVisible ? [{ id: "alerts", label: t("Alerts"), hint: bell.state, checked: bell.on, title: bell.title, icon: Bell, run: () => void bell.run() }] : []),
   ];
@@ -2074,7 +2075,7 @@ export function App() {
           <Suspense fallback={null}>
             <SessionTree key={`${selectedMachineId}:${selectedPane.pane_id}`} paneId={selectedPane.pane_id} machineId={selectedMachineId}
               streaming={piLane.state?.isStreaming === true} onClose={closeSessionTree}
-              onFork={(text) => { composerDrafts.set(`ovis:composer-draft:${paneStorageId(selectedMachineId, selectedPane.pane_id)}`, text); closeSessionTree(); }} />
+              onFork={(text) => { composerDrafts.set(`ovis:composer-draft:${paneStorageId(selectedMachineId, selectedPane.pane_id)}`, (previous) => draftAfterFork(previous, text)); closeSessionTree(); }} />
           </Suspense>
         </MachineContext.Provider>
       )}
