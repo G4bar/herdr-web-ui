@@ -724,6 +724,7 @@ export const ZH: Record<string, string> = {
   "Copy code": "复制代码",
   "Show less": "收起",
   "Show all {n} lines": "显示全部 {n} 行",
+  "Lines {range}": "第 {range} 行",
   "Too long to highlight": "内容过长，未做语法高亮",
   "Empty task": "空任务",
   "Too long to preview": "内容过长，未显示预览",

@@ -1011,6 +1011,30 @@
   font-size: var(--fs-2xs);
 }
 
+/* a failed call's own message, on the error tint: only an edit's (DS §4.6 puts no tint on a whole card) */
+.chat-tool-io.is-failed {
+  background: var(--danger-tint);
+  color: var(--danger-text);
+}
+
+/* a file a call touched, as its card draws it: the chip that opens it, the range it read, its lines */
+.chat-tool-file-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.chat-tool-range {
+  margin: 0;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-2xs);
+}
+
+.chat-tool-file-body .markdown-code {
+  margin-bottom: 0;
+}
+
 .chat-checklist {
   margin: 0;
   padding: var(--space-2) var(--space-3);

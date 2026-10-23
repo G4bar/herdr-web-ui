@@ -720,6 +720,7 @@ export const KO: Record<string, string> = {
   "Copy code": "코드 복사",
   "Show less": "접기",
   "Show all {n} lines": "{n}줄 모두 보기",
+  "Lines {range}": "{range}행",
   "Too long to highlight": "너무 길어 강조 표시를 생략했습니다",
   "Empty task": "빈 할 일",
   "Too long to preview": "너무 길어 미리보기를 생략했습니다",

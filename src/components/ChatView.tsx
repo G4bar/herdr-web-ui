@@ -34,7 +34,7 @@ import { useMachineApi } from "../lib/machineContext.tsx";
 import { toTranscriptMessages, type TranscriptMessage } from "../lib/transcript.ts";
 import { isLiveWorkTurn, isWaitingWorkTurn, formatWorkDuration, splitTurn, toolRowState, visibleWorkParts, workFailed, workStartsOpen, workSummary, type ToolPart as ToolPartType } from "../lib/workBlocks.ts";
 import { ToolCardHead } from "./ToolCardHead.tsx";
-import { bashCard, PiToolCardContext, ToolStop, ToolTail, usePiToolCard, type PiToolCard } from "./ToolBodies.tsx";
+import { bashCard, PiToolCardContext, ToolFile, ToolFileBody, toolFileBody, ToolStop, ToolTail, usePiToolCard, type PiToolCard } from "./ToolBodies.tsx";
 import { phaseRows, planRows, taskRows, todoRows, type ChecklistRow } from "../lib/checklist.ts";
 import { isTodoTool, parseTodoAnswer, todoCallSummary, type TodoItem, type TodoStatus } from "../lib/todos.ts";
 import { formatGoalTime, turnGoal, type GoalState, type GoalStatus } from "../lib/goals.ts";
@@ -53,6 +53,7 @@ import { OpenFileContext } from "../lib/filePaths.ts";
 import { linkFilePaths } from "./FilePathLink.tsx";
 import { patchText } from "../../shared/patch.ts";
 import { workRowLabel } from "../lib/workRowLabel.ts";
+import { toolVerbKind } from "../lib/toolVerbs.ts";
 import { machinePath, paneStorageId } from "../../shared/machines.ts";
 import { chatRestoreIndex, chatTurnAnchor, readChatPosition, rememberChatPosition, type ChatPosition } from "../lib/chatScrollMemory.ts";
 import { fileUrl } from "../lib/api.ts";
@@ -301,14 +302,6 @@ function ompEditLineClass(line: string): string | undefined {
   return undefined;
 }
 
-/** A file a tool call names: it opens in the viewer where one can, and reads as text elsewhere. */
-function ToolFile({ path, suffix }: { path: string; suffix?: string }) {
-  const t = useT();
-  const open = useContext(OpenFileContext);
-  if (open === null) return <p className="chat-tool-file">{path}{suffix}</p>;
-  return <p className="chat-tool-file"><button type="button" className="chat-tool-file-link" title={t("Open {path}", { path })} onClick={() => open(path)}>{path}</button>{suffix}</p>;
-}
-
 /** An edit's old and new text as one diff: the unchanged lines once, the changes in place. */
 function EditDiff({ before, after }: { before: string; after: string }) {
   const lines = lineDiff(before, after);
@@ -442,14 +435,14 @@ function ImageGallery({ images, className }: { images: GalleryImage[]; className
 }
 
 /** Images a tool returned (pi reads a picture into the result); opened with the row. */
-function ToolImages({ paneId, part }: { paneId: string; part: ToolPartType }) {
+function ToolImages({ paneId, part, alt }: { paneId: string; part: ToolPartType; alt?: string }) {
   const t = useT();
   const machineId = useMachineId();
   if (part.images === undefined || part.images.length === 0) return null;
   const images = part.images.map((image, index): GalleryImage => ({
     src: machinePath(machineId, `pane/conversation/image?${new URLSearchParams({ pane_id: paneId, ref: image.ref }).toString()}`),
-    // a tool's picture carries no file name: it is named by its place and the tool that read it
-    name: t("Image {n} from {tool}", { n: index + 1, tool: part.name }),
+    // a tool's picture carries no file name: it is named by the file a read named, or by its place and the tool that read it
+    name: alt ?? t("Image {n} from {tool}", { n: index + 1, tool: part.name }),
     file: attachmentFileName(image.media_type, index),
   }));
   return <ImageGallery images={images} className="chat-tool-images" />;
@@ -480,10 +473,19 @@ export function WorkRow({ paneId, part, stateKey, live, waiting, last, expandRow
   // bash draws its command box and the exit code pi ends a failed one with; every other tool keeps the plain input view
   const bash = part.name === "bash" ? bashCard(output) : null;
   const body = bash === null ? output : bash.text;
+  // a pi read or write draws the file it gave back instead of its JSON and an Output pane
+  const fileBody = useMemo(() => open ? toolFileBody({ name: part.name, input: part.input, output, images: (part.images?.length ?? 0) > 0, error: part.error === true }) : null,
+    [open, part.name, part.input, output, part.images, part.error]);
+  // a failed edit draws the agent's own message on the error tint (DS §4.6)
+  const editFailed = part.error === true && toolVerbKind(part.name, part.input) === "edit";
   // the live tail of a call running on a native pane: only the id pi named, and only while it runs
   const tail = running ? piCard.tails?.[part.tool_call_id ?? ""] ?? null : null;
   const heading = <h4>{t(part.error ? "Error" : "Output")}</h4>;
   const stop = running && piCard.abort !== null ? <ToolStop onAbort={piCard.abort} /> : null;
+  const more = part.output_ref !== undefined && whole.text === null && <section className="chat-tool-output">
+    <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
+      {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}
+    </button></section>;
   return <div className={`work-row${part.error ? " is-error" : ""}${stopped ? " is-stopped" : ""}`}>
     <button type="button" className="work-row-head" aria-expanded={open} title={narration || verb !== null ? `${part.name} · ${summary}` : undefined} onClick={() => setOpen(!open)}>
       <span className="work-row-caret" aria-hidden="true">{open ? <ChevronDown /> : <ChevronRight />}</span>
@@ -496,13 +498,14 @@ export function WorkRow({ paneId, part, stateKey, live, waiting, last, expandRow
       {running && <>{" "}<span className="work-row-running">{t("Running…")}<span className="work-row-dot" aria-hidden="true" /></span></>}
       {stopped && <>{" "}<span className="work-row-stopped">{t("stopped")}</span></>}
     </button>
-    {open && <div className="work-row-detail"><ToolCardHead name={part.name} state={cardState} server={server} /><ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{(body.length > 0 || tail !== null || stop !== null || (bash !== null && bash.exit !== null)) && <section className="chat-tool-output">
-      {stop === null ? heading : <div className="chat-tool-output-head">{heading}{stop}</div>}
-      {tail !== null ? <ToolTail lines={tail} /> : body.length > 0 && <pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}`}>{linkFilePaths(body, openFile)}</pre>}
-      {bash !== null && bash.exit !== null && <p className="chat-tool-exit">{t("exit {code}", { code: bash.exit })}</p>}
-      {part.output_ref !== undefined && whole.text === null && <button type="button" className="btn btn-ghost chat-tool-more" disabled={whole.state === "loading"} onClick={whole.load}>
-        {t(whole.state === "loading" ? "Loading the whole output…" : whole.state === "failed" ? "Couldn't load the whole output — retry" : "Show the whole output ({size} characters)", { size: formatTokens(part.output_size ?? 0) })}
-      </button>}</section>}</div>}
+    {open && <div className="work-row-detail"><ToolCardHead name={part.name} state={cardState} server={server} />{fileBody === null ? <>
+      <ToolInputView part={part} /><ToolImages paneId={paneId} part={part} />{(body.length > 0 || tail !== null || stop !== null || (bash !== null && bash.exit !== null)) && <section className="chat-tool-output">
+        {stop === null ? heading : <div className="chat-tool-output-head">{heading}{stop}</div>}
+        {tail !== null ? <ToolTail lines={tail} /> : body.length > 0 && <pre className={`chat-tool-io${whole.text !== null ? " is-whole" : ""}${editFailed ? " is-failed" : ""}`}>{linkFilePaths(body, openFile)}</pre>}
+        {bash !== null && bash.exit !== null && <p className="chat-tool-exit">{t("exit {code}", { code: bash.exit })}</p>}
+      </section>}{more}</> : <>
+      <ToolFileBody {...fileBody} /><ToolImages paneId={paneId} part={part} alt={fileBody.path} />{more}</>}
+    </div>}
   </div>;
 }
 

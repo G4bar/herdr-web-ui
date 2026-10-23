@@ -722,6 +722,7 @@ export const JA: Record<string, string> = {
   "Copy code": "コードをコピー",
   "Show less": "折りたたむ",
   "Show all {n} lines": "{n} 行すべて表示",
+  "Lines {range}": "{range} 行",
   "Too long to highlight": "長すぎるため構文ハイライトを省略しました",
   "Empty task": "空のタスク",
   "Too long to preview": "長すぎるためプレビューを省略しました",
