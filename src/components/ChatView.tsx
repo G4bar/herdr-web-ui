@@ -485,7 +485,7 @@ export function WorkRow({ paneId, part, stateKey, live, waiting, last, expandRow
   // the list is the answer of a todo call: its raw text would say it twice
   const output = isTodoTool(part.name) && parseTodoAnswer(part.output) !== null ? "" : whole.text ?? part.output;
   // bash draws its command box and the exit code pi ends a failed one with; every other tool keeps the plain input view
-  const bash = part.name === "bash" ? bashCard(output) : null;
+  const bash = useMemo(() => part.name === "bash" ? bashCard(output) : null, [part.name, output]);
   const body = bash === null ? output : bash.text;
   // a pi read or write draws the file it gave back instead of its JSON and an Output pane
   const fileBody = useMemo(() => open ? toolFileBody({ name: part.name, input: part.input, output, images: (part.images?.length ?? 0) > 0, error: part.error === true }) : null,

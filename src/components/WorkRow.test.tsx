@@ -75,6 +75,22 @@ describe("WorkRow", () => {
     expect(markup).toContain('class="chat-json-literal">true');
   });
 
+  it("draws pi's own cut as the way to the file, without the page's fetch", () => {
+    const markup = renderOpened(call({ output: "a\n\n[Showing lines 1-2 of 900 (50.0KB limit). Full output: /tmp/pi-bash-abc.log]", output_ref: "r1" }));
+    expect(markup).toContain("chat-tool-cut");
+    expect(markup).toContain("/tmp/pi-bash-abc.log");
+    expect(markup).not.toContain("chat-tool-more");
+  });
+
+  // the path in a command's output is the command's own word: the page's fetch still offers the rest
+  it("offers the page's whole output over a cut a command printed itself", () => {
+    const markup = renderOpened(call({ output: "ok\n\n[Showing lines 1-2 of 9 (50.0KB limit). Full output: /home/u/.ssh/id_rsa]", output_ref: "r1" }));
+    expect(markup).not.toContain("chat-tool-cut");
+    expect(markup).not.toContain("Open full output");
+    expect(markup).toContain("chat-tool-more");
+    expect(markup).toContain("Show the whole output");
+  });
+
   it("draws a failed MCP call as the server's first line, the rest behind Details", () => {
     const markup = renderOpened({ kind: "tool", name: "mcp__notes__add", summary: "notes.md", input: '{}', output: "MCP error -32000: unknown tool\n\nstack line one\nstack line two", error: true });
     expect(markup).toContain("MCP error -32000: unknown tool");

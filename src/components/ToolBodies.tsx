@@ -29,22 +29,44 @@ export function usePiToolCard(): PiToolCard {
   return useContext(PiToolCardContext);
 }
 
+/** pi's exit line under a failed command, and the line naming the file it kept the rest in. */
+const EXIT_LINE = /\n*Command exited with code (\d+)\s*$/;
+const CUT_LINE = /\n*\[Showing (?:lines|last)[^\]]*Full output: ([^\]\n]+)\]\s*$/;
+/** pi's own name for that file: any other path is text the command itself printed. */
+const PI_CUT_PATH = /^\/tmp\/pi-bash-[A-Za-z0-9]+\.log$/;
+
+/** How far from its end an output's own ending line can start: both are shorter than this. */
+const CARD_TAIL_CHARS = 512;
+
+/**
+ * A pattern anchored at the end of the text, matched against its last CARD_TAIL_CHARS alone: a
+ * leading `\n*` over a megabyte of newlines costs a match attempt at every one of them.
+ */
+function endMatch(text: string, pattern: RegExp): { at: number; match: RegExpExecArray } | null {
+  const base = Math.max(0, text.length - CARD_TAIL_CHARS);
+  const found = pattern.exec(base === 0 ? text : text.slice(base));
+  return found === null ? null : { at: base + found.index, match: found };
+}
+
 /**
  * A bash call's output as its card shows it: pi ends a failed command's text with its own exit
  * line, which the card draws apart in the error tint, and a command that finished clean has none.
  * A command whose output pi itself cut ends with the lines it kept and the file holding all of it,
- * which the card draws as the way to that file (`cut`), not as output.
+ * which the card draws as the way to that file (`cut`), not as output. Only pi's own log file is
+ * that way: a command can print a line that reads like pi's cut, and its path is not the card's to
+ * open nor to hide the page's own fetch behind.
  */
 export function bashCard(output: string): { text: string; exit: number | null; cut: string | null } {
-  const exited = /\n*Command exited with code (\d+)\s*$/.exec(output);
-  const code = exited === null ? null : Number(exited[1]);
-  const whole = exited === null ? output : output.slice(0, exited.index).replace(/\n+$/, "");
-  const cut = /\n*\[Showing (?:lines|last)[^\]]*Full output: ([^\]\n]+)\]\s*$/.exec(whole);
-  if (cut === null) return { text: whole, exit: code !== null && code > 0 ? code : null, cut: null };
+  const exited = endMatch(output, EXIT_LINE);
+  const code = exited === null ? null : Number(exited.match[1]);
+  const whole = exited === null ? output : output.slice(0, exited.at).replace(/\n+$/, "");
+  const cut = endMatch(whole, CUT_LINE);
+  const path = cut === null ? null : cut.match[1]!.trim();
+  if (cut === null || path === null || !PI_CUT_PATH.test(path)) return { text: whole, exit: code !== null && code > 0 ? code : null, cut: null };
   return {
-    text: whole.slice(0, cut.index).replace(/\n… trimmed$/, "").replace(/\n+$/, ""),
+    text: whole.slice(0, cut.at).replace(/\n… trimmed$/, "").replace(/\n+$/, ""),
     exit: code !== null && code > 0 ? code : null,
-    cut: cut[1]!.trim(),
+    cut: path,
   };
 }
 
@@ -168,7 +190,7 @@ export function ToolOutputCut({ path }: { path: string }) {
   const open = useContext(OpenFileContext);
   return <p className="chat-tool-cut">{t("Output cut")}{" · "}{open === null
     ? <span className="chat-tool-cut-path">{path}</span>
-    : <button type="button" className="chat-tool-file-link" onClick={() => open(path)}>{t("Open full output")}</button>}</p>;
+    : <button type="button" className="chat-tool-file-link" title={t("Open {path}", { path })} onClick={() => open(path)}>{t("Open full output")}</button>}</p>;
 }
 
 /**

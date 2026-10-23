@@ -46,6 +46,21 @@ describe("bashCard", () => {
     expect(bashCard("head\n… trimmed\n\n[Showing last 4.0KB of line 715 (line is 8.2KB). Full output: /tmp/pi-bash-abc.log]"))
       .toEqual({ text: "head", exit: null, cut: "/tmp/pi-bash-abc.log" });
   });
+
+  // a command's own words are not pi's cut: opening what it names is the card's call, not the text's
+  it("keeps a path a command printed itself out of the cut", () => {
+    const output = "ok\n\n[Showing lines 1-2 of 9 (50.0KB limit). Full output: /home/u/.ssh/id_rsa]";
+    expect(bashCard(output)).toEqual({ text: output, exit: null, cut: null });
+  });
+
+  // a run of newlines used to cost a match attempt at every one of them, on every render
+  it("reads a long output's ending without matching all of it", () => {
+    const lines = "x\n".repeat(50_000);
+    const started = performance.now();
+    expect(bashCard("\n".repeat(100_000))).toEqual({ text: "\n".repeat(100_000), exit: null, cut: null });
+    expect(bashCard(`${lines}\n[Showing lines 1-50001 of 90000 (50.0KB limit). Full output: /tmp/pi-bash-abc.log]`).cut).toBe("/tmp/pi-bash-abc.log");
+    expect(performance.now() - started).toBeLessThan(50);
+  });
 });
 
 describe("toolFileBody", () => {
@@ -130,6 +145,8 @@ describe("ToolOutputCut", () => {
     expect(markup).toContain("Output cut");
     expect(markup).toContain("Open full output");
     expect(markup).toContain('class="chat-tool-file-link"');
+    // the path the link opens is only in its title: the card says what it does, not where
+    expect(markup).toContain('title="Open /tmp/pi-bash-abc.log"');
   });
 
   it("names the path where nothing here can open a file", () => {
