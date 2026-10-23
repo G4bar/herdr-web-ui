@@ -1,7 +1,7 @@
-import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
-  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleQuestionMark, CircleSlash, CircleX, Copy, Layers, SquareTerminal, Target, Undo2,
+  ArrowDown, BookOpen, Check, ChevronDown, ChevronRight, Circle, CircleAlert, CircleCheck, CircleDot, CircleQuestionMark, CircleSlash, CircleX, Copy, Layers, SquareTerminal, Target, TriangleAlert, Undo2,
   type LucideProps,
 } from "lucide-react";
 
@@ -87,7 +87,7 @@ const ChatHistoryContext = createContext("");
  */
 const ImageViewerContext = createContext<(images: GalleryImage[], index: number) => void>(() => {});
 import type { TypedAnswer } from "../lib/promptAnswer.ts";
-import type { AgentStatus, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, PiNativeState, SlashCommand } from "../../shared/protocol.ts";
+import type { AgentStatus, CommandOutcome, ConversationMetadata, ConversationPart, ConversationResponse, ConversationTurn, InteractivePrompt, OmoTaskResult, PiNativeNotice, PiNativeState, SlashCommand } from "../../shared/protocol.ts";
 import { chatIsBlank, type ChatRead } from "../lib/greeting.ts";
 import { TurnTime } from "./TurnTime.tsx";
 import { useT } from "../lib/i18n.ts";
@@ -899,6 +899,36 @@ function noticeLabel(t: ReturnType<typeof useT>, notice: Extract<ConversationPar
   return first.length > 96 ? `${first.slice(0, 95)}…` : first;
 }
 
+/**
+ * A message the agent's runtime put in the user's seat (pi's `role:"custom"`): a quiet card, its rail
+ * and label naming it as custom rather than as one of the status colours, the text itself on request.
+ */
+export function RuntimeNoticeRow({ notice, time }: { notice: Extract<ConversationPart, { kind: "notice" }>; time: ReactNode }) {
+  const t = useT();
+  return <ChatDetails memoryKey="notice" className="chat-compact chat-notice">
+    <summary><span className="chat-notice-label">{noticeLabel(t, notice)}</span>{time !== null && <> · {time}</>}</summary>
+    <pre className="chat-compact-text chat-notice-text">{notice.text}</pre>
+  </ChatDetails>;
+}
+
+/** what one `notify` reads as: the severity is the glyph and its colour, the words are the extension's own */
+const NOTICE_GLYPH = { info: CircleDot, warning: TriangleAlert, error: CircleX } as const;
+
+/**
+ * Pi's fire-and-forget `notify` calls (DS §4.7): one quiet line each, newest last, at the transcript's
+ * end. Nothing writes them to the session file, so they last as long as this page does. Not a live
+ * region: an extension that fires often would otherwise read its own log aloud.
+ */
+export function PiNoticeRows({ notices }: { notices: readonly PiNativeNotice[] }) {
+  return <>{notices.map((notice) => {
+    const Glyph = NOTICE_GLYPH[notice.type];
+    return <p key={notice.id} className="chat-note" data-notice={notice.type} title={notice.message}>
+      <Glyph className="chat-note-icon" aria-hidden="true" />
+      <span className="chat-note-text">{notice.message}</span>
+    </p>;
+  })}</>;
+}
+
 // a turn that did not change keeps its object across polls: skip re-rendering it
 const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, expandRows, skills = null, userSkills = null, outcome = null, outcomeActions = null, onRewindInTerminal = null }: TurnProps) {
   const t = useT();
@@ -923,14 +953,9 @@ const Turn = memo(function Turn({ paneId, turn, live, waiting, showThinking, exp
       {ended.tasks.map((task) => <TaskResultRow key={task.id} task={task} />)}
     </section>;
   }
-  // the runtime spoke, not the user: a quiet divider like a compaction, the text on request
+  // the runtime spoke, not the user: a quiet card of its own, the text on request
   const notice = turn.parts.find((part): part is Extract<ConversationPart, { kind: "notice" }> => part.kind === "notice");
-  if (notice !== undefined) {
-    return <ChatDetails memoryKey="notice" className="chat-compact chat-notice">
-      <summary><span className="chat-notice-label">{noticeLabel(t, notice)}</span>{time !== null && <> · {time}</>}</summary>
-      <pre className="chat-compact-text chat-notice-text">{notice.text}</pre>
-    </ChatDetails>;
-  }
+  if (notice !== undefined) return <RuntimeNoticeRow notice={notice} time={time} />;
   if (turn.role === "user") {
     if (outcome !== null && terminalOnlyOutcome(outcome, outcomeActions)) return <TerminalCommandRow outcome={outcome} actions={outcomeActions} />;
     const text = userText(turn);
@@ -1895,6 +1920,9 @@ export const ChatView = memo(function ChatView({ paneId, presentationKey, finish
           : <PendingWorkHead className="chat-activity" title={activity === "thinking" ? t("Thinking…") : t("Working…")} />)}
       {loaded && empty && error === null && prompt === null && activity === "idle" && !(greeted && blank) && <div className="chat-empty"><AgentMark agent={agent ?? "agent"} size={32} /><p>{t("No conversation yet — say something below")}</p></div>}
       {active && loaded && empty && error === null && prompt === null && activity === "idle" && !(greeted && blank) && agent === "pi" && piNative?.mode === "native" && <PiContextLine paneId={paneId} />}
+      {/* Pi's own `notify` calls, last of all: they say what a run did after its turns, and nothing
+          writes them to the session file */}
+      <PiNoticeRows notices={piNative?.notices ?? []} />
       {ended && <p className="chat-endcap">{t("terminal ended")}</p>}
   </>;
   const jump = newMessages ? <button type="button" className="btn chat-new-messages chat-virtual-jump" onClick={scrollToBottom}>{t("New messages")} <ArrowDown aria-hidden="true" /></button>

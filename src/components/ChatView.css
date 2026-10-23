@@ -1619,13 +1619,72 @@
   line-height: var(--lh-base);
 }
 
-/* a notice named by its own first line: one line, cut short, between the divider rules */
+/* a message the runtime put in the user's seat (pi's custom role): a quiet card rather than a
+   divider, its rail and label naming it as custom — no status colour means this */
+.chat-notice {
+  padding: var(--space-2) var(--space-3);
+  border: var(--hairline) solid var(--border);
+  border-left: var(--rail-w) solid var(--custom-label);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+}
+
+.chat-notice > summary::before,
+.chat-notice > summary::after {
+  content: none;
+}
+
+/* a notice named by its own first line: one line, cut short */
 .chat-notice-label {
   flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  color: var(--custom-label);
+}
+
+/* Pi's `notify` calls (DS §4.7): a quiet line each at the transcript's end, the glyph carrying the
+   severity. One line, so a chatty extension cannot push the transcript around; the whole sentence
+   stays in the row's tooltip */
+.chat-note {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: var(--space-2) 0;
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.chat-note-icon {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+}
+
+.chat-note-text {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* a warning keeps `--text` words: its glyph is the amber that says which kind it is */
+.chat-note[data-notice="warning"] {
+  color: var(--text);
+}
+
+.chat-note[data-notice="warning"] .chat-note-icon {
+  color: var(--notice);
+}
+
+.chat-note[data-notice="error"] {
+  color: var(--danger-text);
+}
+
+.chat-note[data-notice="error"] .chat-note-icon {
+  color: var(--status-blocked);
 }
 
 /* a runtime notice is job output, not prose: verbatim, wrapped, and bounded like a whole tool output */
