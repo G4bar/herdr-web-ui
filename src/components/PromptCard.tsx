@@ -113,6 +113,12 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
     return () => { shown.current = false; };
   }, []);
 
+  // Esc is the card's on a confirmation (Deny): the composer keeps the focus otherwise, and its own
+  // Esc aborts the run
+  useEffect(() => {
+    if (confirmation) cardRef.current?.focus();
+  }, [confirmation]);
+
   // the question to confirm stays on the card's fold (PromptCard.css); a card scrolled past it
   // comes back to it, and nothing outside the card moves
   useEffect(() => {
@@ -207,7 +213,7 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
   );
 
   return (
-    <section className={`prompt-card${folded ? " is-folded" : ""}`} ref={cardRef} role="region" aria-label={t("Agent is asking")}
+    <section className={`prompt-card${folded ? " is-folded" : ""}`} ref={cardRef} role="region" aria-label={t("Agent is asking")} tabIndex={confirmation ? -1 : undefined}
       onKeyDown={(event) => {
         // pi's confirmation takes Esc as Deny, and the run's own Esc never reaches pi from the card
         if (confirmation && event.key === "Escape" && !pending) {
@@ -323,7 +329,8 @@ export function PromptCard({ paneId, prompt, onPromptChanged, onAnswered, typedA
             <button type="button" className="btn" disabled={pending} onClick={(event) => void answer({ option_index: 0 }, event)}>{prompt.options[0]?.label}</button>
             <button type="button" className="btn" disabled={pending} onClick={(event) => void answer({ option_index: 1 }, event)}>{prompt.options[1]?.label}</button>
           </div>
-          {left !== null && left > 0 && <p className="prompt-card-timer">{t("Denies itself in {s} s", { s: left })}</p>}
+          {/* read, not announced: the line ticks each second, and the status line says it twice */}
+          {left !== null && left > 0 && <p className="prompt-card-timer" aria-hidden="true">{t("Denies itself in {s} s", { s: left })}</p>}
           {/* one announcement as the timer starts and one at 10 s, never one per second */}
           <p className="visually-hidden" role="status">{denialAnnouncement}</p>
         </>
@@ -452,12 +459,15 @@ export function TrustCard({ trust, onTrust }: TrustCardProps) {
   const t = useT();
   const openFile = useContext(OpenFileContext);
   const [pending, setPending] = useState(false);
+  const cardRef = useRef<HTMLElement | null>(null);
+  // Esc is Don't trust here: the composer would keep the focus, and take the run's Esc instead
+  useEffect(() => { cardRef.current?.focus(); }, []);
   const choose = async (choice: "approve" | "deny"): Promise<void> => {
     setPending(true);
     try { await onTrust(choice); } catch { /* the pane's own notice says why nothing changed */ } finally { setPending(false); }
   };
   return (
-    <section className="prompt-card prompt-card-trust" role="region" aria-label={t("Trust this project?")}
+    <section className="prompt-card prompt-card-trust" ref={cardRef} tabIndex={-1} role="region" aria-label={t("Trust this project?")}
       onKeyDown={(event) => {
         if (event.key !== "Escape" || pending) return;
         event.preventDefault();
@@ -473,7 +483,8 @@ export function TrustCard({ trust, onTrust }: TrustCardProps) {
         {trust.found.map((item) => (
           <li key={item}>
             <code>{item}</code>
-            {openFile !== null && <button type="button" className="btn btn-ghost prompt-card-trust-view" disabled={pending} title={t("View")} onClick={() => openFile(item)}><FileText aria-hidden="true" />{t("View")}</button>}
+            {/* a folder (pi's extensions, skills) has nothing to open: only a file carries the button */}
+            {openFile !== null && item.slice(item.lastIndexOf("/") + 1).includes(".") && <button type="button" className="btn btn-ghost prompt-card-trust-view" disabled={pending} title={t("View")} onClick={() => openFile(item)}><FileText aria-hidden="true" />{t("View")}</button>}
           </li>
         ))}
       </ul>

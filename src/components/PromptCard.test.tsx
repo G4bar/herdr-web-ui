@@ -190,8 +190,8 @@ const typedAnswerCard = (variant: "input" | "editor", fields: Partial<Interactiv
   options: [{ label: "feature/pi", description: null }], custom_option_index: 0, ...fields,
 });
 
-/** Mounts a card, its answers recorded as the fetch bodies they were sent in. */
-async function mount(element: ReactElement) {
+/** Mounts a card, its answers recorded as the fetch bodies they were sent in. `createNodeMock` stands in for the DOM nodes its refs would hold (no DOM here). */
+async function mount(element: ReactElement, createNodeMock: (element: ReactElement) => unknown = () => null) {
   const bodies: string[] = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async (_url: string, init?: { body?: string }) => {
@@ -199,9 +199,12 @@ async function mount(element: ReactElement) {
     return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
   }) as typeof fetch;
   let tree!: TestRenderer.ReactTestRenderer;
-  await act(async () => { tree = TestRenderer.create(createElement(SettingsProvider, null, element)); });
+  await act(async () => { tree = TestRenderer.create(createElement(SettingsProvider, null, element), { createNodeMock }); });
   return { bodies, tree, restore: () => { act(() => { tree.unmount(); }); globalThis.fetch = originalFetch; } };
 }
+
+/** Stands in for the card's own node, so a test can see the focus it takes (react-test-renderer hands refs null). */
+const cardNode = (focus: () => void) => (element: ReactElement) => element.type === "section" ? { focus, addEventListener() {}, removeEventListener() {}, contains: () => true } : null;
 
 const prompt = (cardPrompt: InteractivePrompt) => createElement(PromptCard, { paneId: "p1", prompt: cardPrompt, onPromptChanged() {}, onAnswered() {} });
 
@@ -241,9 +244,11 @@ describe("the card of pi's own dialogs", () => {
     expect(words.indexOf("Deny")).toBeLessThan(words.indexOf("Allow"));
   });
 
-  it("takes Esc on that confirmation as Deny", async () => {
-    const mounted = await mount(prompt(confirmation()));
+  it("takes Esc on that confirmation as Deny, with the focus on the card so the composer's Esc never gets it", async () => {
+    const focused: string[] = [];
+    const mounted = await mount(prompt(confirmation()), cardNode(() => focused.push("card")));
     try {
+      expect(focused).toEqual(["card"]);
       const section = mounted.tree.root.findAll((node) => node.type === "section")[0]!;
       await act(async () => { section.props.onKeyDown({ key: "Escape", preventDefault() {}, stopPropagation() {} }); });
       expect(JSON.parse(mounted.bodies[0]!)).toEqual({ pane_id: "p1", prompt_id: "p1", option_index: 0 });
@@ -260,6 +265,8 @@ describe("the card of pi's own dialogs", () => {
       const said = () => mounted.tree.root.findAll((node) => node.props.role === "status" && String(node.props.children ?? "").includes("Denies")).map((node) => String(node.props.children));
       expect(line()).toEqual(["Denies itself in 28 s"]);
       expect(said()).toEqual(["Denies itself in 28 s"]);
+      // the line is read, not announced: the status line is the only live region of the two
+      expect(byClass(mounted.tree, "prompt-card-timer")[0]!.props["aria-hidden"]).toBe("true");
       await act(async () => { jest.advanceTimersByTime(5_000); });
       // the line counts each second, the live region does not follow it
       expect(line()).toEqual(["Denies itself in 23 s"]);
@@ -311,7 +318,7 @@ describe("the card of pi's own dialogs", () => {
   });
 });
 
-const trust = { folder: "/home/dev/project", found: [".pi/settings.json", ".agents/skills"], message: "Pi needs a project trust decision for this folder" };
+const trust = { folder: "/home/dev/project", found: [".pi/settings.json", ".pi/extensions", ".agents/skills"], message: "Pi needs a project trust decision for this folder" };
 
 describe("the project-trust card", () => {
   it("asks for the folder it stopped on, says what pi found, and never folds", () => {
@@ -329,11 +336,13 @@ describe("the project-trust card", () => {
     expect(html).not.toContain("btn-primary");
   });
 
-  it("answers the take-over with the choice, and Esc is Don't trust", async () => {
+  it("answers the take-over with the choice, and Esc is Don't trust, with the focus on the card", async () => {
     const choices: string[] = [];
     const onTrust = async (choice: "approve" | "deny"): Promise<void> => { choices.push(choice); };
-    const mounted = await mount(createElement(TrustCard, { trust, onTrust }));
+    const focused: string[] = [];
+    const mounted = await mount(createElement(TrustCard, { trust, onTrust }), cardNode(() => focused.push("card")));
     try {
+      expect(focused).toEqual(["card"]);
       const button = (label: string) => mounted.tree.root.findAll((node) => node.type === "button" && String(node.props.children) === label)[0]!;
       await act(async () => { button("Don't trust").props.onClick(); });
       await act(async () => { button("Trust folder").props.onClick(); });
@@ -346,12 +355,13 @@ describe("the project-trust card", () => {
     }
   });
 
-  it("opens what pi found in the file viewer", async () => {
+  it("opens what pi found in the file viewer, and leaves a folder row plain", async () => {
     const opened: string[] = [];
     const mounted = await mount(createElement(OpenFileContext.Provider, { value: (path: string) => void opened.push(path) }, createElement(TrustCard, { trust, onTrust: async () => undefined })));
     try {
+      // only the file has something to open: .pi/extensions and .agents/skills are folders
       const views = byClass(mounted.tree, "prompt-card-trust-view");
-      expect(views).toHaveLength(2);
+      expect(views).toHaveLength(1);
       await act(async () => { views[0]!.props.onClick(); });
       expect(opened).toEqual([".pi/settings.json"]);
     } finally {
