@@ -178,6 +178,73 @@ describe("native Pi context", () => {
   });
 });
 
+describe("native Pi keybindings", () => {
+  const withAgentDir = async (run: (dir: string) => Promise<void>): Promise<void> => {
+    const root = mkdtempSync(join(tmpdir(), "ovis-pi-keys-"));
+    const before = process.env["PI_CODING_AGENT_DIR"];
+    process.env["PI_CODING_AGENT_DIR"] = root;
+    try {
+      await run(root);
+    } finally {
+      if (before === undefined) delete process.env["PI_CODING_AGENT_DIR"];
+      else process.env["PI_CODING_AGENT_DIR"] = before;
+      rmSync(root, { recursive: true, force: true });
+    }
+  };
+
+  it("answers Pi's own keys for a machine with no file, and says why", async () => {
+    await withAgentDir(async (dir) => {
+      const response = await call("/api/pi/keybindings");
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get("cache-control")).toBe("no-store");
+      const answer = (await response?.json()) as { path: string; keys: Record<string, string[]>; warning?: string };
+      expect(answer.path).toBe(join(dir, "keybindings.json"));
+      expect(answer.keys).toEqual({
+        "app.model.select": ["ctrl+l"],
+        "app.model.cycleForward": ["ctrl+p"],
+        "app.model.cycleBackward": ["shift+ctrl+p"],
+        "app.thinking.cycle": ["shift+tab"],
+        "app.thinking.toggle": ["ctrl+t"],
+        "app.tools.expand": ["ctrl+o"],
+        "app.message.followUp": ["alt+enter"],
+        "app.message.dequeue": ["alt+up"],
+      });
+      expect(answer.warning).toContain("no such file");
+    });
+  });
+
+  it("takes the file's own chords over the defaults, an empty list disabling one", async () => {
+    await withAgentDir(async (dir) => {
+      // Pi's document is flat, and a value is one chord or a list of them
+      writeFileSync(join(dir, "keybindings.json"), JSON.stringify({
+        "app.model.select": "ctrl+shift+m",
+        "app.thinking.cycle": ["shift+tab", "f2"],
+        "app.tools.expand": [],
+        "tui.editor.cursorUp": "ctrl+u",
+      }));
+      const answer = (await (await call("/api/pi/keybindings"))?.json()) as { keys: Record<string, string[]>; warning?: string };
+      expect(answer.warning).toBeUndefined();
+      expect(answer.keys["app.model.select"]).toEqual(["ctrl+shift+m"]);
+      expect(answer.keys["app.thinking.cycle"]).toEqual(["shift+tab", "f2"]);
+      expect(answer.keys["app.tools.expand"]).toEqual([]);
+      // a chord of another kind in a list is dropped, and an id the chat has no surface for is not ours
+      expect(Object.keys(answer.keys).sort()).toEqual(["app.message.dequeue", "app.message.followUp", "app.model.cycleBackward", "app.model.cycleForward", "app.model.select", "app.thinking.cycle", "app.thinking.toggle", "app.tools.expand"]);
+    });
+  });
+
+  it("keeps the defaults for a file that is not Pi's own, and refuses the wrong method", async () => {
+    await withAgentDir(async (dir) => {
+      writeFileSync(join(dir, "keybindings.json"), "[ not json");
+      const unreadable = (await (await call("/api/pi/keybindings"))?.json()) as { keys: Record<string, string[]>; warning?: string };
+      expect(unreadable.warning).toContain("not valid JSON");
+      expect(unreadable.keys["app.model.select"]).toEqual(["ctrl+l"]);
+      writeFileSync(join(dir, "keybindings.json"), "[\"ctrl+l\"]");
+      expect(((await (await call("/api/pi/keybindings"))?.json()) as { warning?: string }).warning).toContain("not a JSON object");
+      expect((await call("/api/pi/keybindings", post("/api/pi/keybindings", {})))?.status).toBe(400);
+    });
+  });
+});
+
 describe("native Pi RPC passthrough", () => {
   const rpc = (command: unknown, registry: PiNativeControl = control()) => call("/api/pi/rpc", post("/api/pi/rpc", { pane_id: paneId, command }), registry);
 

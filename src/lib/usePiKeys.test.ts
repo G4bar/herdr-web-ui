@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { matchPiKey, parsePiChord, piKeymap, piKeyPress, PI_KEY_DEFAULTS, type PiChordEvent } from "./usePiKeys.ts";
+import { matchPiKey, parsePiChord, piChordKeys, piKeymap, piKeyPress, PI_KEY_DEFAULTS, type PiChordEvent } from "./usePiKeys.ts";
 
 const press = (key: string, mods: Partial<PiChordEvent> = {}): PiChordEvent => ({ key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, ...mods });
 const box = (value: string, selection = 0) => ({ value, selectionStart: selection, selectionEnd: selection });
@@ -87,5 +87,17 @@ describe("piKeyPress", () => {
     expect(piKeyPress(press("Tab", { shiftKey: true }), box(""), map, false)).toBeNull();
     expect(piKeyPress(press("l", { ctrlKey: true }), box(""), map, false)).toBeNull();
     expect(piKeyPress(press("c", { ctrlKey: true }), box("a draft"), map, false)).toBeNull();
+  });
+});
+
+describe("piChordKeys", () => {
+  it("draws a chord's modifiers in macOS order with a readable key", () => {
+    expect(piChordKeys("ctrl+l")).toEqual(["Ctrl", "L"]);
+    expect(piChordKeys("shift+ctrl+p")).toEqual(["Ctrl", "Shift", "P"]);
+    expect(piChordKeys("alt+enter")).toEqual(["Alt", "Enter"]);
+    expect(piChordKeys("shift+tab")).toEqual(["Shift", "Tab"]);
+    expect(piChordKeys("super+pageUp".toLowerCase())).toEqual(["Meta", "PageUp"]);
+    // a chord the browser could not express is shown as the file wrote it
+    expect(piChordKeys("hyper+l")).toEqual(["hyper+l"]);
   });
 });

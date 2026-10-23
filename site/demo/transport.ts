@@ -21,6 +21,7 @@ import { isAgentName } from "../../shared/agent-name.ts";
 import { skillSyntax } from "../../shared/skill-syntax.ts";
 import { firstMessageFault } from "../../shared/launch-rules.ts";
 import { neighborPane } from "../../src/lib/layoutMap.ts";
+import { PI_KEY_DEFAULTS } from "../../src/lib/usePiKeys.ts";
 import { closeLayoutPane, resizeLayout, setLayoutSplitRatio, splitLayout, swapLayoutPanes } from "../../src/lib/layoutTree.ts";
 import { rollupStatus } from "../../src/lib/status.ts";
 import { movedTabOrder } from "../../src/lib/tabOrder.ts";
@@ -965,6 +966,8 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path === "/api/session") return json({ snapshot: readSnapshot(local) });
   if (path === "/api/agents") return json(agentsFixture);
   if (path === "/api/integrations") return json({ integrations: integrationsFixture } satisfies IntegrationsResponse);
+  // Pi's own keys: the demo runs no Pi, so its file is the one the web falls back to
+  if (path === "/api/pi/keybindings") return method === "GET" ? json({ path: "~/.pi/agent/keybindings.json", keys: PI_KEY_DEFAULTS }, 200, { "cache-control": "no-store" }) : error("method_not_allowed", "use GET", 400);
   if (path === "/api/updates") return json({ managed: false, auto_update: false, phase: "idle", current_revision: null, latest_revision: null, current_version: __APP_VERSION__, latest_version: null, available: false, checked_at: null, blocked_reason: null, error: null }, 200, { "cache-control": "no-store" });
   if (path === "/api/updates/notes") return json({ revision: null, releases: [], omitted: 0 }, 200, { "cache-control": "no-store" });
   if (path === "/api/updates/installed") return json({ revision: null, version: null, previous_version: null, installed_at: null, releases: [], omitted: 0 }, 200, { "cache-control": "no-store" });

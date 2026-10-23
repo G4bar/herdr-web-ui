@@ -23,6 +23,13 @@ export const SHORTCUTS = [
   { id: "previous-pane", label: "Previous pane", keys: ["Mod", "Shift", "ArrowUp"] },
   { id: "next-pane", label: "Next pane", keys: ["Mod", "Shift", "ArrowDown"] },
   { id: "settings", label: "Settings", keys: ["Mod", "Shift", ","] },
+  // Pi's own actions, run from the message box (lib/usePiKeys.ts): listed here so a reader finds
+  // them, unbound because Pi's keys are literal Ctrl/Alt chords and the box already holds them
+  { id: "model-picker", label: "Model picker", keys: [] },
+  { id: "thinking-cycle", label: "Cycle thinking", keys: [] },
+  { id: "thinking-toggle", label: "Toggle thinking blocks", keys: [] },
+  { id: "tools-expand", label: "Expand tool output", keys: [] },
+  { id: "session-tree", label: "Session tree", keys: [] },
   // listed only: held, not dispatched; VoiceInput.tsx listens for it itself (isVoiceShortcut)
   { id: "voice", label: "Dictate (hold)", keys: ["Mod", "Shift", "Space"] },
 ] as const;
@@ -228,6 +235,8 @@ export function useShortcuts(actions: AppActions, enabled: boolean): void {
       const shortcut = matchShortcut(event, platformIsMac, settings.shortcutOverrides);
       if (shortcut === null) return;
       if (keepsKeyForText(event)) return;
+      // the Pi actions are Settings' list only: their chords belong to the message box
+      if (shortcut === "model-picker" || shortcut === "thinking-cycle" || shortcut === "thinking-toggle" || shortcut === "tools-expand" || shortcut === "session-tree") return;
       event.preventDefault();
       // a held chord repeats: a tab or a split is made once per press, not once per key repeat
       if (event.repeat && (shortcut === "new-tab" || shortcut === "split-right" || shortcut === "split-down")) return;

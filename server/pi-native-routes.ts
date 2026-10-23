@@ -1,8 +1,9 @@
 /**
  * The native Pi routes: take a pane over in the chat, hand it back to its terminal, reconnect a
  * lost child, read the live state one pane's registry holds, read the context files Pi would load
- * for its folder, and pass one allowlisted RPC command to its child. Nothing here drives pi itself;
- * the registry does, and every answer is its own or a refusal it threw.
+ * for its folder, read the keys Pi's own `keybindings.json` binds, and pass one allowlisted RPC
+ * command to its child. Nothing here drives pi itself; the registry does, and every answer is its
+ * own or a refusal it threw.
  *
  * `pane_id` is checked against herdr's snapshot before the registry is asked, so a pane the
  * terminal no longer has is a 404 and its map entry is dropped, not a child spawned for nobody.
@@ -16,6 +17,7 @@ import { badRequest, errorResponse, jsonResponse, readJsonObject, setRequestRout
 import { paneContext } from "./pane-context.ts";
 import { piContextFiles } from "./pi-context.ts";
 import { type PiNativeControl, PiNeedsTrustError, PiNativeError, type PiTrust } from "./pi-native.ts";
+import { piAgentDir } from "./pi-models.ts";
 import { defaultPiSessionDir, piTranscriptInStore } from "./pi.ts";
 
 export interface PiNativeRoutesOptions {
@@ -26,7 +28,64 @@ export interface PiNativeRoutesOptions {
   paneCwd?: (paneId: string) => Promise<string>;
 }
 
-const NATIVE_PATHS = new Set(["/api/pi/takeover", "/api/pi/handback", "/api/pi/reconnect", "/api/pi/state", "/api/pi/rpc", "/api/pi/context"]);
+const KEYBINDINGS_PATH = "/api/pi/keybindings";
+
+const NATIVE_PATHS = new Set(["/api/pi/takeover", "/api/pi/handback", "/api/pi/reconnect", "/api/pi/state", "/api/pi/rpc", "/api/pi/context", KEYBINDINGS_PATH]);
+
+/**
+ * Pi's defaults for the actions the chat has a surface for (`docs/keybindings.md`), for an action
+ * `keybindings.json` names none of. Only these ids are the chat's business: the rest of Pi's map is
+ * the terminal's.
+ */
+const PI_KEY_DEFAULTS: Readonly<Record<string, readonly string[]>> = {
+  "app.model.select": ["ctrl+l"],
+  "app.model.cycleForward": ["ctrl+p"],
+  "app.model.cycleBackward": ["shift+ctrl+p"],
+  "app.thinking.cycle": ["shift+tab"],
+  "app.thinking.toggle": ["ctrl+t"],
+  "app.tools.expand": ["ctrl+o"],
+  "app.message.followUp": ["alt+enter"],
+  "app.message.dequeue": ["alt+up"],
+};
+
+interface PiKeybindings {
+  /** the file that was read, or would be */
+  path: string;
+  /** each action's chords, merged over the defaults; `[]` disables one */
+  keys: Record<string, readonly string[]>;
+  /** why Pi's defaults are the answer, for a file that is absent or is not Pi's own */
+  warning?: string;
+}
+
+/**
+ * The keys the message box listens for (`src/lib/usePiKeys.ts`), as the user's file remaps them: a
+ * string is one chord, an array many and `[]` disables the action. A file that is absent or is not
+ * Pi's own flat action→chords document leaves every default in place and says why.
+ */
+async function piKeybindings(agentDir = piAgentDir()): Promise<PiKeybindings> {
+  const path = join(agentDir, "keybindings.json");
+  const keys: Record<string, readonly string[]> = { ...PI_KEY_DEFAULTS };
+  const fallback = (reason: string): PiKeybindings => ({ path, keys, warning: `${path}: ${reason}; Pi's own keys are used.` });
+  let text: string;
+  try {
+    text = await readFile(path, "utf8");
+  } catch (error) {
+    return fallback((error as NodeJS.ErrnoException).code === "ENOENT" ? "no such file" : "could not be read");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return fallback("not valid JSON");
+  }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return fallback("not a JSON object");
+  for (const id of Object.keys(PI_KEY_DEFAULTS)) {
+    const value = (parsed as Record<string, unknown>)[id];
+    if (typeof value === "string") keys[id] = [value];
+    else if (Array.isArray(value)) keys[id] = value.filter((chord): chord is string => typeof chord === "string");
+  }
+  return { path, keys };
+}
 
 /**
  * The RPC commands the chat may send to a native pane's child, and the fields each may carry: the
@@ -124,10 +183,12 @@ export async function handlePiNativeRequest(
 ): Promise<Response | null> {
   if (!NATIVE_PATHS.has(pathname)) return null;
   setRequestRoute(pathname);
-  const reading = pathname === "/api/pi/state" || pathname === "/api/pi/context";
+  const reading = pathname === "/api/pi/state" || pathname === "/api/pi/context" || pathname === KEYBINDINGS_PATH;
   if (reading ? request.method !== "GET" : request.method !== "POST") {
     return badRequest("method_not_allowed", reading ? "use GET" : "use POST");
   }
+  // one machine's keybindings, no pane: the same answer for every chat on it
+  if (pathname === KEYBINDINGS_PATH) return jsonResponse(await piKeybindings(), 200, { "cache-control": "no-store" });
 
   let paneId: string | null = null;
   let trust: PiTrust | undefined;

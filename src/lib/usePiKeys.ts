@@ -120,6 +120,17 @@ export function piKeymap(data: unknown): PiKeymap {
   return map;
 }
 
+/** The named keys whose key cap is not just the Pi name capitalized. */
+const CHORD_KEY_LABELS: Readonly<Record<string, string>> = { pageup: "PageUp", pagedown: "PageDown", escape: "Esc" };
+
+/** A chord as Settings' key caps draw it: its modifiers in macOS order, then the key (`ctrl+l` → Ctrl L). */
+export function piChordKeys(value: string): string[] {
+  const chord = parsePiChord(value);
+  if (chord === null) return [value];
+  const key = CHORD_KEY_LABELS[chord.key] ?? chord.key[0]!.toUpperCase() + chord.key.slice(1);
+  return [...(chord.ctrl ? ["Ctrl"] : []), ...(chord.alt ? ["Alt"] : []), ...(chord.shift ? ["Shift"] : []), ...(chord.meta ? ["Meta"] : []), key];
+}
+
 const sameChord = (a: PiChord, b: PiChord): boolean => a.key === b.key && a.ctrl === b.ctrl && a.shift === b.shift && a.alt === b.alt && a.meta === b.meta;
 
 /** The action a pressed chord names, or null: what this map binds, first id first. */
@@ -181,29 +192,49 @@ const HANDLER: Readonly<Record<PiKeyAction, keyof PiKeyHandlers>> = {
   "message-dequeue": "dequeue",
 };
 
-let requested: Promise<PiKeymap> | null = null;
+export interface PiKeybindings {
+  /** the file the server read, or would have: Pi's agent directory, `~` written back */
+  path: string;
+  map: PiKeymap;
+  /** why Pi's own defaults are the answer: an absent or unreadable file */
+  warning?: string;
+}
+
+let requested: Promise<PiKeybindings> | null = null;
 
 /** `GET /api/pi/keybindings`, once per page: Pi's defaults for a server that does not answer. */
-async function fetchPiKeymap(): Promise<PiKeymap> {
+async function fetchPiKeybindings(): Promise<PiKeybindings> {
+  const fallback: PiKeybindings = { path: "~/.pi/agent/keybindings.json", map: { ...PI_KEY_DEFAULTS } };
   try {
     const response = await fetch("/api/pi/keybindings", { cache: "no-store" });
-    return response.ok ? piKeymap(await response.json()) : { ...PI_KEY_DEFAULTS };
+    if (!response.ok) return fallback;
+    const answer = (await response.json()) as { path?: unknown; warning?: unknown };
+    return {
+      path: typeof answer.path === "string" ? answer.path : fallback.path,
+      map: piKeymap(answer),
+      ...(typeof answer.warning === "string" ? { warning: answer.warning } : {}),
+    };
   } catch {
-    return { ...PI_KEY_DEFAULTS };
+    return fallback;
   }
+}
+
+/** The chords the box listens for, and the file they came from: Pi's defaults until the answer lands. */
+export function usePiKeybindings(enabled: boolean): PiKeybindings {
+  const [bindings, setBindings] = useState<PiKeybindings>(() => ({ path: "~/.pi/agent/keybindings.json", map: { ...PI_KEY_DEFAULTS } }));
+  useEffect(() => {
+    if (!enabled) return;
+    requested ??= fetchPiKeybindings();
+    let live = true;
+    void requested.then((next) => { if (live) setBindings(next); });
+    return () => { live = false; };
+  }, [enabled]);
+  return bindings;
 }
 
 /** The chords the box listens for: Pi's defaults until the file's own answer lands. */
 export function usePiKeymap(enabled: boolean): PiKeymap {
-  const [map, setMap] = useState<PiKeymap>(() => ({ ...PI_KEY_DEFAULTS }));
-  useEffect(() => {
-    if (!enabled) return;
-    requested ??= fetchPiKeymap();
-    let live = true;
-    void requested.then((next) => { if (live) setMap(next); });
-    return () => { live = false; };
-  }, [enabled]);
-  return map;
+  return usePiKeybindings(enabled).map;
 }
 
 /**

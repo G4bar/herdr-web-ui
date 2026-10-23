@@ -306,3 +306,13 @@ describe("punctuation keys by position", () => {
     expect(matchShortcut(keyEvent("á", { code: "Quote", metaKey: true, shiftKey: false }), true, overrides)).toBe("next-pane");
   });
 });
+
+describe("Pi actions in the shortcut list", () => {
+  it("are listed unbound, and a binding for one is kept for later", () => {
+    for (const id of ["model-picker", "thinking-cycle", "thinking-toggle", "tools-expand", "session-tree"] as const) {
+      expect(shortcutDisplayKeys(id, {})).toEqual([]);
+      // the message box holds Pi's keys: a binding here names the action but leaves the chord to the page
+      expect(sanitizeShortcutOverrides({ [id]: "q" })).toEqual({ [id]: "q" });
+    }
+  });
+});

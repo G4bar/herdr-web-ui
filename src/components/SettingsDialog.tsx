@@ -16,6 +16,7 @@ import { CHAT_FONT_MAX, CHAT_FONT_MIN, CHAT_WIDTHS, chatFontSize, DEFAULT_SETTIN
 import { pickTheme, rowFor, THEME_IDS, type Mode, type ThemeId } from "../lib/themes.ts";
 import { LANGUAGE_NAMES, LANGUAGE_SETTINGS, useLocale, useT } from "../lib/i18n.ts";
 import { useFocusTrap } from "../lib/useFocusTrap.ts";
+import { usePiKeybindings, piChordKeys, PI_KEY_ACTIONS, parsePiChord, type PiKeyAction } from "../lib/usePiKeys.ts";
 import { KeyBarSettings } from "./KeyBarSettings.tsx";
 import { onSettingsHistory, recordSettings, settingsEntry, settingsLevels, type SettingsLevel } from "../lib/settingsHistory.ts";
 import { Segmented, SettingsGroup, SettingsRow, Stepper, Toggle } from "./SettingsControls.tsx";
@@ -730,6 +731,53 @@ function IntegrationRow({ integration }: { integration: AgentIntegration }) {
   );
 }
 
+/**
+ * The message box's Pi actions, in the order Settings lists them, with the words the shortcut list
+ * uses where it names the same action. Pi's own file binds them; this page only reads them.
+ */
+const PI_KEY_ROWS: readonly { action: PiKeyAction; label: string }[] = [
+  { action: "model-picker", label: "Model picker" },
+  { action: "model-next", label: "Next model" },
+  { action: "model-previous", label: "Previous model" },
+  { action: "thinking-cycle", label: "Cycle thinking" },
+  { action: "thinking-toggle", label: "Toggle thinking blocks" },
+  { action: "tools-expand", label: "Expand tool output" },
+  { action: "message-follow-up", label: "Send as follow-up" },
+  { action: "message-dequeue", label: "Restore queued messages" },
+];
+
+/** The read-only Pi group: the keys the message box follows, as Pi's own file gives them. */
+function PiKeysGroup() {
+  const t = useT();
+  // the file is read whether or not Pi's keys are on: this page is where a reader looks them up
+  const bindings = usePiKeybindings(true);
+  return (
+    <SettingsGroup
+      className="settings-shortcuts settings-pi-keys"
+      title={t("Pi")}
+      note={t("Pi's own keys in the message box: it listens to Pi's keybindings file, so the chords below are the file's. Change them in the file, not here.")}
+      section="pi-keys"
+    >
+      {PI_KEY_ROWS.map(({ action, label }) => {
+        const id = Object.entries(PI_KEY_ACTIONS).find(([, named]) => named === action)?.[0];
+        const chords = (id !== undefined ? bindings.map[id] : undefined) ?? [];
+        // most browsers keep Ctrl+T to themselves: the More ⋯ switch is the only path to that one
+        const reserved = action === "thinking-toggle" && chords.some((chord) => parsePiChord(chord)?.key === "t");
+        return (
+          <SettingsRow key={action} label={t(label)} description={reserved ? t("Reserved by most browsers") : undefined}>
+            <span className="settings-keys">
+              {chords.length === 0 ? t("Off") : chords.map((chord) => formatKeys(piChordKeys(chord)).map((key) => <kbd className="kbd" key={`${chord}-${key}`}>{key}</kbd>))}
+            </span>
+          </SettingsRow>
+        );
+      })}
+      <SettingsRow label={t("Keybindings file")} description={bindings.warning}>
+        <code className="settings-integration-command">{bindings.path}</code>
+      </SettingsRow>
+    </SettingsGroup>
+  );
+}
+
 function ShortcutsPage() {
   const { settings, update } = useSettings();
   const t = useT();
@@ -847,6 +895,7 @@ function ShortcutsPage() {
           update({ shortcutOverrides: {} });
         }}>{t("Reset shortcuts")}</button>
       </div>
+      <PiKeysGroup />
     </>
   );
 }
