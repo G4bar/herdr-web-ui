@@ -201,6 +201,15 @@ describe("the stats popover", () => {
     expect(busy.root.findAllByProps({ className: "ctx-ring-busy" })).toHaveLength(1);
   });
 
+  it("closes on an activation that never pressed, as a key's own click is", async () => {
+    const renderer = await mount(statsOf(84_000, 1.84), () => Promise.resolve(null));
+    await open(renderer);
+
+    // Enter or Space focuses nothing and presses nothing: the click reads the popover itself
+    await act(async () => { ring(renderer).props.onClick(); });
+    expect(dialog(renderer)).toHaveLength(0);
+  });
+
   it("keeps a press's own focus from being undone by the click that ends it", async () => {
     const renderer = await mount(statsOf(84_000, 1.84), () => Promise.resolve(null));
     // a real press, in the order a browser sends it: the focus it takes opens the popover before the click

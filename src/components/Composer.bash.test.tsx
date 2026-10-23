@@ -97,6 +97,7 @@ async function mount(options: { draft: string; piNative?: PiNativeState; bashRef
     rail: () => root.findByProps({ className: "composer-surface" }).props["data-bash"] !== undefined,
     placeholder: () => root.findByProps({ className: "composer-text" }).props.placeholder as string,
     draft: () => root.findByProps({ className: "composer-text" }).props.value as string,
+    sendBusy: () => root.findByProps({ className: "composer-action composer-send" }).props["aria-busy"] === true,
     note: () => root.findAll(hasClass("composer-note-text")).map((node) => node.props.children).join(" "),
     runBlock: () => root.findAll(hasClass("composer-bash-run")).length,
     tail: () => root.findAll(hasClass("chat-tool-tail")).map((node) => node.props.children),
@@ -169,6 +170,23 @@ describe("running a `!` command", () => {
     expect(composer.draft()).toBe("! ls");
     expect(composer.note()).toContain("Couldn't run the command: bash is off in this session");
     expect(composer.runBlock()).toBe(0);
+    await composer.unmount();
+  });
+
+  it("empties the box as the command starts, and leaves Send free for the length of the run", async () => {
+    const composer = await mount({ draft: "! ls" });
+
+    await composer.press("Enter");
+    // pi answers only when the command ends: nothing waits in the box for that answer
+    expect(composer.commands).toHaveLength(1);
+    expect(composer.draft()).toBe("");
+    expect(composer.sendBusy()).toBe(false);
+
+    const id = String(composer.commands[0]?.id);
+    await composer.update(native({ toolTails: { [id]: ["one"] } }));
+    expect(composer.tail()).toEqual(["one"]);
+    expect(composer.draft()).toBe("");
+    expect(composer.sendBusy()).toBe(false);
     await composer.unmount();
   });
 

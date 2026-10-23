@@ -931,14 +931,29 @@ export function Composer({
       for (const attachment of sentAttachments) { URL.revokeObjectURL(attachment.previewUrl); placedMentions.current.delete(attachment.id); }
       setAttachments((current) => current.filter((attachment) => !sentAttachments.includes(attachment)));
     };
-    if (!composerDrafts.begin(draftKey, sent)) return false;
     // a polish landing before the acknowledgement would count as an edit and keep the sent message here
     dictation.forget();
+    // DS §4.1: a bang draft is the shell command Pi's `bash` runs, never a message to the model. Pi
+    // answers only when the command ends, so the box empties as it starts and only a refusal puts the
+    // draft back: nothing is left "sending" for the length of the run.
+    if (bash !== null) {
+      textRef.current = "";
+      caretRef.current = 0;
+      setText("");
+      setCaret(0);
+      void runPiBash(bash).then((refused) => {
+        if (refused === true) return;
+        // a box typed into while pi read the command keeps that text: only an empty one takes the draft back
+        if (textRef.current === "") { textRef.current = sent; caretRef.current = sent.length; setText(sent); }
+        if (!mounted.current) return;
+        setCaret(caretRef.current);
+        setNote(refused);
+      }).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); });
+      return true;
+    }
+    if (!composerDrafts.begin(draftKey, sent)) return false;
     try {
-      // DS §4.1: a bang draft is the shell command Pi's `bash` runs, never a message to the model
-      const result = bash === null
-        ? onSend(text, clearDraft, sendAnyway, streaming ? deliver ?? sendAs : undefined)
-        : runPiBash(bash);
+      const result = onSend(text, clearDraft, sendAnyway, streaming ? deliver ?? sendAs : undefined);
       if (!(result instanceof Promise)) { settle(result); composerDrafts.end(draftKey); return true; }
       void result.then(settle).catch(() => { if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again.")); }).finally(() => composerDrafts.end(draftKey));
     } catch {

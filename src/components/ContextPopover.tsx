@@ -74,8 +74,9 @@ export function ContextPopover({ stats, statuses = {}, piRpc, busy = false }: Co
   const hoverOpened = useRef(false);
   /** the ring is taking the focus back from a close: that focus must not open it again */
   const refocus = useRef(false);
-  /** it was open when the press began: the click that ends the press then closes it, never undoes it */
-  const pressedOpen = useRef(false);
+  /** it was open when the press began, null with no press pending: the click that ends a press closes
+   * what it opened instead of undoing it, and a key that never pressed reads the popover itself */
+  const pressedOpen = useRef<boolean | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const trap = useFocusTrap<HTMLDivElement>(open && sheet);
 
@@ -282,8 +283,8 @@ export function ContextPopover({ stats, statuses = {}, piRpc, busy = false }: Co
         }}
         onPointerDown={() => { pressedOpen.current = open; }}
         onClick={() => {
-          const wasOpen = pressedOpen.current;
-          pressedOpen.current = false;
+          const wasOpen = pressedOpen.current ?? open;
+          pressedOpen.current = null;
           if (wasOpen) dismiss(); else setOpen(true);
         }}
       >
