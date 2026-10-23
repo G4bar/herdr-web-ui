@@ -202,6 +202,21 @@ describe("the model picker", () => {
     } finally {
       scoped = null;
     }
+
+    // only a thinking level is a suffix: `:free` is part of the id, so an exact entry still counts
+    scoped = ["openrouter/x/y:free"];
+    try {
+      const free = { models: [{ id: "x/y:free", name: "Free", provider: "openrouter", reasoning: false, input: ["text"], contextWindow: null }] };
+      const renderer = await mount(answers(free));
+      await act(async () => { chip(renderer).props.onClick(); });
+      await act(async () => {});
+
+      const buttons = renderer.root.findByProps({ className: "segmented pi-picker-modes" }).findAll((node) => node.type === "button");
+      expect(buttons.map((button) => button.children.join(""))).toEqual(["Scoped 1", "All 1"]);
+      await act(async () => { renderer.unmount(); });
+    } finally {
+      scoped = null;
+    }
   });
 
   it("leaves a footer button's Enter, arrows and Ctrl+S to the button", async () => {

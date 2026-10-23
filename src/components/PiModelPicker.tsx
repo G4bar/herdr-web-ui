@@ -103,9 +103,10 @@ const keyOf = (model: PickerModel): string => `${model.provider}:${model.id}`;
 const entryOf = (model: PickerModel): string => `${model.provider}/${model.id}`;
 
 /** One `enabledModels` entry as a matcher: Pi takes an exact id, a case-insensitive glob (`claude*`)
- *  and an optional `:level` suffix (`x/y:high`), which the model itself does not carry. */
+ *  and an optional `:level` suffix (`x/y:high`), which the model itself does not carry. Only a
+ *  thinking level is a suffix: `x/y:free` names a model whose id ends in `:free`. */
 const matcherOf = (entry: string): RegExp =>
-  new RegExp(`^${entry.replace(/:[a-z]+$/i, "").split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`, "i");
+  new RegExp(`^${entry.replace(/:(off|minimal|low|medium|high|xhigh)$/i, "").split("*").map((part) => part.replace(/[.+?^${}()|[\]\\]/g, "\\$&")).join(".*")}$`, "i");
 
 /** The models Pi's own cycling is scoped to, or null when the file scopes none: every model cycles. */
 function scopedOf(file: PiSettingsFile): string[] | null {
