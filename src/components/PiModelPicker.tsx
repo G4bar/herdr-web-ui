@@ -34,6 +34,8 @@ export interface PiModelPickerProps {
   readOnly?: boolean;
   /** after a pick: the focus goes back to the message box, not the chip */
   onPicked?: () => void;
+  /** a key outside the chip asked for the picker (Ctrl+L, DS §6.1): each new value opens it once */
+  openRequest?: number;
 }
 
 /** One entry of `get_available_models`, cut to what a row says of it. */
@@ -95,7 +97,7 @@ export function groupModels(models: readonly PickerModel[], query: string): Mode
 const keyOf = (model: PickerModel): string => `${model.provider}:${model.id}`;
 const refusal = (error: unknown): string => error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error);
 
-export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPicked }: PiModelPickerProps) {
+export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPicked, openRequest = 0 }: PiModelPickerProps) {
   const t = useT();
   const sheet = useMediaQuery(SHEET_QUERY);
   const listId = useId();
@@ -146,6 +148,14 @@ export function PiModelPicker({ label, current, piRpc, disabled, readOnly, onPic
   useEffect(() => {
     if (open) load();
   }, [load, open]);
+
+  // Ctrl+L opens the same picker the chip does, and only where the chip could be pressed
+  const lastOpenRequest = useRef(openRequest);
+  useEffect(() => {
+    if (openRequest === lastOpenRequest.current) return;
+    lastOpenRequest.current = openRequest;
+    if (openRequest > 0 && !disabled && !readOnly) setOpen(true);
+  }, [disabled, openRequest, readOnly]);
 
   // the current model is where the list opens, and the field takes the focus and the typing
   useEffect(() => {

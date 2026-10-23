@@ -652,6 +652,7 @@ export const ZH: Record<string, string> = {
   "Control D": "Control D",
   "Control Z": "Control Z",
   "Shift Tab": "Shift Tab",
+  "Shift+Tab changes thinking. Tab moves on.": "Shift+Tab 更改思考等级。Tab 继续前进。",
   "Page up": "向上翻页",
   "Page down": "向下翻页",
   "Escape": "退出键",

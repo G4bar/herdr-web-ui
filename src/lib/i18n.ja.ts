@@ -650,6 +650,7 @@ export const JA: Record<string, string> = {
   "Control D": "Control D",
   "Control Z": "Control Z",
   "Shift Tab": "Shift Tab",
+  "Shift+Tab changes thinking. Tab moves on.": "Shift+Tab で思考レベルを変更します。Tab は次へ移動します。",
   "Page up": "ページアップ",
   "Page down": "ページダウン",
   "Escape": "エスケープ",

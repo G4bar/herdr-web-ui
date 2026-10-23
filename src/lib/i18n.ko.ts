@@ -648,6 +648,7 @@ export const KO: Record<string, string> = {
   "Control D": "Control D",
   "Control Z": "Control Z",
   "Shift Tab": "Shift Tab",
+  "Shift+Tab changes thinking. Tab moves on.": "Shift+Tab은 사고 수준을 바꿉니다. Tab은 다음으로 이동합니다.",
   "Page up": "페이지 업",
   "Page down": "페이지 다운",
   "Escape": "이스케이프",

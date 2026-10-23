@@ -57,7 +57,7 @@ import { modelLabel } from "../lib/modelName.ts";
 import { useFacesArrived } from "../lib/fontFaces.ts";
 import { activeTrigger, applyCompletion, type ActiveTrigger } from "../lib/mentions.ts";
 import { resolveComposerMenuActiveItemId } from "../lib/composerMenuHighlight.ts";
-import { quickReplyButtons, useSettings } from "../lib/settings.ts";
+import { quickReplyButtons, useChatViewToggles, useSettings } from "../lib/settings.ts";
 import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, providerForAgent, statusWindows, usageName, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { PiModelPicker } from "./PiModelPicker.tsx";
@@ -65,6 +65,7 @@ import { PiThinkingMenu, thinkingLevelLabel } from "./PiThinkingMenu.tsx";
 import { PI_ANNOUNCE_MS, piBashCommand, piChipChange, piComposerMode, type PiBashCommand } from "../lib/piComposer.ts";
 import { clearPiQueue, queuedTexts } from "../lib/piNative.ts";
 import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
+import { usePiKeys } from "../lib/usePiKeys.ts";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { ContextPopover } from "./ContextPopover.tsx";
 import { ToolStop, ToolTail } from "./ToolBodies.tsx";
@@ -342,6 +343,8 @@ export function Composer({
   // the words of the chip last drawn: what a change is measured against, and nothing on the first
   const piDrawn = useRef<{ model: string | null; level: string | null } | null>(null);
   const [slashUsage, setSlashUsage] = useState<Record<string, number>>(readSlashUsage);
+  /** each Ctrl+L asks the model picker to open once, over the chip it belongs to (lib/usePiKeys.ts) */
+  const [modelPickerRequest, setModelPickerRequest] = useState(0);
   // the highlight lives in the refs below: a move redraws the menu, also when it lands on an index it held before
   const [, redrawMenu] = useState(0);
   const highlightedItemId = useRef<string | null>(null);
@@ -1046,6 +1049,31 @@ export function Composer({
     }
   }, [connected, draftKey, onSend, sending]);
 
+  // DS §6.1 Ctrl+C on an empty selection clears the draft, undoably: execCommand leaves the box's own
+  // undo stack alone, so Ctrl+Z brings it back where a state write would leave nothing to undo.
+  const clearBox = useCallback(() => {
+    const box = textareaRef.current;
+    if (box === null || box.value === "") return;
+    box.focus({ preventScroll: true });
+    box.select();
+    if (!document.execCommand("insertText", false, "")) setTextAndCaret("", 0);
+  }, [setTextAndCaret]);
+  // DS §6.1: Pi's own keys, kept where a Pi TUI veteran expects them. Only a native pane has the
+  // surfaces they drive, and Settings → Pi can release them (Shift+Tab included) for a keyboard.
+  const chatView = useChatViewToggles();
+  const piKeyHandlers = useMemo(() => ({
+    modelPicker: () => setModelPickerRequest((request) => request + 1),
+    thinkingToggle: chatView.thinking,
+    toolsExpand: chatView.toolOutput,
+    clearBox,
+    ...(piRpc === undefined ? {} : {
+      modelNext: () => { void piRpc({ type: "cycle_model" }).catch(() => undefined); },
+      thinkingCycle: () => { void piRpc({ type: "cycle_thinking_level" }).catch(() => undefined); },
+    }),
+  }), [chatView.thinking, chatView.toolOutput, clearBox, piRpc]);
+  const piKeysOn = settings.piKeys && piNative?.mode === "native" && piRpc !== undefined;
+  const piKeyDown = usePiKeys(piKeysOn, piKeyHandlers);
+
   const onKeyDown = useCallback(
     (event: KeyboardEvent<HTMLTextAreaElement>) => {
       // an IME keeps its keys; WebKit can send the committing Enter after compositionend, as key code 229
@@ -1106,6 +1134,8 @@ export function Composer({
         setTextAndCaret(offered, offered.length);
         return;
       }
+      // DS §6.1: Pi's keys, once the completion menu has had the ones it owns (Tab, Shift+Tab there)
+      if (piKeyDown(event)) return;
       if (event.key !== "Enter") return;
       // Alt+Enter always sends a follow-up while Pi streams (DS §3.2), whatever the Send-as row or enterSends says
       if (event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey && streaming) {
@@ -1121,7 +1151,7 @@ export function Composer({
       // every other Enter follows the Send-as row
       send(undefined, false);
     },
-    [agentStatus, abort, bashRunning, cancelRetry, choices, connected, menuDismissed, menuOpen, offered, piRetry, restoreHeld, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, stopBash, streaming, trigger],
+    [agentStatus, abort, bashRunning, cancelRetry, choices, connected, menuDismissed, menuOpen, offered, piKeyDown, piRetry, restoreHeld, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, stopBash, streaming, trigger],
   );
 
   const onPaste = useCallback(
@@ -1214,6 +1244,7 @@ export function Composer({
       disabled={pi.disabled}
       readOnly={pi.readOnly}
       onPicked={() => textareaRef.current?.focus({ preventScroll: true })}
+      openRequest={modelPickerRequest}
     />
     {piThinkingLevel !== null && <PiThinkingMenu
       level={piThinkingLevel}
@@ -1560,6 +1591,8 @@ export function Composer({
           value={text}
           placeholder={placeholder}
           aria-label={t("Message")}
+          // DS §8.1 2.1.2: Shift+Tab is captured here, so the box says what it does and where Tab goes
+          aria-description={piKeysOn ? t("Shift+Tab changes thinking. Tab moves on.") : undefined}
           aria-controls={menuOpen ? menuId : undefined}
           aria-expanded={menuOpen}
           aria-activedescendant={menuOpen ? `${menuId}-${selectedIndex}` : undefined}

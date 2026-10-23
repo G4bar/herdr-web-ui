@@ -127,6 +127,8 @@ export interface Settings {
   showThinking: boolean;
   /** every tool and thinking row starts open in the chat view; a row the reader toggled keeps their state */
   expandToolOutput: boolean;
+  /** Pi's own keys in the message box (lib/usePiKeys.ts, DS §6.1); off hands Shift+Tab back to the browser */
+  piKeys: boolean;
   /** request a screen wake lock while a pane is open in this visible tab */
   keepScreenOn: boolean;
   /** UI language; `system` follows the browser (src/lib/i18n.ts) */
@@ -190,7 +192,7 @@ export type DiffStyle = (typeof DIFF_STYLES)[number];
 type TelemetrySourceSettings = Omit<Settings,
   "keyBarExtras" | "keyBarItems" | "shortcutOverrides" | "terminalFontFamily" | "chatFontFamily"
   | "quickReplies" | "usageOrder" | "usageHidden" | "fileOpen" | "webLinks" | "claudeLaunchMode" | "codexLaunchMode"
-  | "followHerdrFocus" | "composerNewTabButton" | "expandToolOutput">;
+  | "followHerdrFocus" | "composerNewTabButton" | "expandToolOutput" | "piKeys">;
 
 /** Compare structured custom settings by content against this app's built-in defaults. */
 function differsFromDefault(value: unknown, defaultValue: unknown): boolean {
@@ -271,7 +273,7 @@ export const SETTING_SCOPE = {
   followHerdrFocus: "device",
   chatFontSize: "device", chatFontFamily: "device", uiFontSize: "device", chatWidth: "device", enterSends: "device",
   // the chat's own reading preference, like showThinking's: it follows the browser
-  expandToolOutput: "device",
+  expandToolOutput: "device", piKeys: "device",
   // a desk's composer button: a phone never shows it
   composerNewTabButton: "device",
   keepScreenOn: "device", alertsOn: "device", alertInput: "device", alertDone: "device", alertInApp: "device", alertSound: "device",
@@ -320,6 +322,7 @@ export const DEFAULT_SETTINGS: Settings = {
   suggestionChip: false,
   showThinking: false,
   expandToolOutput: false,
+  piKeys: true,
   keepScreenOn: false,
   language: "system",
   alertsOn: true,
@@ -496,6 +499,7 @@ export function sanitizeSettings(raw: unknown): Settings {
     suggestionChip: typeof record["suggestionChip"] === "boolean" ? record["suggestionChip"] : DEFAULT_SETTINGS.suggestionChip,
     showThinking: typeof record["showThinking"] === "boolean" ? record["showThinking"] : DEFAULT_SETTINGS.showThinking,
     expandToolOutput: typeof record["expandToolOutput"] === "boolean" ? record["expandToolOutput"] : DEFAULT_SETTINGS.expandToolOutput,
+    piKeys: typeof record["piKeys"] === "boolean" ? record["piKeys"] : DEFAULT_SETTINGS.piKeys,
     keepScreenOn: typeof record["keepScreenOn"] === "boolean" ? record["keepScreenOn"] : DEFAULT_SETTINGS.keepScreenOn,
     language: LANGUAGE_SETTINGS.includes(record["language"] as LanguageSetting) ? record["language"] as LanguageSetting : DEFAULT_SETTINGS.language,
     alertsOn: typeof record["alertsOn"] === "boolean" ? record["alertsOn"] : DEFAULT_SETTINGS.alertsOn,
