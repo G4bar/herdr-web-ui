@@ -101,6 +101,8 @@ export function usePiResources(paneId: string, native: boolean, machineId = "loc
   const shown = state.key === key ? state : { key, files: null, commands: null, failed: false };
   useEffect(() => {
     let alive = true;
+    // a fresh read answers for itself: an earlier refusal is not the banner's forever
+    setState((current) => current.key === key ? { ...current, failed: false } : current);
     const write = (change: { files?: PiContextFile[]; commands?: PiCommand[]; failed?: boolean }): void => {
       if (alive) setState((current) => ({ ...current, ...change, key }));
     };

@@ -18,6 +18,8 @@ Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"
 /** What the bridge answers for this test: the pane's context chain and Pi's `get_commands`. */
 let contextFiles: unknown[] = [];
 let commandList: unknown[] = [];
+/** how many `/api/pi/context` reads the bridge refuses before it answers */
+let contextFailures = 0;
 /** every `/api/pi/rpc` command the dialog sent, in order */
 const sent: unknown[] = [];
 
@@ -44,7 +46,13 @@ beforeAll(() => {
   Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
   Object.defineProperty(globalThis, "fetch", { configurable: true, value: async (input: string, init?: RequestInit) => {
     const url = new URL(input, "http://localhost");
-    if (url.pathname === "/api/pi/context") return Response.json({ files: contextFiles });
+    if (url.pathname === "/api/pi/context") {
+      if (contextFailures > 0) {
+        contextFailures -= 1;
+        return Response.json({ error: { code: "pi_unavailable", message: "Pi did not answer" } }, { status: 502 });
+      }
+      return Response.json({ files: contextFiles });
+    }
     if (url.pathname === "/api/pi/rpc") {
       sent.push(JSON.parse(String(init?.body)).command);
       return Response.json({ commands: commandList });
@@ -78,23 +86,27 @@ const COMMANDS = [
   { name: "model", description: "Select model", source: "builtin" },
 ];
 
-const mount = async (props: Record<string, unknown> = {}, fixtures: { context?: unknown[]; commands?: unknown[] } = {}) => {
+const mount = async (props: Record<string, unknown> = {}, fixtures: { context?: unknown[]; commands?: unknown[]; failContext?: number } = {}) => {
   contextFiles = fixtures.context ?? CONTEXT;
   commandList = fixtures.commands ?? COMMANDS;
+  contextFailures = fixtures.failContext ?? 0;
   sent.length = 0;
   const used: string[] = [];
+  const viewed: string[] = [];
+  /** what the dialog asked of its owner, in order */
+  const log: string[] = [];
   let closed = 0;
   let renderer: TestRenderer.ReactTestRenderer | null = null;
   await act(async () => {
     renderer = TestRenderer.create(createElement(SettingsProvider, {
       children: createElement(SessionContextDialog, {
-        paneId: "p1", machineId: "local", native: true, onClose: () => { closed += 1; },
-        onViewFile: () => undefined, onUse: (text: string) => used.push(text), ...props,
+        paneId: "p1", machineId: "local", native: true, onClose: () => { closed += 1; log.push("close"); },
+        onViewFile: (path: string) => { viewed.push(path); log.push(`view:${path}`); }, onUse: (text: string) => used.push(text), ...props,
       }),
     }));
   });
   await act(async () => {});
-  return { renderer: renderer!, used, closed: () => closed };
+  return { renderer: renderer!, used, viewed, log, closed: () => closed };
 };
 
 const text = (renderer: TestRenderer.ReactTestRenderer): string =>
@@ -202,5 +214,27 @@ describe("Session context", () => {
     contextFiles = [CONTEXT[0]!];
     await click(button(renderer, "Reload"));
     await until(() => text(renderer).includes("Context files (1)"), "the lists were not read again");
+  });
+
+  it("closes before the file viewer opens a context file", async () => {
+    const { renderer, viewed, log } = await mount();
+    await until(() => text(renderer).includes("/work/app/AGENTS.md"), "the context chain was never read");
+
+    await click(button(renderer, "View"));
+    expect(viewed).toEqual(["/home/me/.pi/agent/AGENTS.md"]);
+    // the dialog goes first: the popup viewer would sit above it, and one Escape would close both
+    expect(log).toEqual(["close", "view:/home/me/.pi/agent/AGENTS.md"]);
+  });
+
+  it("clears a refusal when the read is tried again", async () => {
+    const { renderer } = await mount({}, { failContext: 1 });
+    await until(() => text(renderer).includes("Couldn't read Pi's resources"), "the refusal never showed");
+    expect(renderer.root.findAll((node) => node.props.role === "alert")).toHaveLength(1);
+
+    await click(button(renderer, "Try again"));
+    await until(() => text(renderer).includes("/work/app/AGENTS.md"), "the second read's files never showed");
+    // the banner is gone once a read answers, and the list says what it found
+    expect(renderer.root.findAll((node) => node.props.role === "alert")).toHaveLength(0);
+    expect((tab(renderer, "files").props.children[0].props.children as string[]).join("")).toBe("Context files (3)");
   });
 });

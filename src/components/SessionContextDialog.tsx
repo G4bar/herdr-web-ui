@@ -3,7 +3,7 @@
  * from the pane's folder and its parents, and the skills, prompt templates and extension commands
  * `get_commands` reports over RPC. The list is a left tablist like Settings, and a phone shows the
  * list then the tab, as Settings does. Use puts a skill's or prompt's command in the message box
- * and closes; View opens a context file in the file viewer. A Terminal-mode pane has no RPC, so it
+ * and closes; View closes and opens a context file in the file viewer. A Terminal-mode pane has no RPC, so it
  * gets the context files alone. There is no MCP status source, so that tab is not offered.
  */
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent, type ReactNode } from "react";
@@ -116,6 +116,8 @@ export function SessionContextDialog({ paneId, machineId, native, onClose, onVie
   }, [onClose, reloading]);
 
   const use = (command: PiCommand): void => { onUse(piCommandText(command)); onClose(); };
+  // View closes first: the file viewer would sit under the dialog, or behind its scrim
+  const view = (path: string): void => { onClose(); onViewFile?.(path); };
 
   const matches = (command: PiCommand): boolean => {
     const wanted = query.trim().toLowerCase();
@@ -172,7 +174,7 @@ export function SessionContextDialog({ paneId, machineId, native, onClose, onVie
                   <span className="ctx-copy"><span className="ctx-path">{file.path}</span></span>
                   <span className="pill">{file.scope}</span>
                   <span className="ctx-size">{formatBytes(file.size)}</span>
-                  {onViewFile !== undefined && <button type="button" className="btn ctx-action" onClick={() => onViewFile(file.path)}>{t("View")}</button>}
+                  {onViewFile !== undefined && <button type="button" className="btn ctx-action" onClick={() => view(file.path)}>{t("View")}</button>}
                 </li>
               ))}
             </ul>

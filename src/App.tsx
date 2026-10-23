@@ -2047,7 +2047,7 @@ export function App() {
         <MachineContext.Provider value={selectedMachineId}>
           <Suspense fallback={null}>
             <SessionContextDialog key={`${selectedMachineId}:${selectedPane.pane_id}`} paneId={selectedPane.pane_id} machineId={selectedMachineId}
-              native={piLane.state?.mode === "native"} onClose={closeSessionContext} onViewFile={viewFile}
+              native={piLane.state?.mode === "native"} onClose={closeSessionContext} onViewFile={(path) => { closeSessionContext(); viewFile(path); }}
               onUse={(text) => { composerDrafts.set(`ovis:composer-draft:${paneStorageId(selectedMachineId, selectedPane.pane_id)}`, (previous) => previous + text); closeSessionContext(); }} />
           </Suspense>
         </MachineContext.Provider>
