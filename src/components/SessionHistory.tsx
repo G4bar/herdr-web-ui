@@ -16,7 +16,8 @@
  * its mark, no Shell entry), whose open list takes its own Escape.
  *
  * A Pi pane the chat drives over RPC (lib/piNative.ts, DS §4.9) resumes by switching that pane's
- * child to the row's session file (`switch_session`), not by starting a second agent; its Pi keys
+ * child to the row's session file (`switch_session`), not by starting a second agent; picking
+ * another agent in the field above the rows keeps that agent's own Resume. Pi's keys
  * are drawn as controls too: All|Named (Ctrl+N), Path (Ctrl+P), Recent|Relevance (Ctrl+S), and per
  * row Rename (Ctrl+R, the current session alone: another writer would need Pi's file) and a
  * two-step Delete (Ctrl+D, or Ctrl+Backspace on an empty search) that the bridge refuses for a
@@ -57,6 +58,13 @@ interface Props {
 
 const said = (reason: unknown): string => reason instanceof ApiError ? reason.detail : reason instanceof Error ? reason.message : String(reason);
 
+/** A path's last part, either separator: Pi's own report of its session file is its spelling, the row's is the store's realpath. */
+const fileName = (path: string): string => path.slice(Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1);
+
+/** Whether two spellings name one session file, as they do behind a symlinked store. */
+const sameSession = (path: string | null, current: string | null): boolean =>
+  path !== null && current !== null && (path === current || fileName(path) === fileName(current));
+
 const NO_RECENT: readonly RecentResume[] = [];
 
 export function SessionHistory({ workspace, panes, agent: firstAgent, recent = NO_RECENT, onClose, onSelectPane, onResumed, nativePaneId = null, onPiRpc }: Props) {
@@ -66,9 +74,11 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
   const machineId = useMachineId();
   const { createTab, fetchAgentKinds, fetchSessionHistory, deleteSessionHistory } = useMachineApi();
   const lane = usePiNativeLane(machineId, nativePaneId);
-  const native = onPiRpc === undefined ? null : lane.state;
-  const currentPath = native?.sessionFile ?? null;
   const [agent, setAgent] = useState<SessionHistoryAgent>(firstAgent);
+  // a Pi pane is what only Pi's rows resume into: another agent's row keeps its own argv, and Pi's
+  // Delete route would unlink that other agent's session file
+  const native = agent === "pi" && onPiRpc !== undefined ? lane.state : null;
+  const currentPath = native?.sessionFile ?? null;
   const [kinds, setKinds] = useState<AgentKind[]>([]);
   const [answer, setAnswer] = useState<SessionHistoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -143,12 +153,27 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
     );
     return () => { cancelled = true; };
   }, [agent, fetchSessionHistory, reload, t, workspace.workspace_id]);
+  // an armed Delete is a step of one list: a new search, filter or listing disarms it
+  useEffect(() => { setConfirmDelete(null); }, [named, query, reload]);
   const options = useMemo(() => {
     const listed = kinds.flatMap((kind) => { const kindName = sessionHistoryAgent(kind.kind); return kindName === null ? [] : [{ kind: kindName, label: kind.label }]; });
     return listed.some((option) => option.kind === firstAgent) ? listed : [{ kind: firstAgent, label: firstAgent }, ...listed];
   }, [firstAgent, kinds]);
   const agentLabel = options.find((option) => option.kind === agent)?.label ?? agent;
   const now = useMemo(() => Date.now(), [answer]);
+  /** What the row offers, for its own buttons and for the keys that act on the row the focus is on. */
+  const rowState = (row: SessionHistoryRow): { current: boolean; shown: HerdrPane | undefined; withheld: boolean; resumable: boolean; deletable: boolean } => {
+    // a pane that reports the session, else the pane of a Resume a moment ago; a record whose pane
+    // the roster has not listed yet withholds Resume and offers nothing to open until it does
+    const resumed = standingResume(recent, panes, machineId, workspace.workspace_id, agent, row.id, Date.now());
+    const shown = paneShowingSession(panes, workspace.workspace_id, agent, row.id) ?? (resumed === undefined ? undefined : panes.find((pane) => pane.pane_id === resumed.paneId && pane.workspace_id === workspace.workspace_id));
+    const withheld = resumed !== undefined && shown === undefined;
+    const current = native !== null && sameSession(row.path, currentPath);
+    // a Pi pane opens the row by its own file; another caller still starts the verified argv
+    const resumable = native !== null ? row.path !== null : row.resume !== null && row.resume.argv.length > 0;
+    const deletable = native !== null && row.path !== null && !current && !shown && !withheld;
+    return { current, shown, withheld, resumable, deletable };
+  };
   const resume = (row: SessionHistoryRow): void => {
     const request = resumeTabRequest(row, workspace.workspace_id, answer?.cwd ?? null);
     if (request === null) return;
@@ -167,9 +192,9 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
   const closeFromScrim = (event: MouseEvent<HTMLDivElement>): void => {
     if (!pending && event.target === event.currentTarget) onClose();
   };
-  /** The native pane's Pi switched to the row's session file: no second agent starts, the chat follows it. */
+  /** The Pi pane's child switched to the row's session file: no second agent starts, the chat follows it. */
   const openNative = (row: SessionHistoryRow): void => {
-    if (row.path === null || onPiRpc === undefined) return;
+    if (row.path === null || native === null || onPiRpc === undefined) return;
     const started = guard.current.run(() => onPiRpc({ type: "switch_session", sessionPath: row.path }));
     if (started === null) return;
     setPending(row.id);
@@ -182,7 +207,7 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
   /** Rename the current session: Pi writes its own file, so no other row is offered one (PLAN D9). */
   const commitRename = async (): Promise<void> => {
     const name = (renameDraft ?? "").trim();
-    if (name === "" || onPiRpc === undefined) return;
+    if (name === "" || native === null || onPiRpc === undefined) return;
     setError(null);
     try {
       await onPiRpc({ type: "set_session_name", name });
@@ -194,7 +219,8 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
   };
   /** Delete one session file; the bridge refuses the current one and any a pane still runs, in its own words. */
   const removeRow = (row: SessionHistoryRow): void => {
-    if (row.path === null) return;
+    // one DELETE at a time: a repeated press must not send a second
+    if (row.path === null || pending !== null) return;
     setPending(row.id);
     setError(null);
     deleteSessionHistory(row.path).then(
@@ -209,6 +235,8 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
     return item?.dataset["path"] ?? null;
   };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
+    // an IME's own keys are not this list's
+    if (event.nativeEvent?.isComposing) return;
     if (event.key === "Tab" && surface.current) {
       const stops = [...surface.current.querySelectorAll<HTMLElement>("button:not(:disabled)")];
       if (stops.length === 0) return;
@@ -218,28 +246,30 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
       stops[next]?.focus();
       return;
     }
-    // Pi's keys of this list (DS §6.1), only while a native pane is what the list resumes into: a
+    const chord = event.ctrlKey && !event.altKey && !event.metaKey;
+    const key = chord ? event.key.toLowerCase() : "";
+    // the dialog is the page: Ctrl+R would reload it under the list wherever the focus is in it
+    if (key === "r") event.preventDefault();
+    // Pi's keys of this list (DS §6.1), only while a Pi pane is what the list resumes into: a
     // rename field keeps its own keys, and a browser chord (Ctrl+W) is not ours to take
-    if (native === null || renameDraft !== null || !event.ctrlKey || event.altKey || event.metaKey) return;
-    const key = event.key.toLowerCase();
+    if (native === null || renameDraft !== null || !chord) return;
     if (key === "n") { event.preventDefault(); setNamed((value) => !value); return; }
     if (key === "p") { event.preventDefault(); setShowPath((value) => !value); return; }
     if (key === "s") { event.preventDefault(); setSort((value) => (value === "recent" ? "relevance" : "recent")); return; }
     if (key === "r") {
-      const row = visible.find((candidate) => candidate.path !== null && candidate.path === currentPath);
+      const row = visible.find((candidate) => rowState(candidate).current);
       if (row === undefined) return;
-      event.preventDefault();
       setRenameDraft(row.title ?? "");
       return;
     }
     if (key !== "d" && !(key === "backspace" && query.trim() === "")) return;
     const path = focusedRowPath();
     const row = path === null ? undefined : visible.find((candidate) => candidate.path === path);
-    // the current session is not deleted from under its own pane
-    if (row === undefined || row.path === currentPath) return;
+    // only a row that draws Delete may be armed: the current session and one a pane shows draw none
+    if (row === undefined || !rowState(row).deletable) return;
     event.preventDefault();
     if (confirmDelete === row.path) removeRow(row);
-    else setConfirmDelete(row.path ?? null);
+    else setConfirmDelete(row.path);
   };
   const moveAlongRows = (event: ReactKeyboardEvent<HTMLUListElement>): void => {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || !list.current) return;
@@ -265,7 +295,6 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
     });
     return sort === "relevance" && text !== "" ? matched.sort((a, b) => a.at - b.at).map(({ row }) => row) : matched.map(({ row }) => row);
   }, [named, query, rows, sort]);
-  const momentAgo = Date.now();
   return createPortal(
     <div className="modal-scrim" onMouseDown={closeFromScrim}>
       <div ref={surface} className="modal session-modal" role="dialog" aria-modal="true" aria-labelledby={`${id}-title`} onKeyDown={onKeyDown}>
@@ -309,16 +338,9 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
                 const title = row.title ?? row.firstMessage ?? row.id;
                 const detail = row.title !== null ? row.firstMessage : null;
                 const when = sessionRowTime(row, now, locale, t);
-                // a pane that reports the session, else the pane of a Resume a moment ago; a record whose pane
-                // the roster has not listed yet withholds Resume and offers nothing to open until it does
-                const resumed = standingResume(recent, panes, machineId, workspace.workspace_id, agent, row.id, momentAgo);
-                const shown = paneShowingSession(panes, workspace.workspace_id, agent, row.id) ?? (resumed === undefined ? undefined : panes.find((pane) => pane.pane_id === resumed.paneId && pane.workspace_id === workspace.workspace_id));
-                const withheld = resumed !== undefined && shown === undefined;
-                // a native pane opens the row by its own file; another caller still starts the verified argv
-                const resumable = native !== null ? row.path !== null : row.resume !== null && row.resume.argv.length > 0;
-                const current = native !== null && row.path !== null && row.path === currentPath;
+                const { current, shown, withheld, resumable, deletable } = rowState(row);
                 return (
-                  <li key={row.id} data-path={row.path ?? undefined} className={`session-row${pending === row.id ? " is-pending" : ""}`} aria-label={when ? `${title} · ${when.label}` : title}>
+                  <li key={row.id} data-path={row.path ?? undefined} className={`session-row${pending === row.id ? " is-pending" : ""}`} aria-label={when ? `${title} · ${when.label}` : title} onBlur={() => { if (confirmDelete !== null) setConfirmDelete(null); }}>
                     <span className="session-copy">
                       <span className={`session-title${row.title === null && row.firstMessage === null ? " session-id" : ""}`}>{title}</span>
                       {detail !== null && <span className="session-detail">{detail}</span>}
@@ -351,7 +373,7 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
                             {resumable && (
                               <button type="button" className="btn session-action" disabled={pending !== null} aria-label={t("Resume {title}", { title })} onClick={() => { if (native !== null) openNative(row); else resume(row); }}>{t("Resume")}</button>
                             )}
-                            {native !== null && row.path !== null && (
+                            {deletable && (
                               <button type="button" className={`btn session-action${confirmDelete === row.path ? " btn-danger" : ""}`} disabled={pending !== null}
                                 onClick={() => { if (confirmDelete === row.path) removeRow(row); else setConfirmDelete(row.path); }}>{confirmDelete === row.path ? t("Delete?") : t("Delete")}</button>
                             )}

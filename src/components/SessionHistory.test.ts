@@ -70,7 +70,7 @@ beforeAll(() => {
       return Response.json({ workspace_id: "w1", agent: "pi", cwd: "/work", sessions: rows }, { headers: { "cache-control": "no-store" } });
     }
     if (url.pathname === "/api/sessions/history" && method === "DELETE") return Response.json({ deleted: (JSON.parse(String(init?.body)) as { path: string }).path });
-    if (url.pathname === "/api/agents") return Response.json({ agents: [{ kind: "pi", label: "Pi", installed: true }] });
+    if (url.pathname === "/api/agents") return Response.json({ agents: [{ kind: "pi", label: "Pi", installed: true }, { kind: "omp", label: "omp", installed: true }] });
     if (url.pathname === "/api/tab/create") return Response.json({ workspace_id: "w1", pane_id: "p9", agent_started: true });
     return Response.json({ error: { code: "not_found", message: "no such route" } }, { status: 404 });
   } });
@@ -129,6 +129,37 @@ const buttons = (renderer: TestRenderer.ReactTestRenderer, label: string): TestR
   renderer.root.findAll((node) => node.type === "button" && (node.children ?? []).filter((child): child is string => typeof child === "string").join("").trim() === label);
 const button = (renderer: TestRenderer.ReactTestRenderer, label: string): TestRenderer.ReactTestInstance => buttons(renderer, label)[0]!;
 const click = async (node: TestRenderer.ReactTestInstance): Promise<void> => { await act(async () => { (node.props as { onClick: () => void }).onClick(); }); await act(async () => {}); };
+/** The dialog's agent field: its `onChange` is what picking another agent does. */
+const pickAgent = async (renderer: TestRenderer.ReactTestRenderer, kind: string): Promise<void> => {
+  const field = renderer.root.findAll((node) => Array.isArray((node.props as { agents?: unknown }).agents) && typeof (node.props as { onChange?: unknown }).onChange === "function")[0]!;
+  await act(async () => { (field.props as { onChange: (kind: string) => void }).onChange(kind); });
+  await act(async () => {});
+};
+/** The row a control sits in. */
+const rowOf = (node: TestRenderer.ReactTestInstance): TestRenderer.ReactTestInstance => {
+  let current: TestRenderer.ReactTestInstance | null = node;
+  while (current !== null && current.type !== "li") current = current.parent;
+  return current!;
+};
+/** The dialog's own key handler, as a key pressed inside it. */
+const press = async (renderer: TestRenderer.ReactTestRenderer, key: string): Promise<{ prevented: boolean }> => {
+  const dialog = renderer.root.findByProps({ role: "dialog" });
+  const seen = { prevented: false };
+  await act(async () => {
+    (dialog.props as { onKeyDown: (event: unknown) => void }).onKeyDown({ key, ctrlKey: true, altKey: false, metaKey: false, preventDefault: () => { seen.prevented = true; } });
+  });
+  await act(async () => {});
+  return seen;
+};
+/** Puts the focus on a row, so the keys that act on the focused row reach it. */
+const focusOnRow = (path: string | undefined): { restore: () => void } => {
+  const document_ = (globalThis as unknown as { document: { activeElement: unknown } }).document;
+  const saved = document_.activeElement;
+  const element = new (globalThis as unknown as { HTMLElement: new () => Record<string, unknown> }).HTMLElement();
+  element["closest"] = () => (path === undefined ? null : { dataset: { path } });
+  document_.activeElement = element;
+  return { restore: () => { document_.activeElement = saved; } };
+};
 
 describe("Earlier sessions of a native Pi pane", () => {
   it("resumes by switching the pane's child, not by starting a second agent", async () => {
@@ -178,7 +209,6 @@ describe("Earlier sessions of a native Pi pane", () => {
   });
 
   it("keeps today's Resume for a pane the chat does not drive", async () => {
-    // no lane: `onPiRpc` is what a Terminal-mode pane's list does not get
     const { renderer, resumed } = await mount({ nativePaneId: null, onPiRpc: undefined });
     await until(() => text(renderer).includes("Flaky export"), "the rows were never listed");
 
@@ -188,5 +218,96 @@ describe("Earlier sessions of a native Pi pane", () => {
     await click(button(renderer, "Resume"));
     expect(requests.some((request) => request.path === "/api/tab/create")).toBe(true);
     expect(resumed()).toBe(1);
+  });
+
+  it("draws no Pi control for another agent's rows, which resume by their own argv", async () => {
+    piNativeLanes.publish("p1", piState());
+    const { renderer, rpc, resumed } = await mount();
+    await until(() => text(renderer).includes("Flaky export"), "the rows were never listed");
+
+    await pickAgent(renderer, "omp");
+    await until(() => text(renderer).includes("Flaky export"), "the rows were never listed again");
+    // the lane is Pi's: another agent's row is no switch_session, and Delete would unlink that file
+    expect(buttons(renderer, "Delete")).toHaveLength(0);
+    expect(buttons(renderer, "Rename")).toHaveLength(0);
+    expect(renderer.root.findAll((node) => (node.props as { "aria-label"?: string })["aria-label"] === "Search sessions…")).toHaveLength(0);
+
+    await click(button(renderer, "Resume"));
+    expect(rpc).toEqual([]);
+    expect(requests.some((request) => request.path === "/api/tab/create")).toBe(true);
+    expect(resumed()).toBe(1);
+  });
+
+  it("recognises the current session behind a store Pi spells another way", async () => {
+    // Pi reports its own spelling of the file; the row carries the store's realpath
+    piNativeLanes.publish("p1", piState({ sessionFile: "/home/me/pi-link/s-new.jsonl" }));
+    const { renderer } = await mount();
+    await until(() => text(renderer).includes("Retry budget"), "the rows were never listed");
+
+    // one Rename, for that row; the other row alone offers Resume and Delete
+    expect(buttons(renderer, "Rename")).toHaveLength(1);
+    expect(buttons(renderer, "Resume")).toHaveLength(1);
+    expect(buttons(renderer, "Delete")).toHaveLength(1);
+  });
+
+  it("disarms an armed Delete when the focus leaves its row", async () => {
+    piNativeLanes.publish("p1", piState());
+    const { renderer } = await mount();
+    await until(() => text(renderer).includes("Flaky export"), "the rows were never listed");
+
+    await click(button(renderer, "Delete"));
+    expect(buttons(renderer, "Delete?")).toHaveLength(1);
+    await act(async () => { (rowOf(button(renderer, "Delete?"))!.props as { onBlur: () => void }).onBlur(); });
+    expect(buttons(renderer, "Delete?")).toHaveLength(0);
+    expect(requests.some((request) => request.method === "DELETE")).toBe(false);
+  });
+
+  it("disarms an armed Delete when the search changes", async () => {
+    piNativeLanes.publish("p1", piState());
+    const { renderer } = await mount();
+    await until(() => text(renderer).includes("Flaky export"), "the rows were never listed");
+
+    await click(button(renderer, "Delete"));
+    const search = renderer.root.findByProps({ "aria-label": "Search sessions…" });
+    await act(async () => { (search.props as { onChange: (event: unknown) => void }).onChange({ target: { value: "flaky" } }); });
+    await act(async () => {});
+    expect(buttons(renderer, "Delete?")).toHaveLength(0);
+    expect(requests.some((request) => request.method === "DELETE")).toBe(false);
+  });
+
+  it("acts on the focused row's Delete only when that row draws one", async () => {
+    piNativeLanes.publish("p1", piState());
+    // a Resume of a moment ago whose pane the roster has not listed: its row says Already open
+    const recent = [{ machineId: "local", workspaceId: "w1", agent: "pi" as const, id: "s-old", paneId: "p7", at: Date.now(), seen: false }];
+    const withheld = await mount({ recent });
+    await until(() => text(withheld.renderer).includes("Flaky export"), "the rows were never listed");
+    const focused = focusOnRow(SESSIONS[1]!.path!);
+    try {
+      await press(withheld.renderer, "d");
+      expect(buttons(withheld.renderer, "Delete?")).toHaveLength(0);
+    } finally { focused.restore(); }
+
+    // the same key does arm a row that draws Delete
+    const plain = await mount();
+    await until(() => text(plain.renderer).includes("Flaky export"), "the rows were never listed");
+    const again = focusOnRow(SESSIONS[1]!.path!);
+    try {
+      await press(plain.renderer, "d");
+      expect(buttons(plain.renderer, "Delete?")).toHaveLength(1);
+    } finally { again.restore(); }
+  });
+
+  it("takes Ctrl+R itself, so the page it is on never reloads", async () => {
+    // without a lane as well: the dialog holds the focus, so the chord is its own
+    const { renderer } = await mount({ nativePaneId: null, onPiRpc: undefined });
+    await until(() => text(renderer).includes("Flaky export"), "the rows were never listed");
+    expect((await press(renderer, "r")).prevented).toBe(true);
+
+    piNativeLanes.publish("p1", piState());
+    const native = await mount();
+    await until(() => text(native.renderer).includes("Flaky export"), "the rows were never listed");
+    // on a Pi pane the chord also starts the current session's rename
+    expect((await press(native.renderer, "r")).prevented).toBe(true);
+    expect(native.renderer.root.findAll((node) => (node.props as { "aria-label"?: string })["aria-label"] === "Rename")).toHaveLength(1);
   });
 });
