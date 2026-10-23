@@ -52,6 +52,20 @@
   color: var(--status-blocked);
 }
 
+/* DS §4.1: while Pi compacts, a short arc turns over the used one at the ring's own weight and colour, so
+   nothing new has to mean "working"; stepped, so no frame is drawn between (src/motion.test.ts) */
+.ctx-ring-busy {
+  stroke: currentColor;
+  stroke-linecap: round;
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: ctx-ring-turn var(--dur-spin) steps(8) infinite;
+}
+
+@keyframes ctx-ring-turn {
+  to { transform: rotate(360deg); }
+}
+
 .ctx-cost {
   color: var(--text-dim);
   font-family: var(--font-mono);

@@ -1539,11 +1539,10 @@ export const ZH: Record<string, string> = {
   "Compact now": "立即压缩",
   "Add instructions": "添加指示",
   "Couldn't compact: {reason}": "无法压缩：{reason}",
-
-  // a script's calls, and an MCP call's own body (DS §4.6)
-  "Input": "输入",
-  "Calls ({n})": "调用 ({n})",
-  "+{n} more": "还有 {n} 个",
+  // a retry and a compaction notice (DS §4.1)
+  "Compacting context…": "正在压缩上下文…",
+  "Provider error. Retrying in {seconds} s ({attempt} of {max})": "提供商错误。{seconds} 秒后重试（第 {attempt}/{max} 次）",
+  "Cancel retry": "取消重试",
 
   // a script's calls, and an MCP call's own body (DS §4.6)
   "Input": "输入",

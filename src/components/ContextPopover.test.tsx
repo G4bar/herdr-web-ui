@@ -90,6 +90,17 @@ const open = async (renderer: TestRenderer.ReactTestRenderer): Promise<void> => 
   await act(async () => {});
 };
 
+/** Waits for a condition instead of sleeping a set time, bounded so a broken one fails instead of hanging (AGENTS.md). */
+const until = async (done: () => boolean, what: string): Promise<void> => {
+  const deadline = Date.now() + 4_000;
+  for (let i = 0; !done(); i++) {
+    if (Date.now() > deadline) throw new Error(what);
+    // the ring's own hover timer updates between these frames: what the popover opening means
+    await Bun.sleep(25);
+    await act(async () => {});
+  }
+};
+
 describe("the stats popover", () => {
   it("colours the ring at 80% used and again at 95%, and never without a number", () => {
     expect([79, 80, 94, 95, 100, null].map(ringLevel)).toEqual(["ok", "notice", "notice", "full", "full", "ok"]);
@@ -175,12 +186,19 @@ describe("the stats popover", () => {
     expect(words(renderer)).toContain("Couldn't compact: Nothing to compact");
   });
 
-  it("warns that the context is nearly full at 95% used", async () => {
-    const renderer = await mount(statsOf(192_000, 1.84), () => Promise.resolve(null));
+  it("warns that the context is nearly full at 95% used", async () => {    const renderer = await mount(statsOf(192_000, 1.84), () => Promise.resolve(null));
     await open(renderer);
 
     expect(ring(renderer).props.className).toBe("ctx-ring is-full");
     expect(words(renderer)).toContain("Context is nearly full");
+  });
+
+  it("turns a short arc on the ring while Pi compacts", async () => {
+    const idle = await mount(statsOf(84_000, 1.84), () => Promise.resolve(null));
+    expect(idle.root.findAllByProps({ className: "ctx-ring-busy" })).toHaveLength(0);
+
+    const busy = await mount(statsOf(84_000, 1.84), () => Promise.resolve(null), { busy: true });
+    expect(busy.root.findAllByProps({ className: "ctx-ring-busy" })).toHaveLength(1);
   });
 
   it("opens on a rested pointer, and Escape closes it before anything else takes it", async () => {
@@ -189,18 +207,19 @@ describe("the stats popover", () => {
     // a pointer that merely crosses the ring opens nothing
     await act(async () => { ring(renderer).props.onPointerEnter(); });
     await act(async () => { ring(renderer).props.onPointerLeave(); });
-    await act(async () => { await new Promise((settle) => setTimeout(settle, HOVER_OPEN_MS + 50)); });
+    // fixed wait: the delayed open that must not arrive
+    await act(async () => { await Bun.sleep(HOVER_OPEN_MS + 50); });
     expect(dialog(renderer)).toHaveLength(0);
 
     // one that rests on it does
     await act(async () => { ring(renderer).props.onPointerEnter(); });
-    await act(async () => { await new Promise((settle) => setTimeout(settle, HOVER_OPEN_MS + 50)); });
-    expect(dialog(renderer)).toHaveLength(1);
+    await until(() => dialog(renderer).length === 1, "a rested pointer never opened the popover");
 
     // it stays open while the pointer is inside it, and closes after it leaves
     await act(async () => { ring(renderer).props.onPointerLeave(); });
     await act(async () => { dialog(renderer)[0]!.props.onPointerEnter(); });
-    await act(async () => { await new Promise((settle) => setTimeout(settle, HOVER_CLOSE_MS + 50)); });
+    // fixed wait: the close delay that must not run while the pointer is inside the popover
+    await act(async () => { await Bun.sleep(HOVER_CLOSE_MS + 50); });
     expect(dialog(renderer)).toHaveLength(1);
 
     // Escape closes it and stops there: the composer's own Escape never runs, so no run is stopped

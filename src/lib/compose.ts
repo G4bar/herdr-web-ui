@@ -251,11 +251,12 @@ export const COMPOSER_CHARS_WARNING = 200;
 /**
  * `noRoom`: a finished upload's path waits for the message to be shortened. `piConnecting`: a native
  * Pi pane's RPC is starting, which the placeholder cannot say (it names the agent), so it is said
- * here whatever the box holds (DS §4.1).
+ * here whatever the box holds (DS §4.1). `piCompacting`: Pi is compacting its context, said here too.
  */
-export function composerStatusHint(state: { uploading: boolean; connected: boolean; text: string; noRoom?: boolean; piConnecting?: boolean }): "uploading" | "offline" | "no-room" | "near-limit" | "pi-connecting" | null {
+export function composerStatusHint(state: { uploading: boolean; connected: boolean; text: string; noRoom?: boolean; piConnecting?: boolean; piCompacting?: boolean }): "uploading" | "offline" | "no-room" | "near-limit" | "pi-connecting" | "pi-compacting" | null {
   if (!state.connected && state.text.length > 0) return "offline";
   if (state.piConnecting) return "pi-connecting";
+  if (state.piCompacting) return "pi-compacting";
   if (state.noRoom) return "no-room";
   if (state.uploading) return "uploading";
   return MAX_COMPOSER_CHARS - state.text.length <= COMPOSER_CHARS_WARNING ? "near-limit" : null;

@@ -344,6 +344,13 @@ describe("composer presentation helpers", () => {
     expect(composerStatusHint({ uploading: false, connected: true, text: "", piConnecting: false })).toBe(null);
   });
 
+  it("says Pi is compacting its context, under a Pi that is still starting", () => {
+    expect(composerStatusHint({ uploading: false, connected: true, text: "", piCompacting: true })).toBe("pi-compacting");
+    expect(composerStatusHint({ uploading: false, connected: true, text: "draft", piCompacting: true })).toBe("pi-compacting");
+    expect(composerStatusHint({ uploading: false, connected: true, text: "", piConnecting: true, piCompacting: true })).toBe("pi-connecting");
+    expect(composerStatusHint({ uploading: false, connected: true, text: "", piCompacting: false })).toBe(null);
+  });
+
   it("removes the effort word before shortening the model", () => {
     expect(composerModelDraw({ modelClipped: false, effortClipped: false })).toBe("full");
     expect(composerModelDraw({ modelClipped: false, effortClipped: true })).toBe("no-effort");

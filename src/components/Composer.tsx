@@ -673,6 +673,14 @@ export function Composer({
     void back.then((texts) => putBack(texts), () => undefined);
   }, [onAbort, putBack]);
 
+  // DS §4.1: the provider error Pi retries, whose notice stands over the card until its end. Escape
+  // cancels the retry itself (§6.1), not the run behind it.
+  const piRetry = piNative?.retry ?? null;
+  const cancelRetry = useCallback(() => {
+    if (piRpc === undefined) return;
+    void piRpc({ type: "abort_retry" }).catch(() => undefined);
+  }, [piRpc]);
+
   // DS §6.1 Alt+Up: Pi's queue is taken out whole and comes back into the box, under the draft.
   // Pi holds no per-item queue, so the answer of clear_queue is the truth, never the pushed state.
   const restoreHeld = useCallback(() => {
@@ -1028,6 +1036,12 @@ export function Composer({
         setMenuDismissed(true);
         return;
       }
+      // DS §6.1: while Pi retries, Escape cancels the retry (abort_retry) before it reaches the run
+      if (event.key === "Escape" && piRetry !== null) {
+        event.preventDefault();
+        cancelRetry();
+        return;
+      }
       // a draft puts Send where Stop was: Escape is then the Stop the agent's own input has
       if (event.key === "Escape" && connected && agentStatus === "working" && textRef.current.trim().length > 0) {
         event.preventDefault();
@@ -1055,7 +1069,7 @@ export function Composer({
       // every other Enter follows the Send-as row
       send(undefined, false);
     },
-    [agentStatus, abort, choices, connected, menuDismissed, menuOpen, offered, restoreHeld, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, streaming, trigger],
+    [agentStatus, abort, cancelRetry, choices, connected, menuDismissed, menuOpen, offered, piRetry, restoreHeld, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, streaming, trigger],
   );
 
   const onPaste = useCallback(
@@ -1105,7 +1119,7 @@ export function Composer({
   const piThinkingLevel = piNative !== null ? piNative.thinkingLevel || null : metadata?.reasoning_effort ?? null;
   // DS §4.1: on a narrow card the chips leave the controls row for one of their own over it
   const piChipsRow = composerPiChipsRow(cardWidth);
-  const hint = composerStatusHint({ uploading, connected, text, noRoom: roomless !== undefined, piConnecting: pi.connecting });
+  const hint = composerStatusHint({ uploading, connected, text, noRoom: roomless !== undefined, piConnecting: pi.connecting, piCompacting: piNative?.isCompacting === true });
   // DS §4.1: a native pane's model and level are chips in the card's right group, so the quiet pill
   // beside the state drops its own copy of them. A Pi the terminal still owns reads the model from the
   // session file, read-only (DS §3.0). Every other agent draws the pill exactly as it did
@@ -1121,6 +1135,7 @@ export function Composer({
     : hint === "near-limit" ? composerFull(text.length, MAX_COMPOSER_CHARS) ? t("{max}-character limit", { max: formatChars(MAX_COMPOSER_CHARS) }) : t("{count} characters left", { count: MAX_COMPOSER_CHARS - text.length })
     : hint === "uploading" ? t("Uploading file…")
     : hint === "pi-connecting" ? t("Connecting to Pi…")
+    : hint === "pi-compacting" ? t("Compacting context…")
     : offlineSentence;
   /** an upload's failure as one line: what failed and the cause it knows, then what the pick left out */
   const noteLine = note === null ? null : typeof note === "string" ? note : "failure" in note
@@ -1175,6 +1190,34 @@ export function Composer({
     return () => window.clearTimeout(timer);
   }, [piLive, piModelName, piThinkingLevel, t]);
   const piSaidShown = useAnnouncedText(piSaid);
+  // DS §4.1: a retry's notice counts its own seconds down, and is read only when it starts and when it
+  // reaches 0, never on every tick (§8.3)
+  const retryDelayMs = piRetry?.delayMs ?? null;
+  const retryKey = piRetry === null ? null : `${piRetry.attempt}/${piRetry.maxAttempts}/${retryDelayMs}/${piRetry.errorMessage}`;
+  const [retryTick, setRetryTick] = useState<{ key: string | null; seconds: number } | null>(null);
+  const retrySeconds = retryDelayMs === null ? null
+    : retryTick !== null && retryTick.key === retryKey ? retryTick.seconds
+    : Math.ceil(retryDelayMs / 1000);
+  useEffect(() => {
+    if (retryKey === null || retryDelayMs === null) return;
+    const until = Date.now() + retryDelayMs;
+    const tick = (): void => setRetryTick({ key: retryKey, seconds: Math.max(0, Math.ceil((until - Date.now()) / 1000)) });
+    tick();
+    const timer = window.setInterval(tick, 500);
+    return () => window.clearInterval(timer);
+  }, [retryDelayMs, retryKey]);
+  /** the phase of the retry last read out ("start" or "end"), so its countdown is not announced every second */
+  const retrySaidPhase = useRef<string | null>(null);
+  useEffect(() => {
+    if (piRetry === null || retrySeconds === null) {
+      retrySaidPhase.current = null;
+      return;
+    }
+    const phase = `${retryKey}:${retrySeconds === 0 ? "end" : "start"}`;
+    if (retrySaidPhase.current === phase) return;
+    retrySaidPhase.current = phase;
+    setPiSaid(t("Provider error. Retrying in {seconds} s ({attempt} of {max})", { seconds: retrySeconds, attempt: piRetry.attempt, max: piRetry.maxAttempts }));
+  }, [piRetry, retryKey, retrySeconds, t]);
   // the suggestions' own close, for a pointer or a phone, which has no Escape: it does what Escape does, and the
   // text and the focus stay in the box (a press never takes the focus; a key on it hands it back)
   const menuClose = (
@@ -1247,6 +1290,18 @@ export function Composer({
           <TriangleAlert className="composer-note-icon" aria-hidden="true" />
           <div className="composer-note-text">{t("Lost the connection to Pi.")}</div>
           {onPiReconnect !== undefined && <button type="button" className="composer-note-action" onClick={onPiReconnect}>{t("Reconnect")}</button>}
+        </div>
+      )}
+
+      {/* DS §4.1: the provider error Pi retries, its seconds counting down, and the one control that stops
+          it. Not a live region: only its start and its 0 are read out (§8.3) */}
+      {piRetry !== null && retrySeconds !== null && (
+        <div className="composer-note composer-retry">
+          <TriangleAlert className="composer-note-icon" aria-hidden="true" />
+          <div className="composer-note-text">
+            {t("Provider error. Retrying in {seconds} s ({attempt} of {max})", { seconds: retrySeconds, attempt: piRetry.attempt, max: piRetry.maxAttempts })}
+          </div>
+          {piRpc !== undefined && <button type="button" className="composer-note-action" onClick={cancelRetry}>{t("Cancel retry")}</button>}
         </div>
       )}
 
@@ -1564,7 +1619,7 @@ export function Composer({
           {!piChipsRow && piChips}
           {/* DS §4.1, §4.5: a native pane's ring, its cost and the stats popover they open, at the end of
               the right group; the pill beside the state draws no second one for it */}
-          {piLive && piRpc !== undefined && <ContextPopover stats={piNative.stats} statuses={piNative.statuses} piRpc={piRpc} />}
+          {piLive && piRpc !== undefined && <ContextPopover stats={piNative.stats} statuses={piNative.statuses} piRpc={piRpc} busy={piNative.isCompacting} />}
           {!sendShown ? (
             <button
               type="button"

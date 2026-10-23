@@ -1537,11 +1537,10 @@ export const JA: Record<string, string> = {
   "Compact now": "今すぐ圧縮",
   "Add instructions": "指示を追加",
   "Couldn't compact: {reason}": "圧縮できませんでした: {reason}",
-
-  // a script's calls, and an MCP call's own body (DS §4.6)
-  "Input": "入力",
-  "Calls ({n})": "呼び出し ({n})",
-  "+{n} more": "他 {n} 件",
+  // a retry and a compaction notice (DS §4.1)
+  "Compacting context…": "コンテキストを圧縮中…",
+  "Provider error. Retrying in {seconds} s ({attempt} of {max})": "プロバイダーエラー。{seconds} 秒後に再試行します（{attempt}/{max}）",
+  "Cancel retry": "再試行をキャンセル",
 
   // a script's calls, and an MCP call's own body (DS §4.6)
   "Input": "入力",

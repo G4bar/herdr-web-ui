@@ -29,6 +29,8 @@ export interface ContextPopoverProps {
   statuses?: Record<string, string>;
   /** one allowlisted command for the pane's Pi; a refusal throws with Pi's own sentence */
   piRpc: (command: PiRpcCommand) => Promise<unknown>;
+  /** Pi is compacting: a short arc turns over the used one while it works (DS §4.1) */
+  busy?: boolean;
 }
 
 /** How long the pointer rests on the ring before the popover opens, and how long it may leave it (DS §4.5). */
@@ -55,7 +57,7 @@ export function costText(cost: number | null): string {
 
 const refusal = (error: unknown): string => error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error);
 
-export function ContextPopover({ stats, statuses = {}, piRpc }: ContextPopoverProps) {
+export function ContextPopover({ stats, statuses = {}, piRpc, busy = false }: ContextPopoverProps) {
   const t = useT();
   const sheet = useMediaQuery(SHEET_QUERY);
   const titleId = useId();
@@ -282,6 +284,8 @@ export function ContextPopover({ stats, statuses = {}, piRpc }: ContextPopoverPr
           <circle className="ctx-ring-track" cx="8" cy="8" r={radius} />
           <circle className="ctx-ring-used" cx="8" cy="8" r={radius}
             strokeDasharray={`${circumference * filled / 100} ${circumference}`} transform="rotate(-90 8 8)" />
+          {busy && <circle className="ctx-ring-busy" cx="8" cy="8" r={radius}
+            strokeDasharray={`${circumference * 0.2} ${circumference}`} />}
         </svg>
       </button>
       <span className="ctx-cost">{cost}</span>

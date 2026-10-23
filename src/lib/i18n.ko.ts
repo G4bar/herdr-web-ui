@@ -1535,11 +1535,10 @@ export const KO: Record<string, string> = {
   "Compact now": "지금 압축",
   "Add instructions": "지시 추가",
   "Couldn't compact: {reason}": "압축하지 못했습니다: {reason}",
-
-  // a script's calls, and an MCP call's own body (DS §4.6)
-  "Input": "입력",
-  "Calls ({n})": "호출 ({n})",
-  "+{n} more": "{n}개 더",
+  // a retry and a compaction notice (DS §4.1)
+  "Compacting context…": "컨텍스트를 압축하는 중…",
+  "Provider error. Retrying in {seconds} s ({attempt} of {max})": "공급자 오류. {seconds}초 후 다시 시도합니다 ({attempt}/{max})",
+  "Cancel retry": "다시 시도 취소",
 
   // a script's calls, and an MCP call's own body (DS §4.6)
   "Input": "입력",
