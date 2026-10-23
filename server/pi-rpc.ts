@@ -202,9 +202,10 @@ export function reducePiEvent(state: PiNativeState, event: PiRpcRecord): PiNativ
 }
 
 function reduceResponse(state: PiNativeState, event: PiRpcRecord): PiNativeState {
-  if (event["success"] !== true) return state;
-  const data = event["data"];
   const request = object(event["request"]);
+  // a refused bash ends too: the output it streamed before the refusal has nowhere left to go
+  if (event["success"] !== true) return text(event["command"]) === "bash" ? dropTail(state, text(request["id"])) : state;
+  const data = event["data"];
   switch (text(event["command"]) ?? "") {
     case "get_state": {
       const session = object(data);
@@ -404,11 +405,15 @@ export class PiRpc {
    * A command may bring its own id (`bash`: pi streams a command's output under it, and the chat that
    * ran one draws its own lines by the name it chose). An id another command still waits on is not
    * taken again: that call gets a generated one, and its caller simply finds no lines of its own.
+   * Generated ids skip every id still pending, so no caller's answer is ever lost to another's.
    */
   call(command: PiRpcRecord & { type: string }): Promise<unknown> {
     if (this.ending) return Promise.reject(new Error("pi has exited"));
     const named = typeof command.id === "string" ? command.id : null;
-    const id = named !== null && !this.pending.has(named) ? named : `req-${++this.sequence}`;
+    let id = named ?? "";
+    if (named === null || this.pending.has(named)) {
+      do { id = `req-${++this.sequence}`; } while (this.pending.has(id));
+    }
     return new Promise((resolve, reject) => {
       // the command as it went out, its id included: the response reports what that command answered
       const sent = { ...command, id };

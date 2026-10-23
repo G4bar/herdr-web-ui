@@ -57,6 +57,12 @@ const handle = (command) => {
       refuse(command, "Model not found: invalid/model");
       break;
     case "bash":
+      // a command the fake refuses after streaming, so a refused bash's tail is testable
+      if (command.command === "refuse") {
+        send({ type: "bash_execution_update", id: command.id, delta: "partial\n" });
+        refuse(command, "bash refused");
+        break;
+      }
       for (const delta of ["one\n", "two\n", "three\n"]) send({ type: "bash_execution_update", id: command.id, delta });
       respond(command, { output: "one\ntwo\nthree\n", exitCode: 0, cancelled: false });
       break;
@@ -217,6 +223,26 @@ describe("PiRpc", () => {
     await rpc.call({ type: "bash", id: "web-bash-7", command: "printf one" });
     expect(tails.filter((tail) => tail !== undefined).at(-1)).toEqual(["one", "two", "three", ""]);
     expect(rpc.state.toolTails).toEqual({});
+  });
+
+  it("drops a refused bash command's streamed output too", async () => {
+    const { rpc } = start();
+    const tails: (string[] | undefined)[] = [];
+    rpc.onState((state) => tails.push(state.toolTails["web-bash-9"]));
+    await expect(rpc.call({ type: "bash", id: "web-bash-9", command: "refuse" })).rejects.toThrow("bash refused");
+    expect(tails.filter((tail) => tail !== undefined).at(-1)).toEqual(["partial", ""]);
+    expect(rpc.state.toolTails).toEqual({});
+  });
+
+  it("never hands out an id another call still waits on", async () => {
+    const { rpc } = start();
+    // a caller names the id the generator would reach next: the generated id has to step past it
+    const named = rpc.call({ type: "bash", id: "req-1", command: "ls" });
+    const generated = rpc.call({ type: "get_available_models" });
+    const outcomes = await Promise.allSettled([named, generated]);
+    expect(outcomes.map((outcome) => outcome.status)).toEqual(["fulfilled", "fulfilled"]);
+    expect(outcomes[0]).toMatchObject({ value: { exitCode: 0 } });
+    expect(outcomes[1]).toMatchObject({ value: { models: [{ id: "claude-test" }] } });
   });
 });
 

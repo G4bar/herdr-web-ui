@@ -698,18 +698,17 @@ export function Composer({
 
   // DS §4.1: a `!` draft runs through pi's `bash`, never through `prompt`. The id named here is what
   // pi streams the command's output under, so the tail drawn while it runs is this command's own.
-  const runPiBash = useCallback((next: PiBashCommand): boolean => {
-    if (piRpc === undefined) return false;
+  // True once pi took it; the refusal otherwise, which leaves the draft in the box.
+  const runPiBash = useCallback((next: PiBashCommand): Promise<true | string> => {
+    if (piRpc === undefined) return Promise.resolve(t("Couldn't run the command."));
     const id = `web-bash-${Date.now().toString(36)}-${++bashOrder.current}`;
     setBashRunning(id);
-    void piRpc({ type: "bash", id, command: next.command, excludeFromContext: next.excludeFromContext })
-      .catch((error: unknown) => {
-        if (mounted.current) setNote(error instanceof Error ? t("Couldn't run the command: {reason}", { reason: error.message }) : t("Couldn't run the command."));
-      })
+    return piRpc({ type: "bash", id, command: next.command, excludeFromContext: next.excludeFromContext })
+      .then((): true => true)
+      .catch((error: unknown) => error instanceof Error ? t("Couldn't run the command: {reason}", { reason: error.message }) : t("Couldn't run the command."))
       .finally(() => {
         if (mounted.current) setBashRunning((current) => (current === id ? null : current));
       });
-    return true;
   }, [piRpc, t]);
 
   const stopBash = useCallback(() => {

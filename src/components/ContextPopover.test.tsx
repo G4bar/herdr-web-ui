@@ -201,6 +201,24 @@ describe("the stats popover", () => {
     expect(busy.root.findAllByProps({ className: "ctx-ring-busy" })).toHaveLength(1);
   });
 
+  it("keeps a press's own focus from being undone by the click that ends it", async () => {
+    const renderer = await mount(statsOf(84_000, 1.84), () => Promise.resolve(null));
+    // a real press, in the order a browser sends it: the focus it takes opens the popover before the click
+    const press = async (): Promise<void> => {
+      await act(async () => { ring(renderer).props.onPointerEnter(); });
+      await act(async () => { ring(renderer).props.onPointerDown(); });
+      await act(async () => { ring(renderer).props.onFocus(); });
+      await act(async () => { ring(renderer).props.onClick(); });
+    };
+
+    await press();
+    expect(dialog(renderer)).toHaveLength(1);
+
+    // the same press on an open popover closes it: the press is the toggle, and the click finishes it
+    await press();
+    expect(dialog(renderer)).toHaveLength(0);
+  });
+
   it("opens on a rested pointer, and Escape closes it before anything else takes it", async () => {
     const renderer = await mount(statsOf(84_000, 1.84), () => Promise.resolve(null));
 

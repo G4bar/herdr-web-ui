@@ -60,7 +60,7 @@ const BASH_PLACEHOLDER = "Run a shell command · !! keeps output out of Pi's con
 const native = (extra: Partial<PiNativeState> = {}): PiNativeState => ({ ...initialPiNativeState(), mode: "native", ...extra });
 
 /** A native Pi's composer over a draft, with every RPC command and every prompt it sends recorded. */
-async function mount(options: { draft: string; piNative?: PiNativeState }) {
+async function mount(options: { draft: string; piNative?: PiNativeState; bashRefused?: string }) {
   const id = `bash${++drafts}`;
   const draftKey = `ovis:composer-draft:${id}`;
   composerDrafts.set(draftKey, options.draft);
@@ -74,8 +74,12 @@ async function mount(options: { draft: string; piNative?: PiNativeState }) {
     children: createElement(Composer, {
       connected: true, paneId: id, agent: "pi", agentStatus: state.isStreaming ? "working" : "idle",
       piNative: state,
-      // a `!` command runs until its own answer, so its promise is never settled here: the test stops it
-      piRpc: (command: PiRpcCommand) => { commands.push(command); return command.type === "bash" ? new Promise(() => undefined) : Promise.resolve(null); },
+      // a `!` command runs until its own answer: its promise never settles here, unless the test refuses it
+      piRpc: (command: PiRpcCommand) => {
+        commands.push(command);
+        if (command.type !== "bash") return Promise.resolve(null);
+        return options.bashRefused === undefined ? new Promise(() => undefined) : Promise.reject(new Error(options.bashRefused));
+      },
       onSend: (text: string) => { sent.push(text); return true; },
       onAbort: () => { aborts.push(Date.now()); },
       onUploadImage: async () => "",
@@ -92,6 +96,8 @@ async function mount(options: { draft: string; piNative?: PiNativeState }) {
     chip: () => root.findAllByProps({ className: "composer-bash-chip" }).length,
     rail: () => root.findByProps({ className: "composer-surface" }).props["data-bash"] !== undefined,
     placeholder: () => root.findByProps({ className: "composer-text" }).props.placeholder as string,
+    draft: () => root.findByProps({ className: "composer-text" }).props.value as string,
+    note: () => root.findAll(hasClass("composer-note-text")).map((node) => node.props.children).join(" "),
     runBlock: () => root.findAll(hasClass("composer-bash-run")).length,
     tail: () => root.findAll(hasClass("chat-tool-tail")).map((node) => node.props.children),
     press: async (key: string) => {
@@ -151,6 +157,18 @@ describe("running a `!` command", () => {
 
     await composer.press("Enter");
     expect(composer.commands[0]).toMatchObject({ type: "bash", command: "bun test", excludeFromContext: true });
+    await composer.unmount();
+  });
+
+  it("keeps a refused `!` command in the box, with Pi's sentence", async () => {
+    const composer = await mount({ draft: "! ls", bashRefused: "bash is off in this session" });
+
+    await composer.press("Enter");
+    // the refusal is the answer to the command: only then does the box know the command did not run
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+    expect(composer.draft()).toBe("! ls");
+    expect(composer.note()).toContain("Couldn't run the command: bash is off in this session");
+    expect(composer.runBlock()).toBe(0);
     await composer.unmount();
   });
 

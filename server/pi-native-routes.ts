@@ -73,8 +73,12 @@ const RPC_VALUES: Record<string, readonly string[]> = {
 
 const isTrust = (value: unknown): value is PiTrust => value === "approve" || value === "deny";
 
-/** A bash command's own name for itself, as a JSON-RPC id pi echoes back on every line it streams. */
-const RPC_ID = /^[A-Za-z0-9._:-]{1,64}$/;
+/**
+ * A bash command's own name for itself, as a JSON-RPC id pi echoes back on every line it streams. Its
+ * prefix is fixed so a client's id can never take an id pi itself uses (a generated `req-N` or a tool
+ * call's own) and so a tail under it is always this chat's own.
+ */
+const RPC_ID = /^web-bash-[A-Za-z0-9-]{1,48}$/;
 
 /**
  * The command a client sent, cut to the allowlist: an unknown type, an unknown field, a field of
@@ -100,7 +104,7 @@ function checkedCommand(value: unknown): { command: { type: string } & Record<st
     if (key !== "type" && !Object.hasOwn(fields, key)) return { error: `${type} takes no ${key}` };
   }
   const id = command["id"];
-  if (typeof id === "string" && !RPC_ID.test(id)) return { error: `${type}'s id may hold only letters, digits and . _ : -` };
+  if (typeof id === "string" && !RPC_ID.test(id)) return { error: `${type}'s id must be web-bash- and letters, digits or -` };
   return { command };
 }
 

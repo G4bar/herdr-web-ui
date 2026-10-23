@@ -135,12 +135,14 @@ describe("native Pi RPC passthrough", () => {
     expect((await rpc({ type: "prompt", message: "hi", streamingBehavior: "later" }))?.status).toBe(400);
   });
 
-  it("lets a bash command name itself, and refuses a name that is not a plain token", async () => {
+  it("lets a bash command name itself, and refuses a name that is not the chat's own prefix", async () => {
     const seen: { paneId: string; command: Record<string, unknown> }[] = [];
     const registry = control({ call: async (id, command) => { seen.push({ paneId: id, command }); return { output: "ok" }; } });
     expect((await rpc({ type: "bash", id: "web-bash-7", command: "ls", excludeFromContext: true }, registry))?.status).toBe(200);
     expect(seen).toEqual([{ paneId, command: { type: "bash", id: "web-bash-7", command: "ls", excludeFromContext: true } }]);
+    // spaces, and a name pi itself could answer to: neither may reach the child
     expect((await rpc({ type: "bash", id: "not a token", command: "ls" }))?.status).toBe(400);
+    expect((await rpc({ type: "bash", id: "req-1", command: "ls" }))?.status).toBe(400);
   });
 
   it("passes an allowed command unchanged and answers with Pi's data", async () => {
