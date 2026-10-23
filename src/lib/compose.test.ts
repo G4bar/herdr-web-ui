@@ -324,6 +324,15 @@ describe("composer presentation helpers", () => {
     expect(composerStatusHint({ uploading: false, connected: false, text: near, noRoom: true })).toBe("offline");
   });
 
+  it("says a native Pi is connecting while it starts, whatever the box holds", () => {
+    expect(composerStatusHint({ uploading: false, connected: true, text: "", piConnecting: true })).toBe("pi-connecting");
+    expect(composerStatusHint({ uploading: false, connected: true, text: "draft", piConnecting: true })).toBe("pi-connecting");
+    expect(composerStatusHint({ uploading: true, connected: true, text: "", piConnecting: true })).toBe("pi-connecting");
+    // a socket that went too is the sentence that matters: Pi's RPC needs it as well
+    expect(composerStatusHint({ uploading: false, connected: false, text: "draft", piConnecting: true })).toBe("offline");
+    expect(composerStatusHint({ uploading: false, connected: true, text: "", piConnecting: false })).toBe(null);
+  });
+
   it("removes the effort word before shortening the model", () => {
     expect(composerModelDraw({ modelClipped: false, effortClipped: false })).toBe("full");
     expect(composerModelDraw({ modelClipped: false, effortClipped: true })).toBe("no-effort");

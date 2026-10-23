@@ -1494,6 +1494,8 @@ export const KO: Record<string, string> = {
   "Thinking": "사고",
   "Thinking: {level}": "사고: {level}",
   "Thinking off": "사고 끔",
+  "Connecting to Pi…": "Pi에 연결하는 중…",
+  "Lost the connection to Pi.": "Pi와의 연결이 끊겼습니다.",
   "This model doesn't think": "이 모델은 사고하지 않습니다",
   "Couldn't load levels": "사고 수준을 불러오지 못했습니다",
   "No thinking levels available.": "사용할 수 있는 사고 수준이 없습니다.",

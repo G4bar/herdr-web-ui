@@ -30,6 +30,9 @@ export interface PiThinkingMenuProps {
   disabled?: boolean;
   /** the terminal owns Pi: the chip reads the level, and says where it is changed */
   readOnly?: boolean;
+  /** the chip's row is too narrow for the word (DS §4.1, ≤ 480px): the pips say the level and the
+   *  word stays in the button's name, read and not drawn */
+  pipsOnly?: boolean;
   /** after a pick: the focus goes back to the message box, not the chip */
   onPicked?: () => void;
 }
@@ -86,7 +89,7 @@ const refusal = (error: unknown): string => error instanceof ApiError ? error.de
 /** How far from a screen edge the popover keeps. */
 const EDGE = 8;
 
-export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, onPicked }: PiThinkingMenuProps) {
+export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, pipsOnly, onPicked }: PiThinkingMenuProps) {
   const t = useT();
   const sheet = useMediaQuery(SHEET_QUERY);
   const listId = useId();
@@ -323,7 +326,7 @@ export function PiThinkingMenu({ level, piRpc, unsupported, disabled, readOnly, 
         }}
       >
         <PiPips level={unsupported === true ? "off" : level} />
-        <span className="pi-chip-level">{word}</span>
+        <span className={pipsOnly === true ? "pi-chip-level visually-hidden" : "pi-chip-level"}>{word}</span>
         <ChevronDown aria-hidden="true" />
       </button>
       {open && createPortal(surface, document.body)}

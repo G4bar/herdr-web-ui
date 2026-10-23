@@ -211,6 +211,56 @@
   padding: var(--space-1) var(--space-4) 0;
 }
 
+/* A narrow card (≤ 480px, DS §4.1, §7): a Pi's two chips leave the controls row for one of their
+   own directly above it. They do not wrap; the model takes the width and truncates, and the level
+   keeps its pips and drops its word (the word stays in the button's name). A sentence keeps its
+   line under the chips, over the controls, as it does on any other narrow card. */
+.composer-surface[data-pi-chips] {
+  grid-template-areas:
+    "attachments attachments attachments"
+    "text text text"
+    "pi pi pi"
+    "left status right";
+}
+
+.composer-surface[data-pi-chips]:has(> .composer-status[data-hint]) {
+  grid-template-areas:
+    "attachments attachments attachments"
+    "text text text"
+    "pi pi pi"
+    "status status status"
+    "left . right";
+}
+
+.composer-pi-chips {
+  grid-area: pi;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-1) var(--space-3) 0;
+}
+
+.composer-pi-chips > .pi-model {
+  flex: 1 1 0;
+  min-width: 0;
+}
+
+/* the chip fills the room the row gave its model: the name is what gives way inside it */
+.composer-pi-chips > .pi-model > .pi-chip {
+  flex: 1 1 auto;
+}
+
+/* the model's own name gives way to the row, not to the 11rem a wide row allows it */
+.composer-pi-chips .pi-chip-name {
+  max-width: none;
+}
+
+.composer-pi-chips > .pi-thinking-chip {
+  flex: none;
+}
+
 /* everything but the sentence. No box of its own at rest: its items are the status line's. Beside
    a sentence it is one row that does not wrap, so the sentence is the only thing that takes a
    line: a label that does not fit is clipped there as it is at rest, which is what the composer

@@ -1496,6 +1496,8 @@ export const JA: Record<string, string> = {
   "Thinking": "思考",
   "Thinking: {level}": "思考: {level}",
   "Thinking off": "思考オフ",
+  "Connecting to Pi…": "Pi に接続しています…",
+  "Lost the connection to Pi.": "Pi との接続が切れました。",
   "This model doesn't think": "このモデルは思考しません",
   "Couldn't load levels": "思考レベルを読み込めませんでした",
   "No thinking levels available.": "利用できる思考レベルがありません。",

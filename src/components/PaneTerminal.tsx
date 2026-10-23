@@ -3650,6 +3650,8 @@ export function PaneTerminal({
           agentStatus={agentStatus}
           piNative={piNative.state}
           piRpc={piNative.piRpc}
+          // a lost child, started again on the session it held; a refusal lands in the pane's notices
+          onPiReconnect={() => { void piNative.reconnect().catch(() => undefined); }}
           backgroundTasks={backgroundTasks}
           plan={plan}
           backgroundWait={backgroundWait}

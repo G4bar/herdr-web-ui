@@ -237,9 +237,14 @@ export function composerDelivery(agent: string | null, status?: AgentStatus): "q
 /** Characters left at which the composer starts counting them: further off, a count is noise. */
 export const COMPOSER_CHARS_WARNING = 200;
 
-/** `noRoom`: a finished upload's path waits for the message to be shortened. */
-export function composerStatusHint(state: { uploading: boolean; connected: boolean; text: string; noRoom?: boolean }): "uploading" | "offline" | "no-room" | "near-limit" | null {
+/**
+ * `noRoom`: a finished upload's path waits for the message to be shortened. `piConnecting`: a native
+ * Pi pane's RPC is starting, which the placeholder cannot say (it names the agent), so it is said
+ * here whatever the box holds (DS §4.1).
+ */
+export function composerStatusHint(state: { uploading: boolean; connected: boolean; text: string; noRoom?: boolean; piConnecting?: boolean }): "uploading" | "offline" | "no-room" | "near-limit" | "pi-connecting" | null {
   if (!state.connected && state.text.length > 0) return "offline";
+  if (state.piConnecting) return "pi-connecting";
   if (state.noRoom) return "no-room";
   if (state.uploading) return "uploading";
   return MAX_COMPOSER_CHARS - state.text.length <= COMPOSER_CHARS_WARNING ? "near-limit" : null;

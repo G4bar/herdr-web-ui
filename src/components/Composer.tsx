@@ -60,7 +60,9 @@ import { quickReplyButtons, useSettings } from "../lib/settings.ts";
 import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, providerForAgent, statusWindows, usageName, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
 import { PiModelPicker } from "./PiModelPicker.tsx";
-import { PiThinkingMenu } from "./PiThinkingMenu.tsx";
+import { PiThinkingMenu, thinkingLevelLabel } from "./PiThinkingMenu.tsx";
+import { PI_ANNOUNCE_MS, piChipChange, piComposerMode } from "../lib/piComposer.ts";
+import { useAnnouncedText } from "../lib/useAnnouncedText.ts";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { usePaneCommands } from "../lib/usePaneCommands.ts";
@@ -93,6 +95,8 @@ export interface ComposerProps {
   /** one allowlisted RPC command for that pane's Pi (`usePiNative`'s `piRpc`): the model chip's picker sends
    * `set_model` through it. Absent, no model chip is drawn */
   piRpc?: (command: PiRpcCommand) => Promise<unknown>;
+  /** `piNative.reconnect`: the Lost notice's one control starts the child again on the session it held */
+  onPiReconnect?: () => void;
   /** replaces the placeholder: how a message answers the agent's waiting prompt */
   answerHint?: string | null;
   /** what the agent suggests typing next (Claude's grey input text): the placeholder, taken with Tab */
@@ -252,6 +256,7 @@ export function Composer({
   metadata,
   piNative = null,
   piRpc,
+  onPiReconnect,
   answerHint = null,
   suggestion = null,
   restored = null,
@@ -318,6 +323,11 @@ export function Composer({
    */
   const [announcement, setAnnouncement] = useState<{ id: number; text: string } | null>(null);
   const announce = useCallback((text: string) => setAnnouncement((previous) => ({ id: (previous?.id ?? 0) + 1, text })), []);
+  // DS §8.3: a model or a level the chips changed to is said once. Rapid cycling (Ctrl+P held,
+  // Shift+Tab pressed through) waits the debounce out and only the last level is read
+  const [piSaid, setPiSaid] = useState<string | null>(null);
+  // the words of the chip last drawn: what a change is measured against, and nothing on the first
+  const piDrawn = useRef<{ model: string | null; level: string | null } | null>(null);
   const [slashUsage, setSlashUsage] = useState<Record<string, number>>(readSlashUsage);
   // the highlight lives in the refs below: a move redraws the menu, also when it lands on an index it held before
   const [, redrawMenu] = useState(0);
@@ -1045,16 +1055,19 @@ export function Composer({
   const shownStatus = paneStatus({ agent_status: agentStatus, ...(backgroundWait ? { background_wait: true as const } : {}) });
   const statusCompact = composerStatusCompact(cardWidth);
   const sendShown = sending || composerSendShown({ working: isWorking, text });
-  const hint = composerStatusHint({ uploading, connected, text, noRoom: roomless !== undefined });
   const model = metadata?.model ? modelLabel(metadata.model) : null;
-  // DS §4.1: a native pane's model and level are chips in the card's right group, so the quiet pill
-  // beside the state drops its own copy of them. A Pi the terminal still owns reads the model from the
-  // session file, read-only (DS §3.0). Every other agent draws the pill exactly as it did
-  const piChip = agent === "pi" && (piNative !== null || model !== null);
+  // the two chips and what the pane's mode says of them (DS §3.0, §4.1)
+  const pi = piComposerMode({ agent, piNative, modelKnown: model !== null });
   // a native pane's level is live; a Terminal-owned Pi's is what its session file last recorded, and
   // one that recorded none names no level to draw (DS §3.0)
   const piThinkingLevel = piNative !== null ? piNative.thinkingLevel || null : metadata?.reasoning_effort ?? null;
-  const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort) && !piChip;
+  // DS §4.1: on a phone the chips leave the controls row for one of their own over it
+  const piChipsRow = useMediaQuery("(max-width: 480px)");
+  const hint = composerStatusHint({ uploading, connected, text, noRoom: roomless !== undefined, piConnecting: pi.connecting });
+  // DS §4.1: a native pane's model and level are chips in the card's right group, so the quiet pill
+  // beside the state drops its own copy of them. A Pi the terminal still owns reads the model from the
+  // session file, read-only (DS §3.0). Every other agent draws the pill exactly as it did
+  const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort) && !pi.chips;
   const usageDetail = usageWindows.map((window) => {
     const reset = formatResetIn(window.resets_at, Date.now());
     return `${windowLabel(window)} ${meterText(window, settings.usageCount)}${reset ? ` · ${t("Resets in {time}", { time: reset })}` : ""}`;
@@ -1064,7 +1077,9 @@ export function Composer({
   const hintText = hint === null ? null
     : hint === "no-room" ? t("{max}-character limit · {count} over", { max: formatChars(MAX_COMPOSER_CHARS), count: formatChars(roomless?.missing ?? 0) })
     : hint === "near-limit" ? composerFull(text.length, MAX_COMPOSER_CHARS) ? t("{max}-character limit", { max: formatChars(MAX_COMPOSER_CHARS) }) : t("{count} characters left", { count: MAX_COMPOSER_CHARS - text.length })
-    : hint === "uploading" ? t("Uploading file…") : offlineSentence;
+    : hint === "uploading" ? t("Uploading file…")
+    : hint === "pi-connecting" ? t("Connecting to Pi…")
+    : offlineSentence;
   /** an upload's failure as one line: what failed and the cause it knows, then what the pick left out */
   const noteLine = note === null ? null : typeof note === "string" ? note : "failure" in note
     ? [note.failure.cause === null ? t("{name} could not be attached", { name: note.attachment.file.name }) : t("{name} could not be attached: {reason}", { name: note.attachment.file.name, reason: note.failure.cause }), note.attachment.leftOut].filter((part) => part !== null).join(" ")
@@ -1079,6 +1094,45 @@ export function Composer({
     contextShown, mobile, usageCaption, usage?.problem, hintText, dictation.shown, backgroundTasks,
     plan?.done, plan?.total, statusCompact, compactNow !== undefined, facesLoaded, t]);
   const menuId = `composer-menu-${paneId}`;
+  // the two chips, in whichever row the card gives them (DS §4.1): the controls row at full width,
+  // one of their own over it on a narrow card, where the model takes the width and the level keeps
+  // its pips and drops its word
+  const piChips = pi.chips && piRpc !== undefined ? <>
+    <PiModelPicker
+      label={piNative?.model?.name ?? model?.text ?? t("Model —")}
+      current={piNative?.model ? { provider: piNative.model.provider, id: piNative.model.id } : null}
+      piRpc={piRpc}
+      disabled={pi.disabled}
+      readOnly={pi.readOnly}
+      onPicked={() => textareaRef.current?.focus({ preventScroll: true })}
+    />
+    {piThinkingLevel !== null && <PiThinkingMenu
+      level={piThinkingLevel}
+      piRpc={piRpc}
+      unsupported={piNative?.model?.reasoning === false}
+      disabled={pi.disabled}
+      readOnly={pi.readOnly}
+      pipsOnly={piChipsRow}
+      onPicked={() => textareaRef.current?.focus({ preventScroll: true })}
+    />}
+  </> : null;
+  // what the chips last said, so a change is announced and the first value is not
+  const piLive = piNative !== null;
+  const piModelName = piNative?.model?.name ?? null;
+  useEffect(() => {
+    const next = piLive ? { model: piModelName, level: piThinkingLevel } : null;
+    const before = piDrawn.current;
+    piDrawn.current = next;
+    const change = piChipChange(before, next);
+    if (next === null) return;
+    const said = change === "model" && next.model !== null ? t("Model: {name}", { name: next.model })
+      : change === "level" && next.level !== null ? t("Thinking: {level}", { level: t(thinkingLevelLabel(next.level)) })
+      : null;
+    if (said === null) return;
+    const timer = window.setTimeout(() => setPiSaid(said), PI_ANNOUNCE_MS);
+    return () => window.clearTimeout(timer);
+  }, [piLive, piModelName, piThinkingLevel, t]);
+  const piSaidShown = useAnnouncedText(piSaid);
   // the suggestions' own close, for a pointer or a phone, which has no Escape: it does what Escape does, and the
   // text and the focus stay in the box (a press never takes the focus; a key on it hands it back)
   const menuClose = (
@@ -1144,10 +1198,21 @@ export function Composer({
         </div>
       )}
 
+      {/* a Pi the chat drove that exited: its live state says so, the draft stays, and one press starts
+          the child again on the session it held (DS §4.1). A refusal joins it as the server's sentence */}
+      {pi.lost && (
+        <div className="composer-note" role="alert">
+          <TriangleAlert className="composer-note-icon" aria-hidden="true" />
+          <div className="composer-note-text">{t("Lost the connection to Pi.")}</div>
+          {onPiReconnect !== undefined && <button type="button" className="composer-note-action" onClick={onPiReconnect}>{t("Reconnect")}</button>}
+        </div>
+      )}
+
       <div
         ref={surfaceRef}
         className={`composer-surface${dragging ? " is-dragging" : ""}`}
         data-compact={statusCompact ? "" : undefined}
+        data-pi-chips={piChips !== null ? "" : undefined}
         onDragEnter={(event) => {
           event.preventDefault();
           setDragging(true);
@@ -1272,6 +1337,8 @@ export function Composer({
         {/* mounted before anything settles: a live region that appears with its text is not read */}
         <p className="visually-hidden" role="alert">{filesFailedShown ? t("Couldn't load suggestions. Keep typing to try again.") : null}</p>
         <p className="visually-hidden" aria-live="polite">{announcement && <span key={announcement.id}>{announcement.text}</span>}</p>
+        {/* DS §8.3: the model or the level the chips changed to, said once the cycling settles */}
+        <p className="visually-hidden" role="status">{piSaidShown}</p>
 
         {attachments.length > 0 && (
           <div className="composer-attachments" aria-label={t("Attached files")}>
@@ -1352,6 +1419,7 @@ export function Composer({
           aria-hidden="true"
         />
 
+        {piChipsRow && piChips !== null && <div className="composer-pi-chips">{piChips}</div>}
         <div className="composer-controls composer-controls-left">
           <input
             ref={fileInputRef}
@@ -1440,22 +1508,7 @@ export function Composer({
           )}
         </div>
         <div className="composer-controls composer-controls-right">
-          {piChip && piRpc && <PiModelPicker
-            label={piNative?.model?.name ?? model?.text ?? t("Model —")}
-            current={piNative?.model ? { provider: piNative.model.provider, id: piNative.model.id } : null}
-            piRpc={piRpc}
-            disabled={piNative !== null && piNative.mode !== "native"}
-            readOnly={piNative === null}
-            onPicked={() => textareaRef.current?.focus({ preventScroll: true })}
-          />}
-          {piChip && piRpc && piThinkingLevel !== null && <PiThinkingMenu
-            level={piThinkingLevel}
-            piRpc={piRpc}
-            unsupported={piNative?.model?.reasoning === false}
-            disabled={piNative !== null && piNative.mode !== "native"}
-            readOnly={piNative === null}
-            onPicked={() => textareaRef.current?.focus({ preventScroll: true })}
-          />}
+          {!piChipsRow && piChips}
           {!sendShown ? (
             <button
               type="button"
@@ -1474,7 +1527,7 @@ export function Composer({
               aria-label={t("Send message")}
               title={sending ? t("Sending…") : t("Send message")}
               aria-busy={sending || undefined}
-              disabled={!connected || uploading || roomless !== undefined || sending || text.trim().length === 0}
+              disabled={!connected || pi.connecting || uploading || roomless !== undefined || sending || text.trim().length === 0}
               // focus stays in the text box: leaving it closes the soft keyboard and moves the button
               // out from under the tap before the click lands
               onPointerDown={(event) => event.preventDefault()}

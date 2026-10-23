@@ -1498,6 +1498,8 @@ export const ZH: Record<string, string> = {
   "Thinking": "思考",
   "Thinking: {level}": "思考：{level}",
   "Thinking off": "思考已关闭",
+  "Connecting to Pi…": "正在连接 Pi…",
+  "Lost the connection to Pi.": "与 Pi 的连接已断开。",
   "This model doesn't think": "此模型不进行思考",
   "Couldn't load levels": "无法加载思考级别",
   "No thinking levels available.": "没有可用的思考级别。",
