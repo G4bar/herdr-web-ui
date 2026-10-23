@@ -79,18 +79,27 @@ const labels = (renderer: TestRenderer.ReactTestRenderer): string[] =>
 const sectionOf = (button: TestRenderer.ReactTestInstance): string => String(button.props["data-hm-section"]);
 
 describe("HerdsmanRoster", () => {
-  it("draws the sections in the popover's order, each with its count", async () => {
+  it("draws the sections in the popover's order, each counting its whole subtree", async () => {
     const renderer = await mount(agents);
-    expect(headers(renderer).map((header) => strings(header).join(" "))).toEqual(["Asks you 1", "Running 4", "Finished 2", "Closed 2"]);
+    expect(headers(renderer).map((header) => strings(header).join(" "))).toEqual(["Running 8", "Closed 1"]);
   });
 
-  it("orders a section's rows: asks, then running, finished newest first, closed", async () => {
+  it("keeps a root and its delegates together, in the root's section", async () => {
     const renderer = await mount(agents);
     const inSection = (section: string) => rowButtons(renderer).filter((button) => sectionOf(button) === section).map((button) => String(button.findAllByProps({ className: "hm-row-label" })[0]!.children[0]));
-    expect(inSection("asks")).toEqual(["visual_designer"]);
-    expect(inSection("running")).toEqual(["lead", "scout_ui", "implementer", "deep_1"]);
-    expect(inSection("finished")).toEqual(["researcher", "researcher_old"]);
-    expect(inSection("closed")).toEqual(["old_agent", "orphan"]);
+    expect(inSection("running")).toEqual(["lead", "visual_designer", "scout_ui", "implementer", "deep_1", "researcher", "researcher_old", "old_agent"]);
+    expect(inSection("closed")).toEqual(["orphan"]);
+  });
+
+  it("draws a running child right under its asking root, inside the root's section", async () => {
+    const renderer = await mount([
+      { label: "lead", definition: "lead", parent: null, state: "asks", startedAt: 0, question: { text: "Which colour?", files: [] } },
+      { label: "implementer", definition: "implementer", parent: "lead", state: "running", startedAt: 1_000 },
+    ]);
+    expect(labels(renderer)).toEqual(["lead", "implementer"]);
+    expect(headers(renderer).map((header) => strings(header).join(" "))).toEqual(["Asks you 2"]);
+    expect(sectionOf(rowButtons(renderer)[1]!)).toBe("asks");
+    expect(rows(renderer)[1]!.props["aria-level"]).toBe(2);
   });
 
   it("indents a child under its parent and keeps its state word for a screen reader", async () => {
@@ -119,11 +128,11 @@ describe("HerdsmanRoster", () => {
 
   it("hides a section's rows when its header is pressed, keeping the header and its count", async () => {
     const renderer = await mount(agents);
-    const finished = headers(renderer).find((header) => strings(header).join(" ").startsWith("Finished"))!;
-    await act(async () => { finished.props.onClick(); });
-    expect(labels(renderer)).not.toContain("researcher");
-    expect(headers(renderer).map((header) => strings(header).join(" "))).toContain("Finished 2");
-    expect(finished.props["aria-expanded"]).toBe(false);
+    const running = headers(renderer).find((header) => strings(header).join(" ").startsWith("Running"))!;
+    await act(async () => { running.props.onClick(); });
+    expect(labels(renderer)).toEqual(["orphan"]);
+    expect(headers(renderer).map((header) => strings(header).join(" "))).toContain("Running 8");
+    expect(running.props["aria-expanded"]).toBe(false);
   });
 
   it("says how agents start when there are none", async () => {

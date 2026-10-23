@@ -17,6 +17,23 @@ import { formatElapsed } from "../lib/omoTasks.ts";
 /** The sections in the order the popover draws them. */
 const SECTIONS: readonly HerdsmanSection[] = ["asks", "running", "finished", "closed"];
 
+/**
+ * The rows grouped under their subtree root's section: `herdsmanRows` walks depth first, so a child
+ * follows its parent and a delegate stays nested with it instead of moving to its own state's section.
+ */
+function groupsByRoot(rows: readonly HerdsmanRow[]): Map<HerdsmanSection, HerdsmanRow[]> {
+  const groups = new Map<HerdsmanSection, HerdsmanRow[]>();
+  let section: HerdsmanSection | null = null;
+  for (const row of rows) {
+    if (row.depth === 0) section = row.section;
+    if (section === null) continue;
+    const group = groups.get(section);
+    if (group) group.push(row);
+    else groups.set(section, [row]);
+  }
+  return groups;
+}
+
 const STATE_ICON: Record<HerdsmanAgentState, typeof Circle> = {
   starting: CircleDot,
   running: CircleDot,
@@ -78,11 +95,10 @@ export function HerdsmanRoster({ herdsman, now, onOpenAgent }: { herdsman: PiNat
   const sectionWords: Record<HerdsmanSection, string> = { asks: t("Asks you"), running: t("Running"), finished: t("Finished"), closed: t("Closed") };
 
   // a folded section or label draws no row, so the counts a header shows come from the whole tree
-  const counts = new Map<HerdsmanSection, number>();
-  for (const row of herdsmanRows(herdsman)) counts.set(row.section, (counts.get(row.section) ?? 0) + 1);
-  const rows = herdsmanRows(herdsman, { sections: [...sections], labels: [...labels] });
+  const counts = groupsByRoot(herdsmanRows(herdsman));
+  const groups = groupsByRoot(herdsmanRows(herdsman, { sections: [...sections], labels: [...labels] }));
 
-  const rowView = (row: HerdsmanRow) => {
+  const rowView = (row: HerdsmanRow, section: HerdsmanSection) => {
     const agent: HerdsmanAgent = row.agent;
     const Icon = STATE_ICON[agent.state];
     const elapsed = herdsmanElapsedMs(agent, now);
@@ -94,7 +110,7 @@ export function HerdsmanRoster({ herdsman, now, onOpenAgent }: { herdsman: PiNat
           type="button"
           className="hm-row"
           data-hm-label={agent.label}
-          data-hm-section={row.section}
+          data-hm-section={section}
           data-hm-depth={row.depth}
           style={{ "--hm-depth": row.depth } as CSSProperties}
           onClick={() => onOpenAgent?.(agent.label)}
@@ -114,18 +130,19 @@ export function HerdsmanRoster({ herdsman, now, onOpenAgent }: { herdsman: PiNat
   return (
     <ul className="hm-tree" role="tree" aria-label={t("Agents")} onKeyDown={onKeyDown}>
       {SECTIONS.map((section) => {
-        const count = counts.get(section) ?? 0;
-        if (count === 0) return null;
+        const group = counts.get(section) ?? [];
+        if (group.length === 0) return null;
         const folded = sections.has(section);
         return [
           <li key={`section-${section}`}>
             <button type="button" className="hm-section" aria-expanded={!folded} onClick={() => toggleSection(section)}>
               {folded ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
               <span>{sectionWords[section]}</span>
-              <span className="hm-section-count">{count}</span>
+              <span className="hm-section-count">{group.length}</span>
             </button>
           </li>,
-          ...rows.filter((row) => row.section === section && !folded).map(rowView),
+          // a folded section's rows are absent from this read
+          ...(groups.get(section) ?? []).map((row) => rowView(row, section)),
         ];
       })}
     </ul>
