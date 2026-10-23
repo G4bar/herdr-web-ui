@@ -4,6 +4,22 @@
 .session-agent {
   margin-bottom: var(--space-4);
 }
+/* the Pi keys drawn as controls (DS §4.9): a search, the All|Named and Recent|Relevance filters, Path */
+.session-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.session-search {
+  flex: 1 1 10rem;
+  min-width: 0;
+}
+.session-filter,
+.session-path-switch {
+  flex: 0 0 auto;
+}
 .session-folder code {
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
@@ -63,6 +79,18 @@
   overflow-wrap: anywhere;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+/* the session file itself, while Path is on */
+.session-path {
+  overflow-wrap: anywhere;
+  color: var(--text-dim);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+}
+/* the current session's name, edited in place */
+.session-rename {
+  width: 10rem;
+  max-width: 100%;
 }
 .session-meta {
   display: flex;

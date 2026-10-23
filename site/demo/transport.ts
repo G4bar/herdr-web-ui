@@ -1015,6 +1015,12 @@ async function route(url: URL, method: string, init: RequestInit | undefined, in
   if (path.startsWith("/api/machines/")) return error("demo", "remote PCs need a real machine", 404);
 
   if (path === "/api/sessions/history") {
+    if (method === "DELETE") {
+      // a demo row has no file on disk (fixtures.ts), so there is nothing here to unlink
+      const body = await bodyOf(init, input);
+      if (body["agent"] !== "pi") return error("invalid_agent", "only Pi's sessions can be deleted", 400);
+      return error("demo", "The demo has no session store to delete from.", 409);
+    }
     if (method !== "GET") return error("method_not_allowed", "use GET", 400);
     const workspaceId = query.get("workspace_id");
     if (!workspaceId) return error("missing_workspace_id", "workspace_id is required", 400);

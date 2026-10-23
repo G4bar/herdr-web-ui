@@ -724,6 +724,13 @@ export function fetchSessionHistory(workspaceId: string, agent: SessionHistoryAg
   return getJson<SessionHistoryResponse>(`${machinePath(machineId, "sessions/history")}?${query.toString()}`, { cache: "no-store" });
 }
 /**
+ * DELETE /api/sessions/history: one Pi session's file. The bridge unlinks it only inside Pi's store
+ * and only while no pane runs it; a refusal (409) says which pane holds it.
+ */
+export async function deleteSessionHistory(path: string, machineId = "local"): Promise<void> {
+  await sendJson(machinePath(machineId, "sessions/history"), "DELETE", { agent: "pi", path });
+}
+/**
  * Whether the PC's bridge has the session history route, asked without a query so no session is
  * listed: a bridge that has it refuses the query (400), one from before it answers not_found (404).
  * Any other refusal (403 for a device that only watches) still says the route is there; a PC that

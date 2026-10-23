@@ -14,6 +14,13 @@
  * text and the time it was last touched beside it, Enter resuming; here in the worktree dialog's
  * row anatomy, with the agent above the rows in the New workspace dialog's picker (each agent with
  * its mark, no Shell entry), whose open list takes its own Escape.
+ *
+ * A Pi pane the chat drives over RPC (lib/piNative.ts, DS §4.9) resumes by switching that pane's
+ * child to the row's session file (`switch_session`), not by starting a second agent; its Pi keys
+ * are drawn as controls too: All|Named (Ctrl+N), Path (Ctrl+P), Recent|Relevance (Ctrl+S), and per
+ * row Rename (Ctrl+R, the current session alone: another writer would need Pi's file) and a
+ * two-step Delete (Ctrl+D, or Ctrl+Backspace on an empty search) that the bridge refuses for a
+ * session a pane still runs. A row outside that pane's mode keeps today's Resume: a new tab.
  */
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
 import { createPortal } from "react-dom";
@@ -21,9 +28,10 @@ import { X } from "lucide-react";
 import "./SessionHistory.css";
 import { AgentPicker } from "./AgentPicker.tsx";
 import type { AgentKind, HerdrPane, SessionHistoryAgent, SessionHistoryResponse, SessionHistoryRow, TabCreated, WorkspaceInfo } from "../../shared/protocol.ts";
-import { ApiError, routeMissing } from "../lib/api.ts";
+import { ApiError, routeMissing, type PiRpcCommand } from "../lib/api.ts";
 import { useLocale, useT } from "../lib/i18n.ts";
 import { useMachineApi, useMachineId } from "../lib/machineContext.tsx";
+import { usePiNativeLane } from "../lib/piNative.ts";
 import { inFlightGuard, paneShowingSession, resumeTabRequest, sessionHistoryAgent, sessionRowTime, standingResume, type RecentResume } from "../lib/sessionHistory.ts";
 import { useSheetSwipe } from "../lib/sheets.ts";
 import { usePhoneSheetBack } from "../lib/sheetHistory.ts";
@@ -41,23 +49,39 @@ interface Props {
   onSelectPane: (paneId: string) => void;
   /** the tab herdr made for the row's session, which the caller records until herdr reports it */
   onResumed: (opened: TabCreated, session: { agent: SessionHistoryAgent; id: string }) => void;
+  /** the pane the list was opened for: a native Pi pane of it resumes by switching its child (App names it) */
+  nativePaneId?: string | null;
+  /** one allowlisted command for that pane's Pi (App binds the pane id); absent means the pane is not native */
+  onPiRpc?: (command: PiRpcCommand) => Promise<unknown>;
 }
 
 const said = (reason: unknown): string => reason instanceof ApiError ? reason.detail : reason instanceof Error ? reason.message : String(reason);
 
 const NO_RECENT: readonly RecentResume[] = [];
 
-export function SessionHistory({ workspace, panes, agent: firstAgent, recent = NO_RECENT, onClose, onSelectPane, onResumed }: Props) {
+export function SessionHistory({ workspace, panes, agent: firstAgent, recent = NO_RECENT, onClose, onSelectPane, onResumed, nativePaneId = null, onPiRpc }: Props) {
   const t = useT();
   const locale = useLocale();
   const id = useId();
   const machineId = useMachineId();
-  const { createTab, fetchAgentKinds, fetchSessionHistory } = useMachineApi();
+  const { createTab, fetchAgentKinds, fetchSessionHistory, deleteSessionHistory } = useMachineApi();
+  const lane = usePiNativeLane(machineId, nativePaneId);
+  const native = onPiRpc === undefined ? null : lane.state;
+  const currentPath = native?.sessionFile ?? null;
   const [agent, setAgent] = useState<SessionHistoryAgent>(firstAgent);
   const [kinds, setKinds] = useState<AgentKind[]>([]);
   const [answer, setAnswer] = useState<SessionHistoryResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [named, setNamed] = useState(false);
+  const [showPath, setShowPath] = useState(false);
+  const [sort, setSort] = useState<"recent" | "relevance">("recent");
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  /** the name being typed for the current session, null while no row is being renamed */
+  const [renameDraft, setRenameDraft] = useState<string | null>(null);
+  /** bumped after a rename or a delete, which the store answers by listing again */
+  const [reload, setReload] = useState(0);
   const guard = useRef(inFlightGuard());
   const surface = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
@@ -95,13 +119,15 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
       if (active && active !== document.body && !surface.current?.contains(active)) return;
       // the agent picker's open list takes this Escape: it closes the list, not the dialog
       if (active?.getAttribute("aria-expanded") === "true") return;
+      // a row being renamed gives this Escape to the field, which keeps the dialog up
+      if (renameDraft !== null) { event.stopPropagation(); event.preventDefault(); setRenameDraft(null); return; }
       event.stopPropagation();
       event.preventDefault();
       if (!pending) onClose();
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [onClose, pending]);
+  }, [onClose, pending, renameDraft]);
   useEffect(() => {
     let cancelled = false;
     fetchAgentKinds().then((next) => { if (!cancelled) setKinds(next); }, () => { /* the first agent alone is offered */ });
@@ -116,9 +142,9 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
       (reason: unknown) => { if (!cancelled) setError(routeMissing(reason) ? t("This PC's bridge does not offer this yet") : said(reason)); },
     );
     return () => { cancelled = true; };
-  }, [agent, fetchSessionHistory, t, workspace.workspace_id]);
+  }, [agent, fetchSessionHistory, reload, t, workspace.workspace_id]);
   const options = useMemo(() => {
-    const listed = kinds.flatMap((kind) => { const named = sessionHistoryAgent(kind.kind); return named === null ? [] : [{ kind: named, label: kind.label }]; });
+    const listed = kinds.flatMap((kind) => { const kindName = sessionHistoryAgent(kind.kind); return kindName === null ? [] : [{ kind: kindName, label: kind.label }]; });
     return listed.some((option) => option.kind === firstAgent) ? listed : [{ kind: firstAgent, label: firstAgent }, ...listed];
   }, [firstAgent, kinds]);
   const agentLabel = options.find((option) => option.kind === agent)?.label ?? agent;
@@ -141,14 +167,79 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
   const closeFromScrim = (event: MouseEvent<HTMLDivElement>): void => {
     if (!pending && event.target === event.currentTarget) onClose();
   };
+  /** The native pane's Pi switched to the row's session file: no second agent starts, the chat follows it. */
+  const openNative = (row: SessionHistoryRow): void => {
+    if (row.path === null || onPiRpc === undefined) return;
+    const started = guard.current.run(() => onPiRpc({ type: "switch_session", sessionPath: row.path }));
+    if (started === null) return;
+    setPending(row.id);
+    setError(null);
+    started.then(
+      () => { setPending(null); onClose(); },
+      (reason: unknown) => { setPending(null); setError(said(reason)); },
+    );
+  };
+  /** Rename the current session: Pi writes its own file, so no other row is offered one (PLAN D9). */
+  const commitRename = async (): Promise<void> => {
+    const name = (renameDraft ?? "").trim();
+    if (name === "" || onPiRpc === undefined) return;
+    setError(null);
+    try {
+      await onPiRpc({ type: "set_session_name", name });
+      setRenameDraft(null);
+      setReload((value) => value + 1);
+    } catch (reason) {
+      setError(said(reason));
+    }
+  };
+  /** Delete one session file; the bridge refuses the current one and any a pane still runs, in its own words. */
+  const removeRow = (row: SessionHistoryRow): void => {
+    if (row.path === null) return;
+    setPending(row.id);
+    setError(null);
+    deleteSessionHistory(row.path).then(
+      () => { setPending(null); setConfirmDelete(null); setReload((value) => value + 1); },
+      (reason: unknown) => { setPending(null); setConfirmDelete(null); setError(said(reason)); },
+    );
+  };
+  /** The row the keyboard is on, its controls inside its own `<li>`: Ctrl+D acts on that one. */
+  const focusedRowPath = (): string | null => {
+    const active = document.activeElement;
+    const item = active instanceof HTMLElement ? active.closest<HTMLElement>("li[data-path]") : null;
+    return item?.dataset["path"] ?? null;
+  };
   const onKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>): void => {
-    if (event.key !== "Tab" || !surface.current) return;
-    const stops = [...surface.current.querySelectorAll<HTMLElement>("button:not(:disabled)")];
-    if (stops.length === 0) return;
-    const index = stops.indexOf(document.activeElement as HTMLElement);
-    const next = event.shiftKey ? (index <= 0 ? stops.length - 1 : index - 1) : (index < 0 || index === stops.length - 1 ? 0 : index + 1);
+    if (event.key === "Tab" && surface.current) {
+      const stops = [...surface.current.querySelectorAll<HTMLElement>("button:not(:disabled)")];
+      if (stops.length === 0) return;
+      const index = stops.indexOf(document.activeElement as HTMLElement);
+      const next = event.shiftKey ? (index <= 0 ? stops.length - 1 : index - 1) : (index < 0 || index === stops.length - 1 ? 0 : index + 1);
+      event.preventDefault();
+      stops[next]?.focus();
+      return;
+    }
+    // Pi's keys of this list (DS §6.1), only while a native pane is what the list resumes into: a
+    // rename field keeps its own keys, and a browser chord (Ctrl+W) is not ours to take
+    if (native === null || renameDraft !== null || !event.ctrlKey || event.altKey || event.metaKey) return;
+    const key = event.key.toLowerCase();
+    if (key === "n") { event.preventDefault(); setNamed((value) => !value); return; }
+    if (key === "p") { event.preventDefault(); setShowPath((value) => !value); return; }
+    if (key === "s") { event.preventDefault(); setSort((value) => (value === "recent" ? "relevance" : "recent")); return; }
+    if (key === "r") {
+      const row = visible.find((candidate) => candidate.path !== null && candidate.path === currentPath);
+      if (row === undefined) return;
+      event.preventDefault();
+      setRenameDraft(row.title ?? "");
+      return;
+    }
+    if (key !== "d" && !(key === "backspace" && query.trim() === "")) return;
+    const path = focusedRowPath();
+    const row = path === null ? undefined : visible.find((candidate) => candidate.path === path);
+    // the current session is not deleted from under its own pane
+    if (row === undefined || row.path === currentPath) return;
     event.preventDefault();
-    stops[next]?.focus();
+    if (confirmDelete === row.path) removeRow(row);
+    else setConfirmDelete(row.path ?? null);
   };
   const moveAlongRows = (event: ReactKeyboardEvent<HTMLUListElement>): void => {
     if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key) || !list.current) return;
@@ -161,6 +252,19 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
     buttons[next]?.focus();
   };
   const rows = answer?.sessions ?? null;
+  /** The rows as the tools above them leave them: the All|Named filter, the search, and the sort. */
+  const visible = useMemo(() => {
+    if (rows === null) return [];
+    const text = query.trim().toLowerCase();
+    const matched = rows.flatMap((row) => {
+      if (named && row.title === null) return [];
+      if (text === "") return [{ row, at: 0 }];
+      const haystack = [row.title, row.firstMessage, row.path, row.id].filter((value): value is string => value !== null && value !== "").join("\n").toLowerCase();
+      const at = haystack.indexOf(text);
+      return at < 0 ? [] : [{ row, at }];
+    });
+    return sort === "relevance" && text !== "" ? matched.sort((a, b) => a.at - b.at).map(({ row }) => row) : matched.map(({ row }) => row);
+  }, [named, query, rows, sort]);
   const momentAgo = Date.now();
   return createPortal(
     <div className="modal-scrim" onMouseDown={closeFromScrim}>
@@ -182,8 +286,26 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
           ) : rows && rows.length === 0 ? (
             <p className="field-hint session-empty">{t("No earlier {agent} sessions in this folder.", { agent: agentLabel })}</p>
           ) : rows && (
+            <>
+              {native !== null && (
+                <div className="session-tools">
+                  <input className="input session-search" type="search" value={query} aria-label={t("Search sessions…")} placeholder={t("Search sessions…")} onChange={(event) => setQuery(event.target.value)} />
+                  <div className="segmented session-filter" role="group" aria-label={t("Filter")}>
+                    <button type="button" aria-pressed={!named} onClick={() => setNamed(false)}>{t("All")}</button>
+                    <button type="button" aria-pressed={named} onClick={() => setNamed(true)}>{t("Named")}</button>
+                  </div>
+                  <div className="segmented session-filter" role="group" aria-label={t("Sort")}>
+                    <button type="button" aria-pressed={sort === "recent"} onClick={() => setSort("recent")}>{t("Recent")}</button>
+                    <button type="button" aria-pressed={sort === "relevance"} onClick={() => setSort("relevance")}>{t("Relevance")}</button>
+                  </div>
+                  <button type="button" className="btn session-path-switch" aria-pressed={showPath} onClick={() => setShowPath((value) => !value)}>{t("Path")}</button>
+                </div>
+              )}
+              {visible.length === 0 ? (
+                <p className="field-hint session-empty">{t("No sessions match.")}</p>
+              ) : (
             <ul ref={list} className="session-list" aria-label={t("Earlier sessions")} onKeyDown={moveAlongRows}>
-              {rows.map((row) => {
+              {visible.map((row) => {
                 const title = row.title ?? row.firstMessage ?? row.id;
                 const detail = row.title !== null ? row.firstMessage : null;
                 const when = sessionRowTime(row, now, locale, t);
@@ -192,28 +314,57 @@ export function SessionHistory({ workspace, panes, agent: firstAgent, recent = N
                 const resumed = standingResume(recent, panes, machineId, workspace.workspace_id, agent, row.id, momentAgo);
                 const shown = paneShowingSession(panes, workspace.workspace_id, agent, row.id) ?? (resumed === undefined ? undefined : panes.find((pane) => pane.pane_id === resumed.paneId && pane.workspace_id === workspace.workspace_id));
                 const withheld = resumed !== undefined && shown === undefined;
-                const resumable = row.resume !== null && row.resume.argv.length > 0;
+                // a native pane opens the row by its own file; another caller still starts the verified argv
+                const resumable = native !== null ? row.path !== null : row.resume !== null && row.resume.argv.length > 0;
+                const current = native !== null && row.path !== null && row.path === currentPath;
                 return (
-                  <li key={row.id} className={`session-row${pending === row.id ? " is-pending" : ""}`} aria-label={when ? `${title} · ${when.label}` : title}>
+                  <li key={row.id} data-path={row.path ?? undefined} className={`session-row${pending === row.id ? " is-pending" : ""}`} aria-label={when ? `${title} · ${when.label}` : title}>
                     <span className="session-copy">
                       <span className={`session-title${row.title === null && row.firstMessage === null ? " session-id" : ""}`}>{title}</span>
                       {detail !== null && <span className="session-detail">{detail}</span>}
+                      {showPath && row.path !== null && <span className="session-path">{row.path}</span>}
                     </span>
                     <span className="session-meta">
                       {when && <time className="session-time" dateTime={row.updatedAt} title={when.title}>{when.label}</time>}
-                      {shown || withheld ? (
-                        <span className="session-actions">
-                          <span className="pill">{t("Already open")}</span>
-                          <button type="button" className="btn session-action" disabled={pending !== null || shown === undefined} aria-label={t("Open the pane showing {title}", { title })} onClick={() => { if (shown) onSelectPane(shown.pane_id); }}>{t("Open")}</button>
-                        </span>
-                      ) : resumable && (
-                        <button type="button" className="btn session-action" disabled={pending !== null} aria-label={t("Resume {title}", { title })} onClick={() => resume(row)}>{t("Resume")}</button>
-                      )}
+                      <span className="session-actions">
+                        {current ? (
+                          <>
+                            <span className="pill">{t("Already open")}</span>
+                            {renameDraft !== null ? (
+                              <input className="input session-rename" value={renameDraft} aria-label={t("Rename")} autoFocus
+                                onChange={(event) => setRenameDraft(event.target.value)}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter") { event.preventDefault(); void commitRename(); }
+                                  if (event.key === "Escape") { event.stopPropagation(); event.preventDefault(); setRenameDraft(null); }
+                                }} />
+                            ) : (
+                              <button type="button" className="btn session-action" disabled={pending !== null} onClick={() => setRenameDraft(native?.sessionName ?? row.title ?? "")}>{t("Rename")}</button>
+                            )}
+                          </>
+                        ) : shown || withheld ? (
+                          <>
+                            <span className="pill">{t("Already open")}</span>
+                            <button type="button" className="btn session-action" disabled={pending !== null || shown === undefined} aria-label={t("Open the pane showing {title}", { title })} onClick={() => { if (shown) onSelectPane(shown.pane_id); }}>{t("Open")}</button>
+                          </>
+                        ) : (
+                          <>
+                            {resumable && (
+                              <button type="button" className="btn session-action" disabled={pending !== null} aria-label={t("Resume {title}", { title })} onClick={() => { if (native !== null) openNative(row); else resume(row); }}>{t("Resume")}</button>
+                            )}
+                            {native !== null && row.path !== null && (
+                              <button type="button" className={`btn session-action${confirmDelete === row.path ? " btn-danger" : ""}`} disabled={pending !== null}
+                                onClick={() => { if (confirmDelete === row.path) removeRow(row); else setConfirmDelete(row.path); }}>{confirmDelete === row.path ? t("Delete?") : t("Delete")}</button>
+                            )}
+                          </>
+                        )}
+                      </span>
                     </span>
                   </li>
                 );
               })}
             </ul>
+              )}
+            </>
           )}
           {pending !== null && <p className="field-hint" role="status">{t("Resuming…")}</p>}
           {error && <p className="field-hint session-error" role="alert">{error}</p>}

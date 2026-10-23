@@ -2,7 +2,7 @@ import { lazy, Suspense, type CSSProperties, type DragEvent, type ReactNode, use
 import { Bell, Brain, ChevronDown, Ellipsis, FolderOpen, GitFork, Link, Menu, MessageSquare, Package, PanelLeft, RefreshCw, Search, SquareTerminal, X } from "lucide-react";
 
 import type { AgentStatus, ServerMessage, AccessRefusal, HealthAuth, HerdrPane, SessionHistoryAgent } from "../shared/protocol.ts";
-import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, routeMissing, sendTestPush, shareSeen, signOut, splitPane, verifySourceBoot, zoomPane, type HealthInfo } from "./lib/api.ts";
+import { ApiError, authenticate, createTab, fetchHealth, fetchBridgeHealth, fetchMachines, fetchSession, pairDevice, routeMissing, sendPiRpc, sendTestPush, shareSeen, signOut, splitPane, verifySourceBoot, zoomPane, type HealthInfo, type PiRpcCommand } from "./lib/api.ts";
 import { applyHealthRead, healthFreshness, machineHealth, type HealthBook } from "./lib/healthPresentation.ts";
 import { deviceLabel, takePairCode } from "./lib/phone.ts";
 import { alertPaneTitle, displayPaneTitle } from "./components/Sidebar.tsx";
@@ -570,7 +570,7 @@ export function App() {
   // the dialog makes a tab in this workspace instead of a workspace, while set
   const [newTab, setNewTab] = useState<NewTabTarget | null>(null);
   // the earlier sessions of a workspace's folder (components/SessionHistory.tsx), while open
-  const [sessionHistory, setSessionHistory] = useState<{ machineId: string; workspaceId: string; agent: SessionHistoryAgent } | null>(null);
+  const [sessionHistory, setSessionHistory] = useState<{ machineId: string; workspaceId: string; agent: SessionHistoryAgent; paneId: string | null } | null>(null);
   // the Session context dialog (lib/sessionContext.ts): App holds it for the selected pane
   const contextOpen = useSyncExternalStore(subscribeSessionContext, sessionContextOpen);
   // the session tree (lib/sessionTree.ts): App holds it for the selected pane too
@@ -1468,7 +1468,7 @@ export function App() {
     const inFront = panes.find((pane) => pane.pane_id === selectedPaneId)
       ?? panes.find((pane) => pane.pane_id === roster.layouts?.find((layout) => layout.tab_id === workspace.active_tab_id)?.focused_pane_id)
       ?? panes[0];
-    return { machineId, workspace, cwd: workspace.worktree?.checkout_path ?? inFront?.cwd ?? null, agent: inFront?.agent ?? null, panes };
+    return { machineId, workspace, cwd: workspace.worktree?.checkout_path ?? inFront?.cwd ?? null, agent: inFront?.agent ?? null, paneId: inFront?.pane_id ?? null, panes };
   };
 
   const actions = useMemo<AppActions>(
@@ -1518,7 +1518,7 @@ export function App() {
         const agent = sessionHistoryListAgent(target, found.agent, found.panes.map((pane) => pane.agent));
         if (agent === null) return;
         setDrawerOpen(false);
-        setSessionHistory({ machineId: found.machineId, workspaceId: found.workspace.workspace_id, agent });
+        setSessionHistory({ machineId: found.machineId, workspaceId: found.workspace.workspace_id, agent, paneId: found.paneId });
       },
       openPalette,
       agentStarted: (machineId, paneId) => lenses.startedAgent(paneStorageId(machineId, paneId), window.matchMedia?.("(pointer: coarse)").matches === true),
@@ -1631,6 +1631,8 @@ export function App() {
     return roster && workspace ? { workspace, panes: roster.panes } : null;
   }, [machines, sessionHistory]);
   useEffect(() => { if (sessionHistory !== null && sessionHistoryWorkspace === null) setSessionHistory(null); }, [sessionHistory, sessionHistoryWorkspace]);
+  // the pane the list was opened for: a Pi pane the chat drives there resumes by switching its child (DS §4.9)
+  const sessionHistoryPaneId = sessionHistory?.paneId ?? null;
 
   // the palette's shortcut, said beside its item where a hardware keyboard is likely (a fine pointer)
   const keyboardLikely = useMediaQuery("(hover: hover) and (pointer: fine)");
@@ -2032,6 +2034,8 @@ export function App() {
         panes={sessionHistoryWorkspace.panes}
         agent={sessionHistory.agent}
         recent={recentResumes}
+        nativePaneId={sessionHistory.paneId}
+        onPiRpc={sessionHistoryPaneId === null ? undefined : (command: PiRpcCommand) => sendPiRpc(sessionHistoryPaneId, command, sessionHistory.machineId)}
         onClose={closeSessionHistory}
         onSelectPane={(paneId) => { closeSessionHistory(); selectTarget(sessionHistory.machineId, paneId); }}
         onResumed={(opened, session) => {

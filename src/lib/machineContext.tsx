@@ -56,6 +56,7 @@ export function useMachineApi() {
     createWorkspace: (request: api.CreateWorkspaceRequest) => api.createWorkspace(request, id),
     createTab: (request: api.CreateTabRequest) => api.createTab(request, id),
     fetchSessionHistory: (workspace: string, agent: SessionHistoryAgent) => api.fetchSessionHistory(workspace, agent, id),
+    deleteSessionHistory: (path: string) => api.deleteSessionHistory(path, id),
     sessionHistoryOffered: () => api.sessionHistoryOffered(id),
     fetchPiNativeState: (pane: string) => api.fetchPiNativeState(pane, id),
     takeOverPiPane: (pane: string, trust?: Parameters<typeof api.takeOverPiPane>[1]) => api.takeOverPiPane(pane, trust, id),
