@@ -56,8 +56,8 @@ export function SessionTree({ paneId, machineId, streaming, onFork, onClose }: S
   const t = useT();
   const locale = useLocale();
   const base = useId().replace(/:/gu, "");
-  const surface = useFocusTrap<HTMLDivElement>(true);
   const listRef = useRef<HTMLDivElement>(null);
+  const surface = useFocusTrap<HTMLDivElement>(true, { initialFocus: listRef });
   const [read, setRead] = useState<{ answer: PiTreeAnswer | null; failed: boolean }>({ answer: null, failed: false });
   const [tick, setTick] = useState(0);
   const [filter, setFilter] = useState<PiTreeFilter>("default");
