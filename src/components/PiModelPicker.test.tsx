@@ -1,0 +1,131 @@
+import { afterAll, beforeAll, describe, expect, it, mock } from "bun:test";
+import { createElement } from "react";
+import * as reactDom from "react-dom";
+import TestRenderer, { act } from "react-test-renderer";
+
+import { ApiError, type PiRpcCommand } from "../lib/api.ts";
+import { SettingsProvider } from "../lib/settings.ts";
+
+// the picker is a portal so a transformed composer cannot clip it; the test renders it where it is
+mock.module("react-dom", () => ({ ...reactDom, createPortal: (node: unknown) => node }));
+const { PiModelPicker, groupModels, piModels } = await import("./PiModelPicker.tsx");
+
+const MODELS = {
+  models: [
+    { id: "claude-sonnet-4-5", name: "Claude Sonnet 4.5", provider: "anthropic", reasoning: true, input: ["text", "image"], contextWindow: 200000 },
+    { id: "claude-opus-4-1", name: "Claude Opus 4.1", provider: "anthropic", reasoning: true, input: ["text"], contextWindow: 200000 },
+    { id: "gpt-5", name: "GPT-5", provider: "openai", reasoning: false, input: ["text"], contextWindow: 400000 },
+  ],
+};
+
+const browserGlobals = ["window", "document", "localStorage", "IS_REACT_ACT_ENVIRONMENT", "getComputedStyle"] as const;
+const savedGlobals = new Map<string, PropertyDescriptor | undefined>();
+// the picker's words go through useT, which reads the browser's languages
+const savedLanguages = Object.getOwnPropertyDescriptor(navigator, "languages");
+Object.defineProperty(navigator, "languages", { configurable: true, value: ["en"] });
+
+beforeAll(() => {
+  for (const name of browserGlobals) savedGlobals.set(name, Object.getOwnPropertyDescriptor(globalThis, name));
+  const store = new Map<string, string>();
+  const media = { matches: false, media: "", addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, onchange: null, dispatchEvent: () => false };
+  const localStorage = { getItem: (key: string) => store.get(key) ?? null, setItem: (key: string, value: string) => void store.set(key, value), removeItem: (key: string) => void store.delete(key) };
+  Object.defineProperty(globalThis, "localStorage", { configurable: true, value: localStorage });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: {
+    matchMedia: () => media, getSelection: () => null, addEventListener() {}, removeEventListener() {}, localStorage,
+    innerWidth: 1280, innerHeight: 800, requestAnimationFrame: (run: () => void) => setTimeout(run, 0), cancelAnimationFrame: () => {},
+  } });
+  Object.defineProperty(globalThis, "document", { configurable: true, value: {
+    addEventListener() {}, removeEventListener() {}, activeElement: null, body: {}, querySelector: () => null,
+    getElementById: () => null, getSelection: () => null,
+    documentElement: { dataset: {}, style: { setProperty() {}, removeProperty() {} }, lang: "", colorScheme: "" },
+  } });
+  Object.defineProperty(globalThis, "getComputedStyle", { configurable: true, value: () => ({ getPropertyValue: () => "" }) });
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+});
+
+afterAll(() => {
+  if (savedLanguages) Object.defineProperty(navigator, "languages", savedLanguages);
+  else Reflect.deleteProperty(navigator, "languages");
+  for (const name of browserGlobals) {
+    const saved = savedGlobals.get(name);
+    if (saved) Object.defineProperty(globalThis, name, saved);
+    else Reflect.deleteProperty(globalThis, name);
+  }
+});
+
+const mount = async (piRpc: (command: PiRpcCommand) => Promise<unknown>) => {
+  let renderer: TestRenderer.ReactTestRenderer | null = null;
+  await act(async () => {
+    renderer = TestRenderer.create(createElement(SettingsProvider, {
+      children: createElement(PiModelPicker, {
+        label: "Claude Sonnet 4.5",
+        current: { provider: "anthropic", id: "claude-sonnet-4-5" },
+        piRpc,
+      }),
+    }));
+  });
+  return renderer!;
+};
+
+const chip = (renderer: TestRenderer.ReactTestRenderer) => renderer.root.findByProps({ className: "pi-chip" });
+
+const answers = (models: unknown) => mock(() => Promise.resolve(models));
+
+/** Every text a reader sees, in order, for the assertions below. */
+const words = (renderer: TestRenderer.ReactTestRenderer): string[] =>
+  renderer.root.findAll((node) => typeof node.type === "string").flatMap((node) => (node.children ?? []).filter((child): child is string => typeof child === "string"));
+
+describe("the model picker", () => {
+  it("groups the models by provider and marks the pane's own", async () => {
+    const piRpc = answers(MODELS);
+    const renderer = await mount(piRpc);
+    await act(async () => { chip(renderer).props.onClick(); });
+    await act(async () => {});
+
+    expect(piRpc).toHaveBeenCalledWith({ type: "get_available_models" });
+    expect(renderer.root.findAllByProps({ className: "menu-heading" }).map((node) => node.children.join(""))).toEqual(["anthropic", "openai"]);
+    const selected = renderer.root.findAllByProps({ role: "option" }).filter((node) => node.props["aria-selected"] === true);
+    expect(selected).toHaveLength(1);
+    expect(words(renderer)).toContain("Claude Sonnet 4.5");
+    // the row says what it is worth in words, not only in a glyph
+    expect(words(renderer)).toContain("200k context · thinking · images");
+  });
+
+  it("keeps what the search matches and says so when nothing does", async () => {
+    const renderer = await mount(answers(MODELS));
+    await act(async () => { chip(renderer).props.onClick(); });
+    await act(async () => {});
+    const search = renderer.root.findByProps({ className: "input pi-picker-search" });
+
+    await act(async () => { search.props.onChange({ target: { value: "gpt" } }); });
+    expect(renderer.root.findAllByProps({ role: "option" })).toHaveLength(1);
+    expect(words(renderer)).toContain("GPT-5");
+
+    await act(async () => { search.props.onChange({ target: { value: "gpt-9" } }); });
+    expect(renderer.root.findAllByProps({ role: "option" })).toHaveLength(0);
+    expect(words(renderer)).toContain("No model matches \"gpt-9\"");
+  });
+
+  it("keeps the list open on the row a refused switch was about", async () => {
+    const piRpc = mock((command: PiRpcCommand): Promise<unknown> => command.type === "set_model"
+      ? Promise.reject(new ApiError("/api/pi/rpc", 502, "Model not found: invalid/model", "rpc_failed"))
+      : Promise.resolve(MODELS));
+    const renderer = await mount(piRpc);
+    await act(async () => { chip(renderer).props.onClick(); });
+    await act(async () => {});
+    const rows = renderer.root.findAllByProps({ role: "option" });
+
+    await act(async () => { rows[0]!.props.onClick(); });
+
+    expect(piRpc).toHaveBeenCalledWith({ type: "set_model", provider: "anthropic", modelId: "claude-sonnet-4-5" });
+    expect(renderer.root.findAllByProps({ role: "dialog" })).toHaveLength(1);
+    expect(words(renderer)).toContain("Couldn't switch: Model not found: invalid/model");
+  });
+
+  it("reads Pi's list into rows, and groups it in the order Pi gave", () => {
+    const models = piModels(MODELS);
+    expect(models.map((model) => model.id)).toEqual(["claude-sonnet-4-5", "claude-opus-4-1", "gpt-5"]);
+    expect(groupModels(models, "opus").map((group) => group.provider)).toEqual(["anthropic"]);
+    expect(piModels({}).length).toBe(0);
+  });
+});

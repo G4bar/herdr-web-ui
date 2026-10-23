@@ -1,0 +1,223 @@
+/* The model chip of a native Pi pane (DS §5.4) and the picker it opens (DS §4.2).
+   The chip is the Plan chip's box: --chip-h tall, a hairline pill, --fs-xs, a finger given the
+   --touch-target through an invisible expander. The picker is the .menu skin on a desktop and the
+   modal primitive on a phone, which is a bottom sheet there. */
+
+.pi-model {
+  display: inline-flex;
+  min-width: 0;
+}
+
+.pi-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  min-height: var(--chip-h);
+  padding: 0 var(--space-2);
+  background: transparent;
+  border: var(--hairline) solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--fs-xs);
+  cursor: pointer;
+}
+
+/* the name gives way before the chevron does: a long model is cut, and its title says it whole */
+.pi-chip-name {
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pi-chip svg {
+  width: 12px;
+  height: 12px;
+  flex: none;
+  color: var(--text-dim);
+}
+
+.pi-chip[aria-expanded="true"] {
+  background: var(--bg-hover);
+  border-color: var(--accent);
+}
+
+/* connecting, lost, or read from the session file because the terminal owns Pi */
+.pi-chip:disabled,
+.pi-chip[aria-disabled="true"] {
+  color: var(--text-dim);
+  cursor: default;
+}
+
+@media (hover: hover) {
+  .pi-chip:hover:not(:disabled) {
+    background: var(--bg-hover);
+  }
+}
+
+/* a press gets a target's height and width without the chip growing: the expander is the
+   button's own box, so the press lands on the chip */
+.pi-chip::before {
+  content: "";
+  position: absolute;
+  inset: calc((var(--chip-h) - var(--pointer-target)) / 2) 0;
+}
+
+@media (pointer: coarse) {
+  .pi-chip::before {
+    inset: calc((var(--chip-h) - var(--touch-target)) / 2) 0;
+  }
+}
+
+/* the popover: `.menu` gives the skin, this places it over the chip and lets the list scroll */
+.pi-picker {
+  position: fixed;
+  z-index: var(--z-popover);
+  width: min(360px, calc(100vw - 2 * var(--space-4)));
+  max-height: min(60dvh, 28rem);
+  gap: var(--space-1);
+  white-space: normal;
+}
+
+.pi-picker-search {
+  flex: none;
+}
+
+.pi-picker-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.pi-picker-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.pi-picker-row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  min-height: var(--row-h);
+  padding: var(--space-1) var(--space-2);
+  border-radius: var(--radius-md);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.pi-picker-row[aria-selected="true"],
+.pi-picker-row[data-active] {
+  background: var(--bg-hover);
+}
+
+@media (hover: hover) {
+  .pi-picker-row:hover {
+    background: var(--bg-hover);
+  }
+}
+
+.pi-picker-check {
+  display: inline-flex;
+  flex: none;
+  width: 14px;
+  height: 18px;
+  align-items: center;
+  color: var(--accent);
+}
+
+.pi-picker-check svg {
+  width: 14px;
+  height: 14px;
+}
+
+.pi-picker-text {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pi-picker-name {
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: var(--fs-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* `200k context · thinking · images`: what the row says of itself, always in words */
+.pi-picker-meta {
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+/* a switch that Pi refused: under the row it was about, and the list stays open */
+.pi-picker-error {
+  color: var(--danger-text);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+
+.pi-picker-busy {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  margin-top: var(--space-1);
+  color: var(--text-dim);
+  animation: pi-picker-spin var(--dur-spin) steps(8) infinite;
+}
+
+@keyframes pi-picker-spin {
+  to { transform: rotate(360deg); }
+}
+
+.pi-picker-note {
+  margin: 0;
+  padding: var(--space-2) var(--space-2) var(--space-3);
+  color: var(--text-dim);
+  font-size: var(--fs-xs);
+}
+
+.pi-picker-retry {
+  margin-left: var(--space-2);
+}
+
+/* three bars where the rows will be: no shimmer, nothing moves while the list is read */
+.pi-picker-loading {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-2);
+}
+
+.pi-picker-loading > span:not(.visually-hidden) {
+  height: var(--row-h);
+  border-radius: var(--radius-md);
+  background: var(--bg-hover);
+}
+
+/* the phone's sheet: the search stays under the head and the list scrolls alone, so a long
+   provider list never takes the field away from the thumb */
+.pi-picker-sheet .modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  overflow: hidden;
+}
+
+.pi-picker-sheet .pi-picker-list {
+  flex: 1 1 auto;
+}
+
+@media (pointer: coarse), (max-width: 640px) {
+  .pi-picker-row {
+    min-height: var(--touch-target);
+    align-items: center;
+  }
+}

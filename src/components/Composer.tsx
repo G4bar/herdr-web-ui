@@ -59,12 +59,13 @@ import { resolveComposerMenuActiveItemId } from "../lib/composerMenuHighlight.ts
 import { quickReplyButtons, useSettings } from "../lib/settings.ts";
 import { composerUsage, formatPercent, formatResetIn, HIGH_PERCENT, meterPercent, meterText, providerForAgent, statusWindows, usageName, useUsage, windowLabel } from "../lib/usage.ts";
 import { AgentMark } from "./AgentMark.tsx";
+import { PiModelPicker } from "./PiModelPicker.tsx";
 import { BackgroundTasks } from "./BackgroundTasks.tsx";
 import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { usePaneCommands } from "../lib/usePaneCommands.ts";
 import { useT } from "../lib/i18n.ts";
 import { offersRetry, userFailure, type UserFailure } from "../lib/userError.ts";
-import { AttachmentTooLargeError } from "../lib/api.ts";
+import { AttachmentTooLargeError, type PiRpcCommand } from "../lib/api.ts";
 import { modalOpen } from "../lib/focus.ts";
 
 export interface ComposerProps {
@@ -88,6 +89,9 @@ export interface ComposerProps {
   /** the pane's live Pi state while the chat drives Pi over RPC (`lib/piNative.ts`, Phase 6): null for a Pi
    * the terminal still owns, and for every other agent, where nothing below changes */
   piNative?: PiNativeState | null;
+  /** one allowlisted RPC command for that pane's Pi (`usePiNative`'s `piRpc`): the model chip's picker sends
+   * `set_model` through it. Absent, no model chip is drawn */
+  piRpc?: (command: PiRpcCommand) => Promise<unknown>;
   /** replaces the placeholder: how a message answers the agent's waiting prompt */
   answerHint?: string | null;
   /** what the agent suggests typing next (Claude's grey input text): the placeholder, taken with Tab */
@@ -245,6 +249,8 @@ export function Composer({
   plan = null,
   backgroundWait = false,
   metadata,
+  piNative = null,
+  piRpc,
   answerHint = null,
   suggestion = null,
   restored = null,
@@ -1040,7 +1046,11 @@ export function Composer({
   const sendShown = sending || composerSendShown({ working: isWorking, text });
   const hint = composerStatusHint({ uploading, connected, text, noRoom: roomless !== undefined });
   const model = metadata?.model ? modelLabel(metadata.model) : null;
-  const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort);
+  // DS §4.1: a native pane's model and level are chips in the card's right group, so the quiet pill
+  // beside the state drops its own copy of them. A Pi the terminal still owns reads the model from the
+  // session file, read-only (DS §3.0). Every other agent draws the pill exactly as it did
+  const piChip = agent === "pi" && (piNative !== null || model !== null);
+  const modelShown = Boolean(metadata?.model || metadata?.reasoning_effort) && !piChip;
   const usageDetail = usageWindows.map((window) => {
     const reset = formatResetIn(window.resets_at, Date.now());
     return `${windowLabel(window)} ${meterText(window, settings.usageCount)}${reset ? ` · ${t("Resets in {time}", { time: reset })}` : ""}`;
@@ -1426,6 +1436,14 @@ export function Composer({
           )}
         </div>
         <div className="composer-controls composer-controls-right">
+          {piChip && piRpc && <PiModelPicker
+            label={piNative?.model?.name ?? model?.text ?? t("Model —")}
+            current={piNative?.model ? { provider: piNative.model.provider, id: piNative.model.id } : null}
+            piRpc={piRpc}
+            disabled={piNative !== null && piNative.mode !== "native"}
+            readOnly={piNative === null}
+            onPicked={() => textareaRef.current?.focus({ preventScroll: true })}
+          />}
           {!sendShown ? (
             <button
               type="button"

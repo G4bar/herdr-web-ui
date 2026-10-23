@@ -3649,6 +3649,7 @@ export function PaneTerminal({
           agent={agent}
           agentStatus={agentStatus}
           piNative={piNative.state}
+          piRpc={piNative.piRpc}
           backgroundTasks={backgroundTasks}
           plan={plan}
           backgroundWait={backgroundWait}
