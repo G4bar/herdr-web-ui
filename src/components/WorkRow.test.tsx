@@ -76,9 +76,9 @@ describe("WorkRow", () => {
   });
 
   it("draws pi's own cut as the way to the file, without the page's fetch", () => {
-    const markup = renderOpened(call({ output: "a\n\n[Showing lines 1-2 of 900 (50.0KB limit). Full output: /tmp/pi-bash-abc.log]", output_ref: "r1" }));
+    const markup = renderOpened(call({ output: "a\n\n[Showing lines 1-2 of 900 (50.0KB limit). Full output: /tmp/pi-bash-0123456789abcdef.log]", output_ref: "r1" }));
     expect(markup).toContain("chat-tool-cut");
-    expect(markup).toContain("/tmp/pi-bash-abc.log");
+    expect(markup).toContain("/tmp/pi-bash-0123456789abcdef.log");
     expect(markup).not.toContain("chat-tool-more");
   });
 

@@ -43,14 +43,25 @@ describe("bashCard", () => {
   });
 
   it("keeps the page's own cut off the text when the file names the rest", () => {
-    expect(bashCard("head\n… trimmed\n\n[Showing last 4.0KB of line 715 (line is 8.2KB). Full output: /tmp/pi-bash-abc.log]"))
-      .toEqual({ text: "head", exit: null, cut: "/tmp/pi-bash-abc.log" });
+    expect(bashCard("head\n… trimmed\n\n[Showing last 4.0KB of line 715 (line is 8.2KB). Full output: /tmp/pi-bash-0123456789abcdef.log]"))
+      .toEqual({ text: "head", exit: null, cut: "/tmp/pi-bash-0123456789abcdef.log" });
+  });
+
+  // pi's temp dir is not /tmp on macOS or Windows, and TMPDIR moves it anywhere: the file's name is
+  // what pi wrote, whatever directory it landed in
+  it("reads pi's cut in whatever temp dir pi wrote it to", () => {
+    const mac = "head\n\n[Showing lines 1-2 of 900 (50.0KB limit). Full output: /var/folders/ab/T/pi-bash-0123456789abcdef.log]";
+    expect(bashCard(mac)).toEqual({ text: "head", exit: null, cut: "/var/folders/ab/T/pi-bash-0123456789abcdef.log" });
+    const windows = "head\n\n[Showing lines 1-2 of 900 (50.0KB limit). Full output: C:\\Users\\u\\AppData\\Local\\Temp\\pi-bash-0123456789abcdef.log]";
+    expect(bashCard(windows)).toEqual({ text: "head", exit: null, cut: "C:\\Users\\u\\AppData\\Local\\Temp\\pi-bash-0123456789abcdef.log" });
   });
 
   // a command's own words are not pi's cut: opening what it names is the card's call, not the text's
   it("keeps a path a command printed itself out of the cut", () => {
     const output = "ok\n\n[Showing lines 1-2 of 9 (50.0KB limit). Full output: /home/u/.ssh/id_rsa]";
     expect(bashCard(output)).toEqual({ text: output, exit: null, cut: null });
+    const passwd = "ok\n\n[Showing lines 1-2 of 9 (50.0KB limit). Full output: /etc/passwd]";
+    expect(bashCard(passwd)).toEqual({ text: passwd, exit: null, cut: null });
   });
 
   // a run of newlines used to cost a match attempt at every one of them, on every render
@@ -58,7 +69,7 @@ describe("bashCard", () => {
     const lines = "x\n".repeat(50_000);
     const started = performance.now();
     expect(bashCard("\n".repeat(100_000))).toEqual({ text: "\n".repeat(100_000), exit: null, cut: null });
-    expect(bashCard(`${lines}\n[Showing lines 1-50001 of 90000 (50.0KB limit). Full output: /tmp/pi-bash-abc.log]`).cut).toBe("/tmp/pi-bash-abc.log");
+    expect(bashCard(`${lines}\n[Showing lines 1-50001 of 90000 (50.0KB limit). Full output: /tmp/pi-bash-0123456789abcdef.log]`).cut).toBe("/tmp/pi-bash-0123456789abcdef.log");
     expect(performance.now() - started).toBeLessThan(50);
   });
 });

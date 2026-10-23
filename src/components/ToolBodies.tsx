@@ -32,8 +32,11 @@ export function usePiToolCard(): PiToolCard {
 /** pi's exit line under a failed command, and the line naming the file it kept the rest in. */
 const EXIT_LINE = /\n*Command exited with code (\d+)\s*$/;
 const CUT_LINE = /\n*\[Showing (?:lines|last)[^\]]*Full output: ([^\]\n]+)\]\s*$/;
-/** pi's own name for that file: any other path is text the command itself printed. */
-const PI_CUT_PATH = /^\/tmp\/pi-bash-[A-Za-z0-9]+\.log$/;
+/**
+ * pi's own name for that file. pi writes it into the system's temp dir, which is not /tmp on every
+ * platform, so only the file's name says whose it is: any other path is the command's own word.
+ */
+const PI_CUT_PATH = /(?:^|[\\/])pi-bash-[0-9a-f]{16}\.log$/;
 
 /** How far from its end an output's own ending line can start: both are shorter than this. */
 const CARD_TAIL_CHARS = 512;
