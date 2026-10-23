@@ -55,8 +55,10 @@ afterAll(() => {
 const streaming = { ...initialPiNativeState(), mode: "native" as const, isStreaming: true };
 
 /** A native Pi's composer over a draft. `onSend` records its arguments; the row is what is drawn. */
-async function mount(options: { draft: string; piNative: typeof streaming | null; agentStatus?: "idle" | "working" }) {
+async function mount(options: { draft: string; piNative: typeof streaming | null; agentStatus?: "idle" | "working"; enterSends?: boolean }) {
   composerDrafts.set(DRAFT, options.draft);
+  // a record of its own each time: one test's Enter choice must not reach the next
+  window.localStorage.setItem("ovis:settings", JSON.stringify({ enterSends: options.enterSends ?? true }));
   const sent: Array<{ text: string; deliver?: string }> = [];
   let renderer: TestRenderer.ReactTestRenderer | null = null;
   await act(async () => {
@@ -113,6 +115,22 @@ describe("the Send-as row", () => {
     await act(async () => { picked.modes().find((button) => button.props.children === "Follow-up")!.props.onClick(); });
     await picked.type("Enter");
     expect(picked.sent).toEqual([{ text: "steer me", deliver: "followUp" }]);
+  });
+
+  it("sends Alt+Enter as a follow-up even where Enter alone sends nothing", async () => {
+    // enterSends off: a plain Enter is a newline, Ctrl+Enter and Meta+Enter are its send keys
+    const plain = await mount({ draft: "steer me", piNative: streaming, enterSends: false });
+    await plain.type("Enter");
+    expect(plain.sent).toEqual([]);
+
+    const alt = await mount({ draft: "steer me", piNative: streaming, enterSends: false });
+    await alt.type("Enter", { altKey: true });
+    expect(alt.sent).toEqual([{ text: "steer me", deliver: "followUp" }]);
+
+    // a modified Alt+Enter is no follow-up: the normal path takes it, and there it is no send
+    const ctrlAlt = await mount({ draft: "steer me", piNative: streaming });
+    await ctrlAlt.type("Enter", { altKey: true, ctrlKey: true });
+    expect(ctrlAlt.sent).toEqual([]);
   });
 
   it("leaves another agent's send without a delivery kind", async () => {

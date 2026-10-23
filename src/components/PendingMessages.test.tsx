@@ -85,6 +85,7 @@ async function mountQueue(queue: PiQueueRow[], answer: { steering: string[]; fol
     calls, drew, root, click, byText,
     rowButtons: (label: string) => root.findAllByType("button").filter((button) => button.props["aria-label"] === label),
     head: () => root.findAll((node) => node.props.className === "pending-queue-head").length,
+    notes: () => root.findAll((node) => node.props.role === "status").map((node) => node.props.children),
     kinds: () => root.findAll((node) => typeof node.props.className === "string" && node.props.className.startsWith("pill pending-queue-kind"))
       .map((node) => node.props.children),
   };
@@ -172,5 +173,25 @@ describe("a native pane's Held list", () => {
     await held.click(held.byText("Restore all")!);
     expect(held.calls.map((command) => command.type)).toEqual(["clear_queue"]);
     expect(held.drew).toEqual([STEER.text, FOLLOW.text]);
+  });
+
+  it("Restore takes the row it was clicked for, not whatever Pi now holds at that index", async () => {
+    // the steer at the head left Pi between the draw and the click: the clicked Follow-up is now row 0
+    const held = await mountQueue([STEER, FOLLOW], { steering: [], followUp: [FOLLOW.text] });
+    await held.click(held.rowButtons("Restore to message box")[1]!);
+    expect(held.calls).toEqual([{ type: "clear_queue" }]);
+    expect(held.drew).toEqual([FOLLOW.text]);
+  });
+
+  it("puts every row back and says so when the clicked row already left Pi's queue", async () => {
+    // the Follow-up went out with the draw: an index would remove the steer the click never named
+    const held = await mountQueue([STEER, FOLLOW], { steering: [STEER.text], followUp: [] });
+    await held.click(held.rowButtons("Remove")[1]!);
+    expect(held.calls).toEqual([
+      { type: "clear_queue" },
+      { type: "prompt", message: STEER.text, streamingBehavior: "steer" },
+    ]);
+    expect(held.drew).toEqual([]);
+    expect(held.notes()).toEqual(["That row already left Pi's queue. The rest went back."]);
   });
 });

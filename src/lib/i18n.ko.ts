@@ -1521,4 +1521,5 @@ export const KO: Record<string, string> = {
   "Clear queue?": "대기열을 비울까요?",
   "Restore to message box": "입력란으로 복원",
   "Couldn't take Pi's queue. Try again.": "Pi의 대기열을 가져오지 못했습니다. 다시 시도하세요.",
+  "That row already left Pi's queue. The rest went back.": "그 행은 이미 Pi 대기열에서 빠졌습니다. 나머지는 다시 넣었습니다.",
 };

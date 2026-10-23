@@ -1040,13 +1040,19 @@ export function Composer({
         return;
       }
       if (event.key !== "Enter") return;
+      // Alt+Enter always sends a follow-up while Pi streams (DS §3.2), whatever the Send-as row or enterSends says
+      if (event.altKey && !event.shiftKey && !event.ctrlKey && !event.metaKey && streaming) {
+        event.preventDefault();
+        send(undefined, false, "followUp");
+        return;
+      }
       const shouldSend = settings.enterSends
         ? !event.shiftKey && !event.metaKey && !event.ctrlKey
         : (event.metaKey || event.ctrlKey) && !event.shiftKey;
       if (!shouldSend) return;
       event.preventDefault();
-      // Alt+Enter always sends a follow-up (DS §3.2); every other Enter follows the Send-as row
-      send(undefined, false, event.altKey ? "followUp" : undefined);
+      // every other Enter follows the Send-as row
+      send(undefined, false);
     },
     [agentStatus, abort, choices, connected, menuDismissed, menuOpen, offered, restoreHeld, selectCompletion, selectedIndex, send, setTextAndCaret, settings.enterSends, streaming, trigger],
   );

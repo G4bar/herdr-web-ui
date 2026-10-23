@@ -1523,4 +1523,5 @@ export const JA: Record<string, string> = {
   "Clear queue?": "キューを消去しますか？",
   "Restore to message box": "入力欄に戻す",
   "Couldn't take Pi's queue. Try again.": "Pi のキューを取得できませんでした。再試行してください。",
+  "That row already left Pi's queue. The rest went back.": "その行はすでに Pi のキューから外れています。残りは戻しました。",
 };

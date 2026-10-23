@@ -1525,4 +1525,5 @@ export const ZH: Record<string, string> = {
   "Clear queue?": "清空队列？",
   "Restore to message box": "恢复到输入框",
   "Couldn't take Pi's queue. Try again.": "无法读取 Pi 的队列。请重试。",
+  "That row already left Pi's queue. The rest went back.": "该行已离开 Pi 的队列。其余行已放回。",
 };

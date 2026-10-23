@@ -67,9 +67,10 @@ export function PendingMessages({ messages, active = true, connected, agent, blo
   /**
    * Pi holds no per-item queue (DS §4.4): the queue leaves whole with clear_queue, the rows the plan
    * keeps go back in delivery order, and the texts it takes out land in the message box. A re-queue
-   * that fails takes the rest of its rows to the box with them, so no message is lost.
+   * that fails takes the rest of its rows to the box with them, so no message is lost. `missed` is a
+   * plan whose clicked row Pi no longer holds: every row goes back and the note says why.
    */
-  const takeQueue = (plan: (rows: PiQueueRow[]) => { back: PiQueueRow[]; box?: PiQueueRow[] }, keyboard: boolean, button: HTMLButtonElement): void => {
+  const takeQueue = (plan: (rows: PiQueueRow[]) => { back: PiQueueRow[]; box?: PiQueueRow[]; missed?: boolean }, keyboard: boolean, button: HTMLButtonElement): void => {
     if (piRpc === undefined || queueBusy) return;
     setQueueBusy(true);
     setQueueNote(null);
@@ -82,6 +83,7 @@ export function PendingMessages({ messages, active = true, connected, agent, blo
         const next = plan(rows);
         kept = next.back;
         box = next.box ?? [];
+        if (next.missed) setQueueNote(t("That row already left Pi's queue. The rest went back."));
         for (const [index, command] of requeueCommands(kept, streaming).entries()) {
           try { await piRpc(command); accepted = index + 1; } catch { break; }
         }
@@ -97,6 +99,8 @@ export function PendingMessages({ messages, active = true, connected, agent, blo
       if (keyboard) button.closest(".terminal-stack")?.querySelector<HTMLTextAreaElement>(".composer-text")?.focus({ preventScroll: true });
     })();
   };
+  /** The row a click names in the queue clear_queue just answered: Pi may have delivered one since the draw. */
+  const matchRow = (rows: readonly PiQueueRow[], clicked: PiQueueRow): number => rows.findIndex((row) => row.kind === clicked.kind && row.text === clicked.text);
   return <div ref={rootRef} className="pending-messages" inert={inert || undefined}>
     {queue !== undefined && <div className="pending-queue-head">
       <span className="pending-queue-title">{t("Held")} ({queue.length})</span>
@@ -123,16 +127,20 @@ export function PendingMessages({ messages, active = true, connected, agent, blo
           <span className={`pill pending-queue-kind${row.kind === "steer" ? " pending-queue-steer" : ""}`}>{label}</span>
           <span className="pending-queue-text">{row.text}</span>
           <div className="pending-message-meta">
-            {/* Pi holds no per-item dequeue, so an index is all a row can name: a queue Pi changed behind it puts every row back whole */}
+            {/* the click names its row by kind and text: an index would name whatever Pi's queue holds there now */}
             <button type="button" className="icon-button pending-message-action pending-message-restore" aria-label={t("Restore to message box")} title={t("Restore to message box")}
               disabled={piRpc === undefined || queueBusy}
               onClick={(event) => takeQueue((rows) => {
-                const taken = rows[index];
-                return { back: removeQueued(rows, index), box: taken === undefined ? [] : [taken] };
+                const at = matchRow(rows, row);
+                if (at === -1) return { back: rows, missed: true };
+                return { back: removeQueued(rows, at), box: [rows[at]!] };
               }, event.detail === 0, event.currentTarget)}><Undo2 aria-hidden="true" /></button>
             <button type="button" className="icon-button pending-message-action" aria-label={t("Remove")} title={t("Remove")}
               disabled={piRpc === undefined || queueBusy}
-              onClick={(event) => takeQueue((rows) => ({ back: removeQueued(rows, index) }), event.detail === 0, event.currentTarget)}><X aria-hidden="true" /></button>
+              onClick={(event) => takeQueue((rows) => {
+                const at = matchRow(rows, row);
+                return at === -1 ? { back: rows, missed: true } : { back: removeQueued(rows, at) };
+              }, event.detail === 0, event.currentTarget)}><X aria-hidden="true" /></button>
           </div>
         </li>;
       })}
