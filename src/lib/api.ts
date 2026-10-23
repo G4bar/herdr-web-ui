@@ -917,6 +917,21 @@ export async function sendPiRpc(paneId: string, command: PiRpcCommand, machineId
   return response.json();
 }
 
+/**
+ * `/export` (DS §4.12): the server writes Pi's HTML to a file it names itself and streams it back, so
+ * this saves it as a download rather than asking for a path. The blob URL is released once the
+ * browser has had time to start the save.
+ */
+export async function exportPiSession(paneId: string, machineId = "local"): Promise<void> {
+  const response = await sendJson(machinePath(machineId, "pi/rpc"), "POST", { pane_id: paneId, command: { type: "export_html" } });
+  const url = URL.createObjectURL(await response.blob());
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `${paneId.replace(/[^\w.-]+/gu, "-")}.html`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 30_000);
+}
+
 /** GET /api/push: the server's VAPID key, the `applicationServerKey` this device subscribes with. */
 export async function fetchPushKey(): Promise<string> {
   return (await getJson<PushKey>("/api/push")).public_key;

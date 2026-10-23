@@ -1590,4 +1590,8 @@ export const ZH: Record<string, string> = {
   "Couldn't read Pi's resources": "无法读取 Pi 的资源",
   "Back to session context": "返回会话上下文",
   "Pi loaded {files} context files · {skills} skills · {extensions} extensions": "Pi 已加载 {files} 个上下文文件 · {skills} 个技能 · {extensions} 个扩展",
+  "Nothing to copy yet.": "还没有可复制的回答。",
+  "Start a new session?": "开始新会话？",
+  "Pi is still working. Starting a new session stops this run.": "Pi 仍在工作。开始新会话会停止这次运行。",
+  "Start new session": "开始新会话",
 };

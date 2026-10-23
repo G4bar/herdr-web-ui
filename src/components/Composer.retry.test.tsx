@@ -92,7 +92,7 @@ async function mount(options: { draft: string; piNative: PiNativeState }) {
     /** what the persistent status region says (DS §8.3), which is the announcement */
     announced: () => root.findAllByProps({ role: "status" }).flatMap((node) => node.findAllByType("p")).flatMap((node) => node.children.filter((child): child is string => typeof child === "string")).join(""),
     press: async (key: string) => {
-      const event = { key, altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {}, nativeEvent: { isComposing: false, keyCode: 27 } };
+      const event = { key, altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {}, nativeEvent: { isComposing: false, keyCode: 27, key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false } };
       await act(async () => { root.findByProps({ className: "composer-text" }).props.onKeyDown(event); });
     },
     commands,

@@ -1586,4 +1586,8 @@ export const KO: Record<string, string> = {
   "Couldn't read Pi's resources": "Pi의 리소스를 읽지 못했습니다",
   "Back to session context": "세션 컨텍스트로 돌아가기",
   "Pi loaded {files} context files · {skills} skills · {extensions} extensions": "Pi가 컨텍스트 파일 {files}개 · 스킬 {skills}개 · 확장 {extensions}개를 불러왔습니다",
+  "Nothing to copy yet.": "아직 복사할 답변이 없습니다.",
+  "Start a new session?": "새 세션을 시작할까요?",
+  "Pi is still working. Starting a new session stops this run.": "Pi가 아직 작업 중입니다. 새 세션을 시작하면 이 실행이 중지됩니다.",
+  "Start new session": "새 세션 시작",
 };

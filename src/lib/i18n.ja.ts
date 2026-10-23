@@ -1588,4 +1588,8 @@ export const JA: Record<string, string> = {
   "Couldn't read Pi's resources": "Pi のリソースを読めませんでした",
   "Back to session context": "セッションコンテキストに戻る",
   "Pi loaded {files} context files · {skills} skills · {extensions} extensions": "Pi が読み込んだもの: コンテキストファイル {files} · スキル {skills} · 拡張機能 {extensions}",
+  "Nothing to copy yet.": "まだコピーできる回答がありません。",
+  "Start a new session?": "新しいセッションを開始しますか？",
+  "Pi is still working. Starting a new session stops this run.": "Pi はまだ作業中です。新しいセッションを開始すると、この実行は停止します。",
+  "Start new session": "新しいセッションを開始",
 };

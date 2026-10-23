@@ -102,7 +102,7 @@ async function mount(options: { draft: string; piNative?: PiNativeState; bashRef
     runBlock: () => root.findAll(hasClass("composer-bash-run")).length,
     tail: () => root.findAll(hasClass("chat-tool-tail")).map((node) => node.props.children),
     press: async (key: string) => {
-      const event = { key, altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {}, nativeEvent: { isComposing: false, keyCode: 13 } };
+      const event = { key, altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {}, nativeEvent: { isComposing: false, keyCode: 13, key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false } };
       await act(async () => { root.findByProps({ className: "composer-text" }).props.onKeyDown(event); });
     },
     /** the pane's live state moved on (a tail arrived): the same composer, drawn again */

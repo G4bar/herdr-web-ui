@@ -48,6 +48,9 @@ import {
   typedTerminalCommand,
 } from "../lib/compose.ts";
 import { compactCommandText } from "../lib/compactContext.ts";
+import { piSlashSurface, type PiSlashSurface } from "../lib/piSlashCommands.ts";
+import { openSessionContext } from "../lib/sessionContext.ts";
+import { requestSettingsPage } from "../lib/paletteSettings.ts";
 import { composerStrip } from "../lib/composerStrip.ts";
 import { composerLabelDraw } from "../lib/composerLabelFit.ts";
 import { composerFull, formatChars, pasteOverflow } from "../lib/composerLength.ts";
@@ -73,7 +76,9 @@ import { MicButton, VoiceRecordingPill, useDictation } from "./VoiceInput.tsx";
 import { usePaneCommands } from "../lib/usePaneCommands.ts";
 import { useT } from "../lib/i18n.ts";
 import { offersRetry, userFailure, type UserFailure } from "../lib/userError.ts";
-import { AttachmentTooLargeError, type PiRpcCommand } from "../lib/api.ts";
+import { AttachmentTooLargeError, exportPiSession, type PiRpcCommand } from "../lib/api.ts";
+import { copyText } from "../lib/clipboard.ts";
+import { ConfirmDialog } from "./ConfirmDialog.tsx";
 import { modalOpen } from "../lib/focus.ts";
 
 export interface ComposerProps {
@@ -120,6 +125,10 @@ export interface ComposerProps {
   inert?: boolean;
   /** opens the folder's earlier sessions instead of submitting /resume */
   onOpenHistory?: () => void;
+  /** opens Settings, which `/hotkeys` needs (DS §4.12): none: the command leaves the box as typed */
+  onOpenSettings?: () => void;
+  /** opens the Terminal lens, where `/login` and `/logout` run Pi's own OAuth dance (DS §4.12): none: Pi answers the prompt itself */
+  onOpenTerminal?: () => void;
   /** opens the New tab dialog on this pane's workspace, to start another agent with its model, effort, skills
    * and first message (NewSessionDialog); none: the pane has no workspace to add a tab to */
   onOpenNewSession?: () => void;
@@ -274,6 +283,8 @@ export function Composer({
   role = "interact",
   inert = false,
   onOpenHistory,
+  onOpenSettings,
+  onOpenTerminal,
   onOpenNewSession,
   cwd = null,
   branch = null,
@@ -387,6 +398,56 @@ export function Composer({
   const offlineSentence = t(connectedBefore ? "Reconnecting…" : "Connecting…");
   // DS §9: a Pi that is running is steered, and Alt+Enter says when its follow-up lands
   const streaming = piNative?.mode === "native" && piNative.isStreaming;
+  // DS §4.12: the chat runs Pi's own commands itself; a Pi the terminal owns has none of those surfaces
+  const piSurfaces = piNative?.mode === "native" && piRpc !== undefined;
+  // `/session` asks the stats popover to open, as the model picker's own request does (DS §4.12)
+  const [statsRequest, setStatsRequest] = useState(0);
+  // `/new` while Pi works is the one command that stops something: it asks first (DS §4.12)
+  const [newSessionAsk, setNewSessionAsk] = useState(false);
+
+  /**
+   * DS §4.12: what the chat does instead of sending one of Pi's commands as a prompt. A refusal is one
+   * sentence and changes nothing else; the command's text is gone either way, since it was never the
+   * user's message. Pi answers a prompt with its own words, and those are named where it has them.
+   */
+  const runPiSurface = useCallback((surface: PiSlashSurface): void => {
+    if (piRpc === undefined) return;
+    const refused = (error: unknown): void => {
+      if (!mounted.current) return;
+      setNote(error instanceof Error ? t("Couldn't run the command: {reason}", { reason: error.message }) : t("Couldn't run the command."));
+    };
+    switch (surface.kind) {
+      case "model": setModelPickerRequest((request) => request + 1); return;
+      case "new":
+        if (streaming === true) { setNewSessionAsk(true); return; }
+        void piRpc({ type: "new_session" }).catch(refused);
+        return;
+      case "name": void piRpc({ type: "set_session_name", name: surface.name }).catch(refused); return;
+      case "compact": void piRpc(surface.instructions === null ? { type: "compact" } : { type: "compact", customInstructions: surface.instructions }).catch(refused); return;
+      case "session": setStatsRequest((request) => request + 1); return;
+      case "export": void exportPiSession(paneId, machineId).catch(refused); return;
+      case "copy":
+        void piRpc({ type: "get_last_assistant_text" }).then((answer) => {
+          const last = (answer as { text?: unknown } | null)?.text;
+          if (typeof last !== "string" || last === "") { if (mounted.current) setNote(t("Nothing to copy yet.")); return; }
+          return copyText(last).then((copied) => {
+            if (!mounted.current) return;
+            // DS §8.3: a copy says so once, as the transcript's own copy buttons do
+            if (copied) announce(t("Copied"));
+            else setNote(t("Couldn't copy. Select the text and copy it manually."));
+          });
+        }, refused).catch(refused);
+        return;
+      case "hotkeys": requestSettingsPage("shortcuts"); onOpenSettings?.(); return;
+      case "reload": void piRpc({ type: "prompt", message: "/reload" }).catch(refused); return;
+      case "context": openSessionContext(); return;
+      case "terminal":
+        if (onOpenTerminal !== undefined) { onOpenTerminal(); return; }
+        // no terminal to hand it to: Pi hears its own command, and says what it made of it
+        void piRpc({ type: "prompt", message: surface.command }).catch(refused);
+        return;
+    }
+  }, [announce, machineId, onOpenSettings, onOpenTerminal, paneId, piRpc, streaming, t]);
   // DS §4.1: a draft that starts with a bang is a shell command on a pane the chat drives, never a
   // prompt; `!!` keeps its output out of Pi's context. A Pi the terminal owns runs nothing here
   const bash = piNative?.mode === "native" && piRpc !== undefined ? piBashCommand(text) : null;
@@ -794,6 +855,16 @@ export function Composer({
 
   const selectCompletion = useCallback(
     (choice: SlashCommand | string, currentTrigger: ActiveTrigger) => {
+      // DS §4.12: a picked command the chat has a surface for runs it here, never typed into the box
+      const surface = typeof choice === "string" || currentTrigger.kind !== "slash" || !piSurfaces ? null : piSlashSurface(`/${choice.name}`);
+      if (surface !== null) {
+        // the partial `/mod` that opened the menu is not a message either: the surface replaces it
+        const cleared = applyCompletion(text, currentTrigger, "");
+        setTextAndCaret(cleared.text, cleared.caret);
+        setMenuDismissed(true);
+        runPiSurface(surface);
+        return;
+      }
       const replacement = typeof choice === "string" ? `@${choice} `
         : currentTrigger.kind === "slash" ? slashCommandReplacement(choice, agent, currentTrigger) : atSkillReplacement(choice);
       const completed = applyCompletion(text, currentTrigger, replacement);
@@ -813,7 +884,7 @@ export function Composer({
         });
       }
     },
-    [agent, onOpenHistory, setTextAndCaret, text],
+    [agent, onOpenHistory, piSurfaces, runPiSurface, setTextAndCaret, text],
   );
 
   const pumpUploads = useCallback(() => {
@@ -917,6 +988,15 @@ export function Composer({
     if (composingRef.current) return false;
     if (role === "observe" || !connected || uploading || roomless || sending || text.trim().length === 0) return false;
     if (terminalTyped?.name === "resume" && onOpenHistory) { setMenuDismissed(true); onOpenHistory(); return true; }
+    // DS §4.12: a command the chat has a surface for is not a message to Pi; its text leaves the box as
+    // the surface takes over, since nothing of it was sent
+    const surface = piSurfaces ? piSlashSurface(text) : null;
+    if (surface !== null) {
+      setMenuDismissed(true);
+      setTextAndCaret("", 0);
+      runPiSurface(surface);
+      return true;
+    }
     const sent = text;
     const sentAttachments = attachments;
     const settle = (result: boolean | string | DraftRefusal): void => {
@@ -964,7 +1044,7 @@ export function Composer({
       if (mounted.current) setNote(t("Not confirmed. Check the terminal before sending again."));
     }
     return true;
-  }, [attachments, bash, connected, dictation.forget, draftKey, onOpenHistory, onSend, role, roomless, runPiBash, sendAs, sending, streaming, terminalTyped, text, uploading]);
+  }, [attachments, bash, connected, dictation.forget, draftKey, onOpenHistory, onSend, piSurfaces, role, roomless, runPiBash, runPiSurface, sendAs, sending, setTextAndCaret, streaming, terminalTyped, text, uploading]);
   const sendRef = useRef(send);
   sendRef.current = send;
   const connectedRef = useRef(connected);
@@ -1071,7 +1151,7 @@ export function Composer({
       thinkingCycle: () => { void piRpc({ type: "cycle_thinking_level" }).catch(() => undefined); },
     }),
   }), [chatView.thinking, chatView.toolOutput, clearBox, piRpc]);
-  const piKeysOn = settings.piKeys && piNative?.mode === "native" && piRpc !== undefined;
+  const piKeysOn = settings.piKeys && piSurfaces;
   const piKeyDown = usePiKeys(piKeysOn, piKeyHandlers);
 
   const onKeyDown = useCallback(
@@ -1721,7 +1801,7 @@ export function Composer({
           {!piChipsRow && piChips}
           {/* DS §4.1, §4.5: a native pane's ring, its cost and the stats popover they open, at the end of
               the right group; the pill beside the state draws no second one for it */}
-          {piLive && piRpc !== undefined && <ContextPopover stats={piNative.stats} statuses={piNative.statuses} piRpc={piRpc} busy={piNative.isCompacting} />}
+          {piLive && piRpc !== undefined && <ContextPopover stats={piNative.stats} statuses={piNative.statuses} piRpc={piRpc} busy={piNative.isCompacting} openRequest={statsRequest} />}
           {!sendShown ? (
             <button
               type="button"
@@ -1770,6 +1850,14 @@ export function Composer({
       )}
       {/* above the whole composer: inside the surface it would cover the text being dictated */}
       {dictation.shown && <VoiceRecordingPill dictation={dictation} align="start" />}
+      {/* DS §4.12: `/new` while Pi works stops the run, so it asks first (ConfirmDialog owns Escape and focus) */}
+      {newSessionAsk && piRpc !== undefined && <ConfirmDialog
+        title={t("Start a new session?")}
+        body={t("Pi is still working. Starting a new session stops this run.")}
+        confirmLabel={t("Start new session")}
+        onConfirm={async () => { await piRpc({ type: "new_session" }); setNewSessionAsk(false); }}
+        onClose={() => setNewSessionAsk(false)}
+      />}
     </div>
   );
 }

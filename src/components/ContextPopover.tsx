@@ -31,6 +31,8 @@ export interface ContextPopoverProps {
   piRpc: (command: PiRpcCommand) => Promise<unknown>;
   /** Pi is compacting: a short arc turns over the used one while it works (DS §4.1) */
   busy?: boolean;
+  /** `/session` asked for the popover (DS §4.12): each new value opens it once */
+  openRequest?: number;
 }
 
 /** How long the pointer rests on the ring before the popover opens, and how long it may leave it (DS §4.5). */
@@ -57,7 +59,7 @@ export function costText(cost: number | null): string {
 
 const refusal = (error: unknown): string => error instanceof ApiError ? error.detail : error instanceof Error ? error.message : String(error);
 
-export function ContextPopover({ stats, statuses = {}, piRpc, busy = false }: ContextPopoverProps) {
+export function ContextPopover({ stats, statuses = {}, piRpc, busy = false, openRequest = 0 }: ContextPopoverProps) {
   const t = useT();
   const sheet = useMediaQuery(SHEET_QUERY);
   const titleId = useId();
@@ -175,6 +177,14 @@ export function ContextPopover({ stats, statuses = {}, piRpc, busy = false }: Co
     if (!open || !hoverOpened.current) return;
     timer.current = setTimeout(dismiss, HOVER_CLOSE_MS);
   };
+
+  // a typed `/session` opens the same popover the ring does (DS §4.12)
+  const lastOpenRequest = useRef(openRequest);
+  useEffect(() => {
+    if (openRequest === lastOpenRequest.current) return;
+    lastOpenRequest.current = openRequest;
+    if (openRequest > 0) setOpen(true);
+  }, [openRequest]);
 
   const compact = (): void => {
     if (compacting) return;

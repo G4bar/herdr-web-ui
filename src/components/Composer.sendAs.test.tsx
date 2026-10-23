@@ -81,7 +81,7 @@ async function mount(options: { draft: string; piNative: typeof streaming | null
     modes: () => root.findAll(hasClass("composer-send-as-modes")).flatMap((node) => node.findAllByType("button")),
     empty: () => root.findAll(hasClass("composer-stop")).length > 0,
     type: async (key: string, extra: Record<string, unknown> = {}) => {
-      const event = { key, altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {}, nativeEvent: { isComposing: false, keyCode: 13 }, ...extra };
+      const event = { key, altKey: false, shiftKey: false, metaKey: false, ctrlKey: false, preventDefault() {}, nativeEvent: { isComposing: false, keyCode: 13, key, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false }, ...extra };
       await act(async () => { root.findByProps({ className: "composer-text" }).props.onKeyDown(event); });
     },
     sent,
